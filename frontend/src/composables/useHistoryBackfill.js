@@ -22,12 +22,18 @@ import { pushDebugEvent } from '@/composables/useDebugBuffer'
 //     last poll batch was a catch-up burst, while a live batch landed within QUIET_MS, while the
 //     tab is hidden, and while a user REST action (send / permission / interrupt / ...) runs;
 //   - page fetches use low fetch priority and are aborted on session switch / reset;
+//   - requestUntil(sessionId, messageId) (issue #2030 stage 2: turn navigation) is a priority
+//     request: `before=` pages of JUMP_PAGE_BUDGET_BYTES, no inter-page gap, until the message is
+//     loaded (checked by id; cursors stay opaque). It keeps the pause rules (live catch-up,
+//     connection state, hidden tab, user requests), works in manual mode too, and can be cancelled;
 //   - slow-link mode (saveData, 2g, or measured first-window throughput < SLOW_LINK_BPS when the
 //     Network Information API is absent): NO automatic backfill — older history loads on demand
 //     (scrolling near the top, the banner's button) only.
 // There is no ceiling: on a good link backfill runs until `has_more_before` is false.
 
 export const PAGE_BUDGET_BYTES = 256 * 1024
+// Pages fetched on behalf of a turn jump (overshoot past the target is at most one page).
+export const JUMP_PAGE_BUDGET_BYTES = 512 * 1024
 export const MIN_PAGE_BUDGET_BYTES = 64 * 1024
 // The server caps a `before` page at 4 MiB / 5000 records (backend MAX_BYTES_CAP / MAX_RECORDS_CAP).
 export const MAX_PAGE_BUDGET_BYTES = 4 * 1024 * 1024
@@ -45,6 +51,8 @@ export const QUIET_MS = 1500
 // A single poll batch this large means the stream is catching up (reconnect / burst).
 export const CATCHUP_EVENT_COUNT = 100
 export const SLOW_LINK_BPS = 100 * 1024
+// Longest the history index waits for the agents/tasks snapshot requests before it is requested anyway.
+const INDEX_AFTER_SNAPSHOTS_MAX_MS = 5000
 const WAIT_POLL_MS = 250
 const PAGE_INACTIVITY_MS = 30000
 const MAX_CONSECUTIVE_ERRORS = 5
@@ -142,6 +150,11 @@ export function createHistoryBackfill(deps = {}) {
     return isSlowLink(history) ? 'manual' : 'auto'
   }
 
+  /** A user-driven request is pending (an on-demand page or a turn jump): no gap, no live-activity pause. */
+  function isPriority(loop) {
+    return loop.demand > 0 || !!loop.until
+  }
+
   /** Why the loop must not fetch right now (null == free to go). `demand` = user-driven page. */
   function blockedReason(sessionId, history, demand) {
     const polling = pollingStore()
@@ -185,14 +198,14 @@ export function createHistoryBackfill(deps = {}) {
         const mode = currentModeFor(sessionId, history, loop)
         setStatus(sessionId, { mode })
         // Manual mode only advances on demand (scroll near the top / banner button).
-        if (mode === 'manual' && loop.demand === 0) {
+        if (mode === 'manual' && !isPriority(loop)) {
           setStatus(sessionId, { paused: null })
           await sleep(WAIT_POLL_MS)
           if (blockedReason(sessionId, history, true) === 'not-current') break
           continue
         }
 
-        const isDemand = () => loop.demand > 0
+        const isDemand = () => isPriority(loop)
         if (!(await waitUnblocked(sessionId, loop, isDemand))) break
 
         // Inter-page gap (bypassed by an explicit on-demand request).
@@ -205,7 +218,7 @@ export function createHistoryBackfill(deps = {}) {
           }
         }
 
-        const wasDemand = loop.demand > 0
+        const wasDemand = isPriority(loop)
         const controller = store.claimBackfill(sessionId)
         setStatus(sessionId, { loading: true, error: null })
         const startedAt = now()
@@ -213,7 +226,7 @@ export function createHistoryBackfill(deps = {}) {
           const page = await store.fetchOlderPage(sessionId, {
             // An explicit user request (scroll near the top, the banner button) never uses a grown
             // budget: the user is waiting for exactly that page.
-            signal: controller.signal, maxBytes: wasDemand ? PAGE_BUDGET_BYTES : loop.budget, maxRecords: MAX_PAGE_RECORDS, inactivityMs: PAGE_INACTIVITY_MS,
+            signal: controller.signal, maxBytes: loop.until ? JUMP_PAGE_BUDGET_BYTES : wasDemand ? PAGE_BUDGET_BYTES : loop.budget, maxRecords: MAX_PAGE_RECORDS, inactivityMs: PAGE_INACTIVITY_MS,
           })
           if (controller.signal.aborted || loops.get(sessionId) !== loop) break
           loop.lastPageMs = now() - startedAt
@@ -240,7 +253,8 @@ export function createHistoryBackfill(deps = {}) {
           loop.budget = nextPageBudget(loop.budget, loop.lastPageMs, applyMs)
           loop.lastPageMs += applyMs // the gap covers the main-thread cost of the page too
           consecutiveErrors = 0
-          if (wasDemand) loop.demand = Math.max(0, loop.demand - 1)
+          if (loop.demand > 0) loop.demand = Math.max(0, loop.demand - 1)
+          if (loop.until && messageStore().isMessageLoaded(sessionId, loop.until.messageId)) finishUntil(sessionId, loop)
         } catch (caught) {
           let err = caught
           if (controller.signal.aborted || loops.get(sessionId) !== loop) break
@@ -257,6 +271,7 @@ export function createHistoryBackfill(deps = {}) {
               })
               loop.lastPageEndedAt = null
               loop.budget = PAGE_BUDGET_BYTES
+              scheduleIndex(sessionId) // the replaced suffix dropped the old index
               continue
             } catch (restartErr) {
               if (controller.signal.aborted || loops.get(sessionId) !== loop) break
@@ -278,9 +293,50 @@ export function createHistoryBackfill(deps = {}) {
       }
     } finally {
       if (loops.get(sessionId) === loop) loops.delete(sessionId)
+      // The loop ended (history complete, session switched, stopped, gave up) before the target
+      // was loaded: the jump can't be satisfied here.
+      if (loop.until) {
+        const reached = messageStore().isMessageLoaded(sessionId, loop.until.messageId)
+        finishUntil(sessionId, loop, reached ? null : (messageStore().isHistoryComplete(sessionId) ? 'not-found' : 'aborted'))
+      }
       const history = messageStore().getHistoryState(sessionId)
       if (!history || !history.hasMoreBefore) clearStatus(sessionId)
       else setStatus(sessionId, { loading: false, paused: null })
+    }
+  }
+
+  /**
+   * Fetches the server history index for a tail-loaded session once `after` (the agents/tasks
+   * snapshot requests) has settled — low priority, never in the window/page path, and not at all
+   * on a slow link (there it is fetched only when the user presses Prev) or once the whole
+   * history is loaded. Idempotent; a replaced suffix (reset / history_id change / gap-replace)
+   * dropped the old index, so the next call refetches.
+   */
+  function scheduleIndex(sessionId, after = []) {
+    // A hung snapshot request must not hold the index (and Prev) back for good: cap the wait.
+    let timer
+    const cap = new Promise(resolve => { timer = setTimeout(resolve, INDEX_AFTER_SNAPSHOTS_MAX_MS) })
+    return Promise.race([Promise.allSettled(after), cap]).then(() => {
+      clearTimeout(timer)
+      const store = messageStore()
+      if (store.isHistoryComplete(sessionId)) return null
+      if (getMode(sessionId) === 'manual') return null
+      return store.ensureHistoryIndex(sessionId)
+    })
+  }
+
+  /** Settles the loop's pending turn jump (`reason` null == the target is loaded). */
+  function finishUntil(sessionId, loop, reason = null) {
+    const until = loop.until
+    if (!until) return
+    loop.until = null
+    if (statusBySession.value.get(sessionId)?.jump?.messageId === until.messageId) setStatus(sessionId, { jump: null })
+    if (reason) {
+      const err = new Error(reason === 'cancelled' ? 'Jump cancelled' : `Turn jump failed: ${reason}`)
+      err.reason = reason
+      until.reject(err)
+    } else {
+      until.resolve()
     }
   }
 
@@ -313,6 +369,46 @@ export function createHistoryBackfill(deps = {}) {
     if (loop && loop.demand === 0) loop.demand = 1
   }
 
+  /**
+   * Turn-navigation jump: loads older history with priority `before=` pages until the message
+   * `messageId` is part of the loaded suffix. Returns `{ promise, cancel }`; `promise` rejects
+   * with `err.reason` 'cancelled' | 'aborted' | 'not-found' | 'superseded'. `meta`
+   * (`{ ordinal, fromOffset, toOffset }`) is published on the status as `jump` for progress UI.
+   * The loaded suffix stays valid whatever happens (pages are applied as usual).
+   */
+  function requestUntil(sessionId, messageId, meta = {}) {
+    const store = messageStore()
+    if (store.isMessageLoaded(sessionId, messageId)) return { promise: Promise.resolve(), cancel() {} }
+    const history = store.getHistoryState(sessionId)
+    if (!history || !history.hasMoreBefore) {
+      const err = new Error('Turn jump failed: not-found')
+      err.reason = 'not-found'
+      return { promise: Promise.reject(err), cancel() {} }
+    }
+    if (!loops.has(sessionId)) start(sessionId)
+    const loop = loops.get(sessionId)
+    finishUntil(sessionId, loop, 'superseded')
+    let resolve, reject
+    const promise = new Promise((res, rej) => { resolve = res; reject = rej })
+    promise.catch(() => {}) // callers handle it; never an unhandled rejection
+    const until = { messageId, resolve, reject }
+    loop.until = until
+    setStatus(sessionId, { jump: { messageId, ...meta }, error: null })
+    return { promise, cancel: () => { if (loop.until === until) finishUntil(sessionId, loop, 'cancelled') } }
+  }
+
+  /** Cancels the session's pending turn jump (the loaded suffix stays valid). */
+  function cancelJump(sessionId) {
+    const loop = loops.get(sessionId)
+    if (loop) finishUntil(sessionId, loop, 'cancelled')
+  }
+
+  /** 'auto' | 'manual' (slow link, nothing loads unrequested) for this session right now. */
+  function getMode(sessionId) {
+    const history = messageStore().getHistoryState(sessionId)
+    return currentModeFor(sessionId, history, loops.get(sessionId))
+  }
+
   /** Leaves slow-link/manual mode for this session: backfill the rest automatically (paced). */
   function loadAll(sessionId) {
     const history = messageStore().getHistoryState(sessionId)
@@ -342,6 +438,10 @@ export function createHistoryBackfill(deps = {}) {
     stop,
     stopAll,
     requestOlder,
+    scheduleIndex,
+    requestUntil,
+    cancelJump,
+    getMode,
     loadAll,
     retry,
     setScrollInteraction,
@@ -351,9 +451,14 @@ export function createHistoryBackfill(deps = {}) {
 
 export const historyBackfill = createHistoryBackfill()
 
-/** Starts backfill for `sessionId` when only a suffix of its history is loaded. */
-export function startBackfillIfIncomplete(sessionId) {
-  if (!useMessageStore().isHistoryComplete(sessionId)) historyBackfill.start(sessionId)
+/**
+ * Starts backfill for `sessionId` when only a suffix of its history is loaded, and schedules its
+ * history index (after `after`, the snapshot requests that must settle first — issue #2030 stage 2).
+ */
+export function startBackfillIfIncomplete(sessionId, after = []) {
+  if (useMessageStore().isHistoryComplete(sessionId)) return
+  historyBackfill.start(sessionId)
+  historyBackfill.scheduleIndex(sessionId, after)
 }
 
 export function useHistoryBackfill() {

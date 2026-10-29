@@ -653,10 +653,11 @@ export const usePollingStore = defineStore('polling', () => {
       })
       pushDebugEvent('polling', 'hydration-stage', { sessionId, stage: 'resync', replaced: result?.replaced })
       // Issue #2145: background_tasks_changed events lost in the gap are not replayed.
-      useBackgroundTasksStore().hydrate(sessionId)
+      const backgroundSnapshot = useBackgroundTasksStore().hydrate(sessionId)
       // Issue #2030: same for task events — re-fetch the server snapshot (live ones buffer).
-      useTaskStore().hydrate(sessionId)
-      import('@/composables/useHistoryBackfill').then(({ startBackfillIfIncomplete }) => startBackfillIfIncomplete(sessionId))
+      const tasksSnapshot = useTaskStore().hydrate(sessionId)
+      // (a gap-replace dropped the history index: this refetches it; an intact one is kept)
+      import('@/composables/useHistoryBackfill').then(({ startBackfillIfIncomplete }) => startBackfillIfIncomplete(sessionId, [backgroundSnapshot, tasksSnapshot]))
       resyncAttemptsBySession.delete(sessionId)
       if (resyncStallBySession.value.has(sessionId)) {
         resyncStallBySession.value.delete(sessionId)
@@ -1011,7 +1012,7 @@ export const usePollingStore = defineStore('polling', () => {
           messageStore.hydrateBackgroundAgents(changedSessionId).then(async () => {
             await messageStore.loadMessages(changedSessionId, null, 0, { window: 'tail' })
             const { startBackfillIfIncomplete } = await import('@/composables/useHistoryBackfill')
-            startBackfillIfIncomplete(changedSessionId)
+            startBackfillIfIncomplete(changedSessionId)  // also schedules the (dropped) history index
           })
         }
 

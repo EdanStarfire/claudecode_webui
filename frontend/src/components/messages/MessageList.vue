@@ -11,10 +11,11 @@
       data-testid="history-banner"
       ref="historyBannerEl"
     >
-      <span v-if="historyBanner.kind === 'loading'" class="spinner-border spinner-border-sm flex-shrink-0" aria-hidden="true"></span>
+      <span v-if="historyBanner.kind === 'loading' || historyBanner.kind === 'jump'" class="spinner-border spinner-border-sm flex-shrink-0" aria-hidden="true"></span>
       <span class="flex-grow-1">{{ historyBanner.text }}</span>
       <button v-if="historyBanner.kind === 'manual'" class="btn btn-sm btn-outline-secondary py-0" data-testid="history-load-older" @click="loadOlderHistory">Load older history</button>
       <button v-if="historyBanner.kind === 'manual'" class="btn btn-sm btn-outline-secondary py-0" data-testid="history-load-full" @click="loadFullHistory">Load full history</button>
+      <button v-if="historyBanner.kind === 'jump'" class="btn btn-sm btn-outline-secondary py-0" data-testid="history-jump-cancel" @click="cancelTurnJump">Cancel</button>
       <button v-if="historyBanner.kind === 'error'" class="btn btn-sm btn-outline-danger py-0" @click="historyBackfill.retry(viewSessionId)">Retry</button>
     </div>
     <div class="messages-area overflow-auto" :class="{ 'theme-red': uiStore.isRedBackground }" ref="messagesArea" role="log" aria-live="polite" aria-label="Conversation messages" @scroll="onScroll" data-testid="message-list">
@@ -88,7 +89,7 @@
             <CompactionEventGroup
               v-else-if="row.item.type === 'compaction'"
               :messages="row.item.messages"
-              :compaction-group-index="row.item.groupIndex"
+              :group-key="row.item.groupKey"
             />
 
             <!-- Date separator -->
@@ -184,6 +185,7 @@ import { buildDisplayableItems, computeItemKeys } from '@/utils/displayableItems
 import { historyBackfill } from '@/composables/useHistoryBackfill'
 import { useHydrationStage } from '@/composables/useHydrationStage'
 import { HYDRATION_STAGE_LABELS } from '@/utils/hydrationStage'
+import { cursorOffset, findTurnBefore, jumpProgress } from '@/utils/turnNavigation'
 
 const messageStore = useMessageStore()
 const sessionStore = useSessionStore()
@@ -402,6 +404,11 @@ const historyBanner = computed(() => {
   const fraction = messageStore.historyProgress(sessionId)?.fraction
   const percent = fraction != null ? ` ${Math.round(fraction * 100)} %` : ''
   if (status?.error) return { kind: 'error', text: `Couldn't load older history: ${status.error}` }
+  if (status?.jump) {
+    const progress = jumpProgress(messageStore.getHistoryState(sessionId)?.startCursor, status.jump)
+    const jumpPercent = progress != null ? ` ${Math.round(progress * 100)} %` : ''
+    return { kind: 'jump', text: `Loading older history to reach turn ${status.jump.ordinal}…${jumpPercent}${status.paused ? ' (paused)' : ''}` }
+  }
   if (status?.mode === 'manual') {
     return { kind: 'manual', text: `Showing newest messages — older history isn't loaded automatically on this connection.${percent && ` (${percent.trim()} loaded)`}` }
   }
@@ -428,6 +435,11 @@ onUnmounted(() => bannerObserver?.disconnect())
 
 function loadOlderHistory() {
   historyBackfill.requestOlder(viewSessionId.value)
+}
+
+// The status bar owns the jump (confirm guard, scroll once loaded); the banner only cancels it.
+function cancelTurnJump() {
+  historyBackfill.cancelJump(viewSessionId.value)
 }
 
 function loadFullHistory() {
@@ -466,6 +478,55 @@ function findPrevTurnIndex() {
     if (arr[i] < range.top) return arr[i]
   }
   return null
+}
+
+// Issue #2030 (stage 2 PR B): previous turn over the WHOLE history. The nearest loaded turn row
+// above the viewport wins; with none, the newest index turn older than the loaded suffix is the
+// target (not loaded yet — the status bar extends the suffix to it). Result:
+//   { kind: 'loaded', index }                       a displayable row to scroll to
+//   { kind: 'unloaded', messageId, ordinal, sizeHint }  needs older history first
+//   { kind: 'pending', reason: 'idle'|'loading'|'unavailable' }  no usable index (yet)
+//   null                                            no earlier turn
+function findPrevTurn() {
+  const index = findPrevTurnIndex()
+  if (index != null) return { kind: 'loaded', index }
+  if (!visibleIndexRange.value) return null
+  const sessionId = viewSessionId.value
+  if (!sessionId || messageStore.isHistoryComplete(sessionId)) return null
+  const entry = messageStore.getHistoryIndex(sessionId)
+  if (!entry) return { kind: 'pending', reason: 'idle' }
+  if (entry.status !== 'ready') return { kind: 'pending', reason: entry.status }
+  const startOffset = cursorOffset(messageStore.getHistoryState(sessionId)?.startCursor)
+  if (startOffset == null) return { kind: 'pending', reason: 'unavailable' }
+  const turn = findTurnBefore(entry.turns, startOffset)
+  if (!turn) return null
+  return { kind: 'unloaded', messageId: turn.messageId, ordinal: turn.position + 1, sizeHint: turn.sizeHint }
+}
+
+// A turn jump to unloaded history is a deliberate navigation away from the bottom: drop the
+// sticky-to-bottom pin up front (otherwise the prepended page's relayout snaps the list back to
+// the bottom before the jump lands) and re-derive it from the real position when the jump ends.
+function beginTurnJump() {
+  renewGestureWindow()
+  stickyToBottom.value = false
+  uiStore.setStickyToBottom(viewSessionId.value, false)
+}
+
+function endTurnJump() {
+  if (messagesArea.value) recomputeStickyFromScroll(messagesArea.value)
+}
+
+// Scroll to a loaded turn by message id (after a jump loaded it). Resolves false when the row
+// isn't (or is no longer) in the list. The jump just prepended a page: let the list and the
+// virtualizer's count/keys catch up first, or the scroll offset is computed for the old rows.
+async function scrollToTurnMessage(messageId) {
+  await nextTick()
+  await new Promise(resolve => requestAnimationFrame(resolve))
+  const index = displayableItems.value.findIndex(
+    item => item.type === 'message' && item.message?.type === 'user' && resolveMessageId(item.message) === messageId
+  )
+  if (index < 0) return false
+  return scrollToItemIndexTrusted(index, { align: 'start', behavior: 'auto' })
 }
 
 function findNextTurnIndex() {
@@ -698,7 +759,11 @@ defineExpose({
   resolveToolAnchorIndex,
   resolveSubagentPrimaryIndex,
   findPrevTurnIndex,
+  findPrevTurn,
   findNextTurnIndex,
+  scrollToTurnMessage,
+  beginTurnJump,
+  endTurnJump,
 })
 
 

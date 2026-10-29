@@ -225,6 +225,7 @@ async function loadArchiveMessages() {
       signal: new AbortController().signal,
     })
     historyBackfill.start(props.sessionId)
+    historyBackfill.scheduleIndex(props.sessionId)
     // Load archived resources + the 5 archive-viewer tabs (issue #1263) concurrently —
     // independent fetches, and running them together shrinks the window where a tab
     // pane could render before loadAllTabs has even started.

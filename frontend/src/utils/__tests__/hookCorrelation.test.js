@@ -293,10 +293,35 @@ describe('correlateHooks', () => {
       hookResponse('h1', 'PreCompact', 1, 'archive-before-compact', 'hr-h1'),
     ]
     const result = correlateHooks(messages)
-    expect(result.hooksByCompactionIndex.has(0)).toBe(true)
-    const hooks = result.hooksByCompactionIndex.get(0)
+    expect(result.hooksByCompactionKey.has('cs-1')).toBe(true)
+    const hooks = result.hooksByCompactionKey.get('cs-1')
     expect(hooks[0].hook_event).toBe('PreCompact')
     expect(hooks[0].status).toBe('failure')
+  })
+
+  it('keys each PreCompact hook by its group (message_id), independent of how many groups precede the list (issue #2030)', () => {
+    const group = (id, hookId) => [
+      compactingStatus(id),
+      hookStarted(hookId, 'PreCompact', 'archive', `hs-${hookId}`),
+      hookResponse(hookId, 'PreCompact', 0, 'archive', `hr-${hookId}`),
+    ]
+    const full = correlateHooks([userMsg('u1'), ...group('cs-1', 'h1'), userMsg('u2'), ...group('cs-2', 'h2')])
+    // A window that starts after the first group sees only the second one — same key, same hook.
+    const tail = correlateHooks([userMsg('u2'), ...group('cs-2', 'h2')])
+    expect([...full.hooksByCompactionKey.keys()]).toEqual(['cs-1', 'cs-2'])
+    expect([...tail.hooksByCompactionKey.keys()]).toEqual(['cs-2'])
+    const identity = ({ started_ts, completed_ts, ...rest }) => rest // timestamps come from the test's counter
+    expect(tail.hooksByCompactionKey.get('cs-2').map(identity)).toEqual(full.hooksByCompactionKey.get('cs-2').map(identity))
+  })
+
+  it('a PreCompact hook with no compacting status before it stays unattached', () => {
+    const result = correlateHooks([
+      userMsg('u1'),
+      hookStarted('h1', 'PreCompact', 'archive', 'hs-h1'),
+      hookResponse('h1', 'PreCompact', 0, 'archive', 'hr-h1'),
+    ])
+    expect(result.hooksByCompactionKey.size).toBe(0)
+    expect(result.unattachedHookMessageIds.has('hs-h1')).toBe(true)
   })
 
   it('falls back to unattached when no anchor available', () => {

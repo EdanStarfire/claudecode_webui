@@ -774,6 +774,46 @@ describe('session store', () => {
       expect(store.hydrationStageBySession.get('sess-t1').stage).toBe('ready')
     })
 
+    it('T1b (stage 2): the history index is fetched ONCE, low priority, only after the window and the snapshots', async () => {
+      const { useSessionStore } = await import('@/stores/session')
+      const { useMessageStore } = await import('@/stores/message')
+      const store = useSessionStore()
+      const msgStore = useMessageStore()
+      store.sessions.set('sess-t1b', makeSession({ session_id: 'sess-t1b', state: 'active' }))
+
+      const order = []
+      apiMock.get.mockImplementation((url) => {
+        if (url.includes('/background_agents')) { order.push('agents'); return Promise.resolve({ agents: [] }) }
+        if (url.includes('/background_tasks')) { order.push('background'); return Promise.resolve({ tasks: [] }) }
+        if (url.includes('/history_index')) {
+          order.push('index')
+          return Promise.resolve({ history_id: 'h1', total_bytes: 1000, turns: [['b:10', 'u1', 10]], compactions: [] })
+        }
+        if (url.includes('/tasks')) { order.push('tasks'); return Promise.resolve({ tasks: [] }) }
+        if (url.includes('/messages')) {
+          order.push('window')
+          return Promise.resolve({
+            messages: [makeMessage({ content: 'newest' })],
+            start_cursor: 'b:900', has_more_before: true, history_id: 'h1', snapped: true, total_bytes: 1000,
+            latest_init: { model: 'm' }, event_cursor: 7, epoch: 'e1',
+          })
+        }
+        return Promise.resolve({})
+      })
+      pollingMock.connectSession.mockImplementation(async () => { order.push('connect') })
+
+      await store.selectSession('sess-t1b')
+      await vi.waitFor(() => expect(msgStore.getHistoryIndex('sess-t1b')?.status).toBe('ready'))
+
+      expect(order.filter(o => o === 'index')).toHaveLength(1)
+      for (const before of ['window', 'agents', 'tasks', 'background']) {
+        expect(order.indexOf(before), before).toBeLessThan(order.indexOf('index'))
+      }
+      const indexCall = apiMock.get.mock.calls.find(([url]) => url.includes('/history_index'))
+      expect(indexCall[0]).toBe('/api/sessions/sess-t1b/history_index')
+      expect(indexCall[1]).toMatchObject({ priority: 'low' })
+    })
+
     it('T2/T3: a stalled window request times out naming loading_history; retryHydration() re-fetches it', async () => {
       vi.useFakeTimers()
       try {

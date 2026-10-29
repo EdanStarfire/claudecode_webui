@@ -165,6 +165,7 @@ export const useSessionStore = defineStore('session', () => {
    * surfaces as a normal error instead of looping forever.
    */
   async function runDataHydrationChain(sessionId, abortController, { includeUsage = true, skipPolling = false, allowEpochRestart = true } = {}) {
+    const snapshotPromises = [] // agents/tasks/background snapshot requests the history index waits for
     const messageStore = await import('./message')
     const msgStore = messageStore.useMessageStore()
 
@@ -196,11 +197,12 @@ export const useSessionStore = defineStore('session', () => {
         // The /tasks snapshot is dispatched only AFTER the window response: its event_cursor
         // was read server-side first, so a snapshot requested afterwards includes every task
         // event at or before that cursor; later events arrive live (buffered meanwhile).
-        useTaskStore().hydrate(sessionId)
+        snapshotPromises.push(useTaskStore().hydrate(sessionId))
         await agentsPromise
+        snapshotPromises.push(agentsPromise)
         // Issue #2145: seed the Background section from the backend snapshot (never throws;
         // not awaited so it can't delay or reorder the history-load chain).
-        useBackgroundTasksStore().hydrate(sessionId)
+        snapshotPromises.push(useBackgroundTasksStore().hydrate(sessionId))
       } catch (error) {
         if (abortController.signal.aborted || historyController.signal.aborted) {
           clearHydrationStageIfOwned(sessionId, abortController)
@@ -231,7 +233,8 @@ export const useSessionStore = defineStore('session', () => {
 
     _hydrateSecondaryData(sessionId, { includeUsage })
     if (!skipPolling) {
-      import('../composables/useHistoryBackfill').then(({ startBackfillIfIncomplete }) => startBackfillIfIncomplete(sessionId))
+      // Issue #2030 (stage 2 PR B): the history index follows the window and the snapshots.
+      import('../composables/useHistoryBackfill').then(({ startBackfillIfIncomplete }) => startBackfillIfIncomplete(sessionId, snapshotPromises))
     }
     return true
   }

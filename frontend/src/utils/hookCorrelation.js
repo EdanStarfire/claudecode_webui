@@ -39,11 +39,13 @@
  * @typedef {Object} HookCorrelationResult
  * @property {Map<string, HookIndicator[]>} hooksByToolId        tool_use_id → hooks
  * @property {Map<string, HookIndicator[]>} hooksByMessageId     user/assistant message_id → hooks
- * @property {Map<number, HookIndicator[]>} hooksByCompactionIndex compaction group ordinal → hooks
+ * @property {Map<string, HookIndicator[]>} hooksByCompactionKey  compaction group key (the group's first-record message_id) → hooks
  * @property {HookIndicator[]} hooksOnClientLaunched
  * @property {Set<string>} attachedHookMessageIds  hook message IDs successfully correlated (hide from pill)
  * @property {Set<string>} unattachedHookMessageIds hook message IDs falling back to standalone pill
  */
+
+import { resolveMessageId } from '@/search/messageSearch'
 
 function getMsgId(msg) {
   return msg.message_id || msg.id || null
@@ -64,7 +66,7 @@ function addToMap(map, key, indicator) {
 export function correlateHooks(messages, toolCalls = []) {
   const hooksByToolId = new Map()
   const hooksByMessageId = new Map()
-  const hooksByCompactionIndex = new Map()
+  const hooksByCompactionKey = new Map()
   const hooksOnClientLaunched = []
   const attachedHookMessageIds = new Set()
   const unattachedHookMessageIds = new Set()
@@ -76,7 +78,7 @@ export function correlateHooks(messages, toolCalls = []) {
   let lastUserMessageId = null
   let lastAssistantMessageId = null
   let lastClientLaunchedId = null
-  let currentCompactionGroupIndex = -1  // incremented when status=compacting seen
+  let currentCompactionKey = null  // message_id of the latest status=compacting record (a group's first record)
   let lastCompletedToolId = null
 
   // FIFO queue of tool_use_ids seen in assistant messages but whose tool_result has not yet arrived.
@@ -126,9 +128,10 @@ export function correlateHooks(messages, toolCalls = []) {
         lastClientLaunchedId = getMsgId(msg)
       }
 
-      // Track compaction group ordinal (each compacting status = new group)
+      // Issue #2030: a compaction group is keyed by its first record's message_id (the compacting
+      // status), so the key is independent of how many groups precede the loaded window.
       if (subtype === 'status' && msg.metadata?.init_data?.status === 'compacting') {
-        currentCompactionGroupIndex++
+        currentCompactionKey = resolveMessageId(msg)
       }
 
       if (subtype === 'hook_started' || subtype === 'hook_response') {
@@ -194,9 +197,9 @@ export function correlateHooks(messages, toolCalls = []) {
               break
 
             case 'PreCompact':
-              if (currentCompactionGroupIndex >= 0) {
+              if (currentCompactionKey) {
                 indicator = { ...baseIndicator }
-                addToMap(hooksByCompactionIndex, currentCompactionGroupIndex, indicator)
+                addToMap(hooksByCompactionKey, currentCompactionKey, indicator)
                 attached = true
               }
               break
@@ -259,7 +262,7 @@ export function correlateHooks(messages, toolCalls = []) {
   return {
     hooksByToolId,
     hooksByMessageId,
-    hooksByCompactionIndex,
+    hooksByCompactionKey,
     hooksOnClientLaunched,
     attachedHookMessageIds,
     unattachedHookMessageIds,

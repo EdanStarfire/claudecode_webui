@@ -1,11 +1,12 @@
 import { defineStore } from 'pinia'
-import { ref, computed, readonly, watch } from 'vue'
+import { ref, computed, readonly, watch, markRaw } from 'vue'
 import { api } from '../utils/api'
 import { useSessionStore } from './session'
 import { useTaskStore } from './task'
 import { useBackgroundTasksStore } from './backgroundTasks'
 import { correlateHooks } from '../utils/hookCorrelation'
 import { mergeOlderPage } from '../utils/historyMerge'
+import { cursorOffset } from '../utils/turnNavigation'
 import { getAgentColor, getAssistantRowColor, slugifyAgentName } from '../composables/useAgentColor'
 import { pushDebugEvent, flushDebugBuffer } from '../composables/useDebugBuffer'
 
@@ -63,6 +64,24 @@ export const useMessageStore = defineStore('message', () => {
   //   generation,     // bumps whenever the loaded suffix is replaced (backfill must restart)
   // }>. No entry == a legacy/fully-loaded session (complete).
   const historyBySession = ref(new Map())
+  // Issue #2030 (stage 2 PR B): the server's history index (GET .../history_index) — the turn
+  // list and compaction-group keys of the WHOLE history, which a tail-only load cannot derive.
+  // Map<sessionId, { status: 'loading' | 'ready' | 'unavailable', historyId,
+  //                  turns: [[cursor, messageId, sizeHint]] (markRaw: read-only, can be 50k+ entries) }>.
+  // Dropped whenever the loaded suffix is replaced (reset / history_id change / resync gap-replace).
+  // (The payload's `compactions` are not stored: compaction groups are keyed by message_id from the
+  // loaded records themselves, see hooksForCompaction.)
+  const historyIndexBySession = ref(new Map())
+  // Non-reactive: Map<sessionId, { controller, promise, retryTimer }> for the in-flight request.
+  const _historyIndexRequests = new Map()
+  const _wireRatioBySession = new Map()
+  const HISTORY_INDEX_TIMEOUT_MS = 30000  // server waiter cap is 20 s, then 503
+  const HISTORY_INDEX_RETRY_MS = 5000
+  // A transient failure (503 index_building / timeout, twice) is retried later, a few times: it must
+  // not lock turn navigation for a whole session. Non-reactive Map<sessionId, { timer, failures }>.
+  const HISTORY_INDEX_COOLDOWN_MS = 30000
+  const HISTORY_INDEX_MAX_FAILURES = 3
+  const _historyIndexCooldowns = new Map()
   // One in-flight backfill page request per session; claiming aborts the previous one.
   const _backfillControllers = new Map()
   // Tool ids that arrived via an older (backfilled) page, per session. Stores that react to "a
@@ -268,6 +287,8 @@ export const useMessageStore = defineStore('message', () => {
   }
 
   function _deleteHistory(sessionId) {
+    _dropHistoryIndex(sessionId)
+    _wireRatioBySession.delete(sessionId)
     if (!historyBySession.value.has(sessionId)) return
     const next = new Map(historyBySession.value)
     next.delete(sessionId)
@@ -299,6 +320,124 @@ export const useMessageStore = defineStore('message', () => {
     if (!match || !totalBytes) return { fraction: null, loadedBytes: null, totalBytes }
     const loadedBytes = Math.max(0, totalBytes - Number(match[1]))
     return { fraction: Math.min(1, loadedBytes / totalBytes), loadedBytes, totalBytes }
+  }
+
+  // ---- history index (Issue #2030, stage 2 PR B) ----
+
+  function _setHistoryIndex(sessionId, entry) {
+    const next = new Map(historyIndexBySession.value)
+    if (entry) next.set(sessionId, entry)
+    else next.delete(sessionId)
+    historyIndexBySession.value = next
+  }
+
+  function _dropHistoryIndex(sessionId) {
+    const request = _historyIndexRequests.get(sessionId)
+    if (request) {
+      request.controller.abort()
+      clearTimeout(request.retryTimer)
+      _historyIndexRequests.delete(sessionId)
+    }
+    clearTimeout(_historyIndexCooldowns.get(sessionId)?.timer)
+    _historyIndexCooldowns.delete(sessionId)
+    if (historyIndexBySession.value.has(sessionId)) _setHistoryIndex(sessionId, null)
+  }
+
+  function getHistoryIndex(sessionId) {
+    return historyIndexBySession.value.get(sessionId) || null
+  }
+
+  /** True when a message with this id is part of the loaded suffix. */
+  function isMessageLoaded(sessionId, messageId) {
+    return !!messageIndexBySession.get(sessionId)?.has(messageId)
+  }
+
+  function _scheduleIndexRetry(sessionId, historyId, generation) {
+    const failures = (_historyIndexCooldowns.get(sessionId)?.failures || 0) + 1
+    if (failures >= HISTORY_INDEX_MAX_FAILURES) return
+    const timer = setTimeout(() => {
+      const history = historyBySession.value.get(sessionId)
+      const entry = historyIndexBySession.value.get(sessionId)
+      if (!history || history.historyId !== historyId || history.generation !== generation ||
+          entry?.status !== 'unavailable') return
+      _setHistoryIndex(sessionId, null)
+      ensureHistoryIndex(sessionId)
+    }, HISTORY_INDEX_COOLDOWN_MS)
+    _historyIndexCooldowns.set(sessionId, { timer, failures })
+  }
+
+  /**
+   * Fetches the server history index for a tail-loaded session (one low-priority request;
+   * idempotent while loading/ready). Resolves to the entry, or null when none applies (history
+   * complete, no history state, stale response). A 404/405 (old server) or any failure after one
+   * retry leaves status 'unavailable' — callers keep the stage-1 behaviour (turn navigation
+   * locked until the history is complete).
+   */
+  function ensureHistoryIndex(sessionId) {
+    const history = historyBySession.value.get(sessionId)
+    if (!history || !history.hasMoreBefore) return Promise.resolve(null)
+    const existing = historyIndexBySession.value.get(sessionId)
+    if (existing && existing.historyId === history.historyId) {
+      return _historyIndexRequests.get(sessionId)?.promise || Promise.resolve(existing)
+    }
+    _dropHistoryIndex(sessionId)
+
+    const { historyId, generation } = history
+    const url = history.baseUrl.replace(/\/messages$/, '/history_index')
+    const controller = new AbortController()
+    const request = { controller, promise: null, retryTimer: null }
+    _historyIndexRequests.set(sessionId, request)
+    const pending = (status, turns = []) => ({ status, historyId, turns })
+    _setHistoryIndex(sessionId, pending('loading'))
+
+    const isCurrent = () => {
+      const now = historyBySession.value.get(sessionId)
+      return _historyIndexRequests.get(sessionId) === request && !controller.signal.aborted &&
+        !!now && now.generation === generation && now.historyId === historyId
+    }
+    const settle = (entry) => {
+      if (_historyIndexRequests.get(sessionId) === request) _historyIndexRequests.delete(sessionId)
+      _setHistoryIndex(sessionId, entry)
+      return entry
+    }
+    const attempt = async (retried) => {
+      try {
+        const data = await _fetchHistoryJson(url, {
+          signal: controller.signal, inactivityMs: HISTORY_INDEX_TIMEOUT_MS,
+          label: `history index for session ${sessionId}`, lowPriority: true,
+        })
+        if (!isCurrent()) return null
+        if (data.history_id !== historyId) { // the file changed under us: a resync will refetch
+          if (_historyIndexRequests.get(sessionId) === request) _historyIndexRequests.delete(sessionId)
+          _setHistoryIndex(sessionId, null)
+          return null
+        }
+        pushDebugEvent('message', 'history-index', { sessionId, turns: data.turns?.length, compactions: data.compactions?.length })
+        // Turn positions are compared with the loaded suffix's `b:<offset>` cursor: without such a
+        // cursor the index cannot be used (stage-1 behaviour instead of a button that never unlocks).
+        if (cursorOffset(historyBySession.value.get(sessionId).startCursor) == null) return settle(pending('unavailable'))
+        _historyIndexCooldowns.delete(sessionId)
+        return settle(pending('ready', markRaw(data.turns || [])))
+      } catch (err) {
+        if (!isCurrent()) return null
+        const permanent = err?.status === 404 || err?.status === 405 || err?.status === 501
+        if (!permanent && !retried) {
+          // abortable: dropping the index mid-wait must settle this promise (callers await it)
+          await new Promise(resolve => {
+            request.retryTimer = setTimeout(resolve, HISTORY_INDEX_RETRY_MS)
+            controller.signal.addEventListener('abort', () => { clearTimeout(request.retryTimer); resolve() }, { once: true })
+          })
+          if (!isCurrent()) return null
+          return attempt(true)
+        }
+        pushDebugEvent('message', 'history-index-unavailable', { sessionId, status: err?.status, message: err?.message })
+        const entry = settle(pending('unavailable'))
+        if (!permanent) _scheduleIndexRetry(sessionId, historyId, generation)
+        return entry
+      }
+    }
+    request.promise = attempt(false)
+    return request.promise
   }
 
   /** True when this tool call was loaded from an older page, i.e. it is history, not news. */
@@ -354,19 +493,34 @@ export const useMessageStore = defineStore('message', () => {
    * Feeds the backfill scheduler's slow-link detection where the Network Information API is absent.
    */
   function _measureTransferBps(url, sinceMs) {
+    const entry = _findResourceEntry(url, sinceMs - 50)
+    if (!entry?.encodedBodySize || !entry.duration) return null
+    return entry.encodedBodySize / (entry.duration / 1000)
+  }
+
+  /** Newest Resource Timing entry for `url` that started at/after `sinceMs`, or null (unavailable). */
+  function _findResourceEntry(url, sinceMs = 0) {
     try {
       const entries = performance.getEntriesByType('resource')
       for (let i = entries.length - 1; i >= 0; i--) {
-        const entry = entries[i]
-        if (entry.name.endsWith(url) && entry.startTime >= sinceMs - 50) {
-          if (!entry.encodedBodySize || !entry.duration) return null
-          return entry.encodedBodySize / (entry.duration / 1000)
-        }
+        if (entries[i].name.endsWith(url) && entries[i].startTime >= sinceMs) return entries[i]
       }
     } catch {
       // Resource Timing unavailable
     }
     return null
+  }
+
+  /**
+   * Observed decoded/wire byte ratio of backfill pages (Resource Timing), kept per session
+   * (non-reactive): the turn-jump guard converts a byte distance into an expected download size with it.
+   * Unavailable timing leaves the previous value (callers default to 5x).
+   */
+  function _noteWireRatio(sessionId, url) {
+    const entry = _findResourceEntry(url)
+    if (entry && entry.encodedBodySize > 4096 && entry.decodedBodySize) {
+      _wireRatioBySession.set(sessionId, entry.decodedBodySize / entry.encodedBodySize)
+    }
   }
 
   /** Records that overlap what is already loaded prove the new window is contiguous with it. */
@@ -412,6 +566,7 @@ export const useMessageStore = defineStore('message', () => {
     } else {
       // Replacing: an older-page backfill still running against the previous suffix is stale.
       abortBackfill(sessionId)
+      _dropHistoryIndex(sessionId)
       _backfilledToolIds.delete(sessionId)
       target = _createRecordTarget()
     }
@@ -489,6 +644,7 @@ export const useMessageStore = defineStore('message', () => {
       }
       throw err
     }
+    _noteWireRatio(sessionId, `${history.baseUrl}?${params.join('&')}`)
     if (data.history_id !== history.historyId) {
       const resetErr = new Error('History file changed during backfill')
       resetErr.isHistoryReset = true
@@ -516,6 +672,11 @@ export const useMessageStore = defineStore('message', () => {
     _setHistory(sessionId, { startCursor: page.startCursor, hasMoreBefore: page.hasMoreBefore })
     if (!page.hasMoreBefore) _hookCorrelationCache.delete(sessionId)
     return true
+  }
+
+  function _touchesCompactionHooks(record) {
+    const initData = record.type === 'system' ? record.metadata?.init_data : null
+    return !!initData && (initData.status === 'compacting' || initData.hook_event === 'PreCompact')
   }
 
   /**
@@ -582,6 +743,11 @@ export const useMessageStore = defineStore('message', () => {
     messagesBySession.value = new Map(messagesBySession.value)
     toolCallsBySession.value = new Map(toolCallsBySession.value)
     narrationByTaskIdAndLeg.value = new Map(narrationByTaskIdAndLeg.value)
+    // The hook-correlation cache is kept across head-only prepends while the history is incomplete
+    // (see getHookCorrelation), but a compaction group / PreCompact hook that just arrived must
+    // show its indicators now — compaction groups are keyed by message_id, so they are correct
+    // as soon as their records are loaded.
+    if (records.some(_touchesCompactionHooks)) _hookCorrelationCache.delete(sessionId)
     pushDebugEvent('message', 'history-older-page', { sessionId, records: records.length, prepended: merged.prependedMessageCount })
     return merged.prependedMessageCount
   }
@@ -2284,13 +2450,10 @@ export const useMessageStore = defineStore('message', () => {
     return getHookCorrelation(sessionId).hooksByMessageId.get(messageId) || []
   }
 
-  /** Returns hooks correlated to a compaction event group by ordinal index. */
-  function hooksForCompaction(sessionId, groupIndex) {
-    if (!sessionId || groupIndex == null || groupIndex < 0) return []
-    // Issue #2030: the compaction ordinal counts groups from the start of the list, so it is
-    // only meaningful once the whole history is loaded (stage 2 keys it by message_id).
-    if (!isHistoryComplete(sessionId)) return []
-    return getHookCorrelation(sessionId).hooksByCompactionIndex.get(groupIndex) || []
+  /** Returns hooks correlated to a compaction event group (keyed by its first record's message_id). */
+  function hooksForCompaction(sessionId, groupKey) {
+    if (!sessionId || !groupKey) return []
+    return getHookCorrelation(sessionId).hooksByCompactionKey.get(groupKey) || []
   }
 
   /**
@@ -2381,6 +2544,11 @@ export const useMessageStore = defineStore('message', () => {
     wasBackfilled,
     abortBackfill,
     historyBySession: readonly(historyBySession),
+    historyIndexBySession: readonly(historyIndexBySession),
+    getHistoryIndex,
+    ensureHistoryIndex,
+    getWireRatio: (sessionId) => _wireRatioBySession.get(sessionId) || null,
+    isMessageLoaded,
     getHistoryState,
     isHistoryComplete,
     historyProgress,

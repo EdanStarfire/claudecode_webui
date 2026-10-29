@@ -79,9 +79,9 @@ const props = defineProps({
     required: true,
     validator: (messages) => messages.length === 4 || messages.length === 5
   },
-  compactionGroupIndex: {
-    type: Number,
-    default: -1,
+  groupKey: {
+    type: String,
+    default: null,
   },
 })
 
@@ -95,8 +95,8 @@ const viewSessionId = inject('viewSessionId', ref(null))
 // Issue #1350: PreCompact hooks attached to this compaction group
 const preCompactHooks = computed(() => {
   const sid = viewSessionId.value
-  if (!sid || props.compactionGroupIndex < 0) return []
-  return messageStore.hooksForCompaction(sid, props.compactionGroupIndex)
+  if (!sid || !props.groupKey) return []
+  return messageStore.hooksForCompaction(sid, props.groupKey)
 })
 
 const isOpen = ref(false)
