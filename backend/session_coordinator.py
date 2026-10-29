@@ -1880,6 +1880,15 @@ class SessionCoordinator:
             session_id, archive_id, messages_file
         )
 
+    async def search_history(self, session_id: str, *args: Any) -> dict[str, Any] | None:
+        return await self._session_query.search_history(session_id, *args)
+
+    async def search_archive_history(self, sid: str, archive_id: str, *args: Any) -> dict | None:
+        if not self.legion_system:
+            raise ValueError("archives unavailable")
+        path = self.legion_system.archive_manager.archive_messages_path(sid, archive_id)
+        return await self._session_query.search_archive_history(sid, archive_id, path, *args)
+
     # ==================== ARCHIVE METHODS ====================
 
     async def get_archives(self, session_id: str, limit: int = 50, offset: int = 0) -> dict:

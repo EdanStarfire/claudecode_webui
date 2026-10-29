@@ -9,6 +9,11 @@ simulated browser clients over HTTP.
     uv run python -m backend.tests.load.history_index_load --phase all --out report.json
     uv run python -m backend.tests.load.history_index_load --phase firstpaint --tree /tmp/main_wt
 
+Stage 3 PR 3B adds the ``search`` phase (whole-history search: single-search latency / bytes
+scanned per fixture class and query kind, a 113 MB isolation probe, and the mixed browser load
+with search traffic, supersede / disconnect / delete / reset churn, versus an open-only control
+of the same seed); see ``phase_search``.
+
 Phases: ``cold`` (cold index scan time / peak RSS / loop lag / response size per fixture class),
 ``firstpaint`` (window + agents + tasks latency with every cold scan of 1 and of 4 sessions
 triggered together; run it against ``--tree`` = a ``main`` checkout for the baseline), ``load``
@@ -545,6 +550,377 @@ async def phase_memory(be: Backend, report: dict, *, sessions: int = 70) -> None
         shutil.rmtree(work, ignore_errors=True)
 
 
+# ============================================================================ search (PR 3B)
+
+SEARCH_QUERIES = {
+    "frequent": "alpha",          # in nearly every message (and every tool result)
+    "frequent_short": "xi",       # 2 chars, ditto
+    "rare": "zqxrare",            # one user turn (~25 %) and one tool result (~50 %)
+    "nohit": "qqqzzzxxx",         # full-history scan, bytes-prefilter tier
+    "long": ("omicron alpha " * 19)[:256].strip(),          # 256 chars, no hit
+    "unsafe_parse": 'say "alpha" \\ x',                     # parse-every-line tier, no hit
+    "unicode_lines": "caf\u00e9 \u65e5\u672c",              # decode+compare tier, no hit
+}
+SEARCH_MIX = ["frequent"] * 3 + ["frequent_short"] + ["rare"] * 3 + ["nohit"] * 3 + [
+    "long", "unsafe_parse", "unicode_lines",
+]
+
+
+async def search_page(be: Backend, sid: str, query: str, cursor: str | None = None,
+                      abandon_after: float | None = None, client_id: str | None = None) -> dict:
+    """One search page. ``abandon_after`` closes the connection after that many seconds (a
+    disconnecting browser)."""
+    params = {"q": query}
+    if cursor:
+        params["cursor"] = cursor
+    if client_id:
+        params["client_id"] = client_id
+    t0 = time.perf_counter()
+    try:
+        coro = be.client.get(f"/api/sessions/{sid}/search", params=params)
+        r = await (coro if abandon_after is None else asyncio.wait_for(coro, abandon_after))
+    except TimeoutError:
+        return {"ms": (time.perf_counter() - t0) * 1000.0, "status": "abandoned"}
+    except httpx.HTTPError:
+        return {"ms": (time.perf_counter() - t0) * 1000.0, "status": "error"}
+    ms = (time.perf_counter() - t0) * 1000.0
+    body = r.json() if r.status_code == 200 else {}
+    return {"ms": ms, "status": r.status_code, "body": body, "bytes": len(r.content),
+            "superseded": bool(body.get("superseded"))}
+
+
+async def phase_search_single(be: Backend, fixtures: dict[str, Path], report: dict) -> None:
+    """Idle single-search latency and bytes scanned per fixture class and query kind: the first
+    page (cold = first touch of the file's pages this run, warm = repeat), and for the no-hit /
+    rare kinds the whole-history walk (pages, total time)."""
+    rows: dict = {}
+    for cls, path in fixtures.items():
+        sid = await be.new_session(path, f"search-{cls}")
+        rows[cls] = {"file_mb": round(path.stat().st_size / 2**20, 1)}
+        for kind, query in SEARCH_QUERIES.items():
+            first = await search_page(be, sid, query)
+            warm = await search_page(be, sid, query)
+            body = first.get("body", {})
+            row = {
+                "status": first["status"], "first_page_ms": round(first["ms"], 1),
+                "warm_first_page_ms": round(warm["ms"], 1),
+                "results": len(body.get("results", [])), "exhausted": body.get("exhausted"),
+                "scanned_mb": round(body.get("scanned_bytes", 0) / 2**20, 1),
+                "scanned_fraction": body.get("scanned_fraction"),
+                "response_bytes": first.get("bytes"),
+            }
+            if kind in ("rare", "nohit", "long", "unsafe_parse", "unicode_lines"):
+                pages, total_ms, scanned, cursor, hits = 0, 0.0, 0, None, 0
+                for _ in range(200):
+                    page = await search_page(be, sid, query, cursor)
+                    if page["status"] != 200:
+                        break
+                    pages += 1
+                    total_ms += page["ms"]
+                    scanned += page["body"].get("scanned_bytes", 0)
+                    hits += len(page["body"].get("results", []))
+                    cursor = page["body"].get("next_cursor")
+                    if page["body"].get("exhausted"):
+                        break
+                row["full_walk"] = {"pages": pages, "total_ms": round(total_ms, 1),
+                                    "scanned_mb": round(scanned / 2**20, 1), "hits": hits}
+            rows[cls][kind] = row
+    report["search_single"] = rows
+
+
+async def phase_search_isolation(be: Backend, fixtures: dict[str, Path], report: dict, *,
+                                 seconds: float) -> None:
+    """Session Y / W probes (idle, then while two searchers hammer a 113 MB session X with the
+    frequent and the exhaustive no-hit queries back to back)."""
+    sid_y = await be.new_session(fixtures["small"], "Y")
+    sid_w = await be.new_session(fixtures["small"], "W")
+    await open_session(be, sid_y, with_index=True)
+    await open_session(be, sid_w, with_index=True)
+    sid_x = await be.new_session(fixtures["huge"], "X")
+    await asyncio.sleep(1.0)
+    idle = Prober(be, sid_y, sid_w, interval=0.02)
+    idle.start()
+    await asyncio.sleep(seconds + 1.5)
+    await idle.stop()
+    stop_at = time.time() + seconds + 1.5
+    await be.metrics(reset=True)
+    busy = Prober(be, sid_y, sid_w, interval=0.02)
+    busy.start()
+    served = {"pages": 0, "busy": 0, "max_ms": 0.0}
+
+    async def hammer(query: str) -> None:
+        cursor = None
+        while time.time() < stop_at:
+            page = await search_page(be, sid_x, query, cursor)
+            served["pages"] += 1
+            served["max_ms"] = max(served["max_ms"], page["ms"])
+            if page["status"] == 503:
+                served["busy"] += 1
+            body = page.get("body") or {}
+            cursor = None if body.get("exhausted") else body.get("next_cursor")
+
+    await asyncio.gather(
+        hammer(SEARCH_QUERIES["frequent"]), hammer(SEARCH_QUERIES["nohit"]),
+        hammer(SEARCH_QUERIES["unsafe_parse"]),
+    )
+    await busy.stop()
+    m = await be.metrics()
+    idle_s, busy_s = idle.summary(), busy.summary()
+    report["search_isolation"] = {
+        "idle_probe": idle_s, "during_113mb_search_probe": busy_s, "search_pages_served": served,
+        "loop_lag": m["lag"], "search": m.get("search"),
+        "checks": {
+            "Y_window_p95_unaffected": busy_s["window_p95_ms"] <= max(1.25 * idle_s["window_p95_ms"], 50.0),
+            "W_tasks_p95_unaffected": busy_s["tasks_p95_ms"] <= max(1.25 * idle_s["tasks_p95_ms"], 50.0),
+        },
+    }
+
+
+async def phase_search_load(be: Backend, fixtures: dict[str, Path], report: dict, *, label: str,
+                            duration: float, browsers: int, seed: int, scale: float,
+                            search_ratio: float, churn: bool = True) -> None:
+    """N simulated browsers over sessions of mixed size: opens (window + snapshots + index) and,
+    with probability ``search_ratio``, searches (frequent / rare / no-hit / short / long /
+    parse-tier / unicode) with continuation pages, supersede churn (A then B on one session),
+    disconnects mid-scan, and delete / reset of sessions with a search in flight. ``search_ratio=0``
+    is the open-only control with the same seed."""
+    sid_y = await be.new_session(fixtures["small"], "Y")
+    sid_w = await be.new_session(fixtures["small"], "W")
+    await open_session(be, sid_y, with_index=True)
+    await open_session(be, sid_w, with_index=True)
+    await asyncio.sleep(1.0)
+    rng_pool = random.Random(seed)
+    pool: list[str] = []
+    for cls, count in (("small", 5), ("medium", 4), ("huge", 3)):
+        for i in range(max(1, int(count * max(scale, 0.3)))):
+            pool.append(await be.new_session(fixtures[cls], f"{label}-{cls}-{i}"))
+    churn_queue: list[str] = []
+    for cls, count in (("small", 4), ("medium", 5), ("huge", 3)):
+        for i in range(max(1, int(count * max(scale, 0.3)))):
+            churn_queue.append(await be.new_session(fixtures[cls], f"{label}-churn-{cls}-{i}"))
+    rng_pool.shuffle(churn_queue)
+    deleted: set[str] = set()
+    reset_ids: set[str] = set()
+    stats = {"opens": 0, "searches": 0, "pages": 0, "continuations": 0, "superseded_seen": 0,
+             "abandoned": 0, "busy_503": 0, "errors": 0, "supersede_pairs": 0, "deleted": 0,
+             "reset": 0, "reset_failed": 0, "stops": 0}
+    page_ms: dict[str, list[float]] = {k: [] for k in SEARCH_QUERIES}
+    page_ms_all: list[float] = []
+    max_results_in_page = 0
+    other_durations: list[float] = []
+    index_durations: list[float] = []
+    await be.metrics(reset=True)
+    prober = Prober(be, sid_y, sid_w, interval=0.02)
+    prober.start()
+    await asyncio.sleep(1.5)
+    stop_at = time.time() + duration
+
+    def live_pool() -> list[str]:
+        return [s for s in pool if s not in deleted]
+
+    def record(kind: str, page: dict) -> None:
+        nonlocal max_results_in_page
+        stats["pages"] += 1
+        if page["status"] == "abandoned":
+            stats["abandoned"] += 1
+        elif page["status"] == 503:
+            stats["busy_503"] += 1
+            page_ms_all.append(page["ms"])
+        elif page["status"] != 200:
+            stats["errors"] += 1
+        elif page["superseded"]:
+            stats["superseded_seen"] += 1
+        else:
+            page_ms[kind].append(page["ms"])
+            page_ms_all.append(page["ms"])
+            max_results_in_page = max(max_results_in_page, len(page["body"].get("results", [])))
+
+    async def one_search(r: random.Random, sid: str, cid: str) -> None:
+        kind = r.choice(SEARCH_MIX)
+        stats["searches"] += 1
+        abandon = r.uniform(0.01, 0.3) if r.random() < 0.12 else None
+        page = await search_page(be, sid, SEARCH_QUERIES[kind], abandon_after=abandon, client_id=cid)
+        record(kind, page)
+        cursor = (page.get("body") or {}).get("next_cursor")
+        for _ in range(r.choice([0, 0, 1, 2])):
+            if not cursor or page["status"] != 200:
+                break
+            page = await search_page(be, sid, SEARCH_QUERIES[kind], cursor, client_id=cid)
+            stats["continuations"] += 1
+            record(kind, page)
+            cursor = (page.get("body") or {}).get("next_cursor")
+
+    async def supersede_pair(r: random.Random, sid: str, cid: str) -> None:
+        a, b = r.sample(list(SEARCH_QUERIES), 2)
+        stats["supersede_pairs"] += 1
+        first = asyncio.create_task(search_page(be, sid, SEARCH_QUERIES[a], client_id=cid))
+        await asyncio.sleep(r.uniform(0.005, 0.15))
+        second = await search_page(be, sid, SEARCH_QUERIES[b], client_id=cid)
+        record(b, second)
+        record(a, await first)
+
+    async def browser(idx: int) -> None:
+        r = random.Random(seed * 100 + idx)
+        cid = f"tab-{label}-{idx}"  # one per simulated browser window (per page load)
+        while time.time() < stop_at:
+            sid = r.choice(live_pool())
+            if r.random() < 0.1:
+                await be.client.post(f"/api/__load/stop/{sid}")
+                await be.client.post(f"/api/__load/attach/{sid}")
+                stats["stops"] += 1
+            if r.random() < (1.0 - search_ratio) or search_ratio == 0:
+                res = await open_session(be, sid, with_index=True)
+                stats["opens"] += 1
+                if "index" in res:
+                    index_durations.append(res["index"])
+                other_durations.extend(res[k] for k in ("window", "agents", "tasks", "background"))
+            elif r.random() < 0.2:
+                await supersede_pair(r, sid, cid)
+            else:
+                # the browser opens the session and searches it at the same time
+                await asyncio.gather(open_session(be, sid, with_index=True), one_search(r, sid, cid))
+                stats["opens"] += 1
+            await asyncio.sleep(r.uniform(0.0, 0.2))
+
+    async def churner() -> None:
+        r = random.Random(seed + 999)
+        while time.time() < stop_at and churn_queue:
+            sid = churn_queue.pop()
+            kick = [asyncio.create_task(open_session(be, sid, with_index=True))]
+            if search_ratio > 0:
+                kick += [asyncio.create_task(search_page(be, sid, SEARCH_QUERIES[k]))
+                         for k in r.sample(["frequent", "nohit", "unsafe_parse"], 2)]
+            await asyncio.sleep(r.uniform(0.05, 0.6))
+            if r.random() < 0.5:
+                rr = await be.client.delete(f"/api/sessions/{sid}")
+                if rr.status_code == 200:
+                    deleted.add(sid)
+                    stats["deleted"] += 1
+            else:
+                reset_ids.add(sid)
+                rr = await be.client.post(f"/api/sessions/{sid}/reset")
+                stats["reset" if rr.status_code == 200 else "reset_failed"] += 1
+            await asyncio.gather(*kick, return_exceptions=True)
+            await asyncio.sleep(r.uniform(0.2, 1.0))
+
+    await asyncio.gather(*[browser(i) for i in range(browsers)], *([churner()] if churn else []))
+    await prober.stop()
+    during = await be.metrics()
+    probe = prober.summary()
+    settle_deadline = time.time() + 120
+    final = during
+    while time.time() < settle_deadline:
+        final = await be.metrics()
+        s_ok = (final.get("search") or {}).get("inflight", 0) == 0
+        if final["scans"]["inflight"] == 0 and final["scans"]["running"] == 0 and s_ok:
+            break
+        await asyncio.sleep(0.5)
+    await asyncio.sleep(0.5)
+    final = await be.metrics()
+    fs = final.get("search") or {}
+    leaked = {
+        "search_inflight_keys": fs.get("inflight_keys", []),
+        "deleted_index": [k for k in final["index_cached_keys"] if k in deleted],
+        "deleted_task_list": [k for k in final["task_list_keys"] if k in deleted],
+        # (a reset session's index may legitimately be rebuilt non-empty here: the harness reset
+        # does not truncate the file and a kicked open can request the index after the reset)
+    }
+    out = {
+        "params": {"duration_s": duration, "browsers": browsers, "search_ratio": search_ratio,
+                   "pool": len(pool), "search_workers": fs.get("workers")},
+        "ops": stats, "probe": probe, "loop_lag": during["lag"],
+        "loop_block_stacks": (during.get("block_stacks") or [])[:6],
+        "peak_rss_mb": round(during["mem"]["VmHWM"], 1),
+        "search_page_ms": {"n": len(page_ms_all), "p50": round(pct(page_ms_all, 0.5), 1),
+                           "p95": round(p95(page_ms_all), 1), "max": round(max(page_ms_all or [0]), 1),
+                           "by_kind_p95": {k: round(p95(v), 1) for k, v in page_ms.items() if v},
+                           "by_kind_max": {k: round(max(v), 1) for k, v in page_ms.items() if v}},
+        "max_results_in_a_page": max_results_in_page,
+        "open_waiters": {"index_max_s": round(max(index_durations or [0]) / 1000, 2),
+                         "other_max_s": round(max(other_durations or [0]) / 1000, 2),
+                         "other_p95_ms": round(p95(other_durations), 1)},
+        "server_search_counters": {k: fs.get(k) for k in ("superseded", "disconnected", "timed_out",
+                                                         "max_running")},
+        "final_state": {"search": fs, "scans": final["scans"], "threads": final["threads"],
+                        "leaked": leaked},
+        "checks": {
+            "no_request_beyond_cap": max(page_ms_all or [0]) <= 5_000,
+            "page_size_bounded": max_results_in_page <= 50 + 100,
+            "lag_max_lt_100ms": during["lag"]["max_ms"] < 100,
+            "lag_p99_lt_30ms": during["lag"]["p99_ms"] < 30,
+            "open_waiters_ok": max(index_durations or [0]) <= 21_000 and max(other_durations or [0]) <= 5_000,
+            "no_leaked_flights": fs.get("inflight", 0) == 0 and fs.get("waiters", 0) == 0
+            and fs.get("running", 0) == 0,
+            "no_leaked_state": not any(leaked.values()),
+            "no_unexpected_errors": stats["errors"] == 0,
+        },
+    }
+    report.setdefault("search_load", {})[label] = out
+
+
+async def phase_search_clients(be: Backend, fixtures: dict[str, Path], report: dict, *,
+                               rounds: int) -> None:
+    """Two windows (client_ids) per session: different queries on the SAME session must never
+    cancel each other; the same window's newer query supersedes its older one (200 superseded)."""
+    sessions = [await be.new_session(fixtures[c], f"clients-{c}") for c in ("medium", "huge")]
+    out = {"rounds": 0, "cross_superseded": 0, "own_superseded": 0, "own_not_superseded": 0,
+           "busy_503": 0, "errors": 0}
+    slow = [SEARCH_QUERIES[k] for k in ("nohit", "long", "unsafe_parse", "unicode_lines")]
+    for i in range(rounds):
+        for sid in sessions:
+            qa, qb, qa2 = slow[i % 4], slow[(i + 1) % 4], slow[(i + 2) % 4]
+            a = asyncio.create_task(search_page(be, sid, qa, client_id="win-A"))
+            b = asyncio.create_task(search_page(be, sid, qb, client_id="win-B"))
+            await asyncio.sleep(0.05)
+            a2 = asyncio.create_task(search_page(be, sid, qa2, client_id="win-A"))  # A moves on
+            ra, rb, ra2 = await asyncio.gather(a, b, a2)
+            out["rounds"] += 1
+            for page in (rb, ra2):
+                if page["status"] == 503:
+                    out["busy_503"] += 1
+                elif page["status"] != 200:
+                    out["errors"] += 1
+            if rb["status"] == 200 and rb["superseded"]:
+                out["cross_superseded"] += 1  # window B was cancelled by window A: must stay 0
+            if ra["status"] == 200:
+                out["own_superseded" if ra["superseded"] else "own_not_superseded"] += 1
+    m = await be.metrics()
+    out["server"] = m.get("search")
+    out["checks"] = {
+        "no_cross_client_cancel": out["cross_superseded"] == 0,
+        "own_older_query_superseded": out["own_superseded"] >= max(1, out["rounds"] // 2),
+        "no_errors": out["errors"] == 0,
+    }
+    report["search_clients"] = out
+
+
+async def phase_search(be: Backend, fixtures: dict[str, Path], report: dict, *, duration: float,
+                       browsers: int, seed: int, scale: float, churn: bool,
+                       parts: str = "single,clients,isolation,load") -> None:
+    if "single" in parts:
+        await phase_search_single(be, fixtures, report)
+    if "clients" in parts:
+        await phase_search_clients(be, fixtures, report, rounds=8)
+    if "isolation" in parts:
+        await phase_search_isolation(be, fixtures, report, seconds=max(8.0, duration / 3))
+    if "control" in parts and "load" not in parts:  # open-only control (also runs against main)
+        await phase_search_load(be, fixtures, report, label="control_open_only", duration=duration,
+                                browsers=browsers, seed=seed, scale=scale, search_ratio=0.0,
+                                churn=churn)
+        return
+    if "load" not in parts:
+        return
+    await phase_search_load(be, fixtures, report, label="control_open_only", duration=duration,
+                            browsers=browsers, seed=seed, scale=scale, search_ratio=0.0, churn=churn)
+    await phase_search_load(be, fixtures, report, label="with_search", duration=duration,
+                            browsers=browsers, seed=seed, scale=scale, search_ratio=0.6, churn=churn)
+    ctl, run = report["search_load"]["control_open_only"], report["search_load"]["with_search"]
+    run["checks"]["probe_window_p95_not_worse_than_control"] = (
+        run["probe"]["window_p95_ms"] <= max(1.25 * ctl["probe"]["window_p95_ms"], 50.0))
+    run["checks"]["probe_tasks_p95_not_worse_than_control"] = (
+        run["probe"]["tasks_p95_ms"] <= max(1.25 * ctl["probe"]["tasks_p95_ms"], 50.0))
+
+
 # ============================================================================ main
 
 
@@ -554,7 +930,8 @@ def make_fixtures(root: Path, scale: float) -> dict[str, Path]:
         path = root / f"{name}.jsonl"
         generate_session_file(path, records=max(200, int(p["records"] * scale)),
                               target_bytes=max(1 << 20, int(p["bytes"] * scale)),
-                              session_id=name, seed={"small": 3, "medium": 5, "huge": 7}[name])
+                              session_id=name, seed={"small": 3, "medium": 5, "huge": 7}[name],
+                              rare_token="zqxrare")
         out[name] = path
     return out
 
@@ -571,7 +948,7 @@ async def amain(args) -> int:
     rc = 0
     try:
         await be.start()
-        phases = {"cold", "firstpaint", "load", "memory"} if args.phase == "all" else {args.phase}
+        phases = {"cold", "firstpaint", "load", "memory", "search"} if args.phase == "all" else {args.phase}
         with_index = not args.baseline
         if "cold" in phases and with_index:
             await phase_cold(be, fixtures, report)
@@ -585,6 +962,14 @@ async def amain(args) -> int:
                 rc = 1
         if "memory" in phases and with_index:
             await phase_memory(be, report, sessions=args.memory_sessions)
+        if "search" in phases and with_index:
+            await phase_search(be, fixtures, report, duration=args.duration, browsers=args.browsers,
+                               seed=args.seed, scale=args.scale, churn=not args.no_churn,
+                               parts=args.search_parts)
+            if args.assert_checks and not all(
+                all(v["checks"].values()) for v in report["search_load"].values()
+            ) :
+                rc = 1
     finally:
         await be.stop()
         shutil.rmtree(work, ignore_errors=True)
@@ -597,7 +982,7 @@ async def amain(args) -> int:
 
 def main() -> None:
     ap = argparse.ArgumentParser()
-    ap.add_argument("--phase", default="all", choices=["all", "cold", "firstpaint", "load", "memory"])
+    ap.add_argument("--phase", default="all", choices=["all", "cold", "firstpaint", "load", "memory", "search"])
     ap.add_argument("--tree", default=None, help="checkout to run the Backend from (e.g. a main worktree)")
     ap.add_argument("--baseline", action="store_true", help="tree has no /history_index (main)")
     ap.add_argument("--port", type=int, default=8030)
@@ -610,6 +995,9 @@ def main() -> None:
     ap.add_argument("--out", default=None)
     ap.add_argument("--no-churn", action="store_true", help="skip delete/reset churn (isolates scan load)")
     ap.add_argument("--assert-checks", action="store_true")
+    ap.add_argument("--search-parts", default="single,clients,isolation,load",
+                    help="subset of the search phase: single,clients,isolation,load (load = control + search arms),"
+                         " control (open-only arm alone: run it against --tree main for the baseline)")
     ap.add_argument("--probe", action="store_true", help=argparse.SUPPRESS)
     ap.add_argument("--probe-y", default="", help=argparse.SUPPRESS)
     ap.add_argument("--probe-w", default="", help=argparse.SUPPRESS)

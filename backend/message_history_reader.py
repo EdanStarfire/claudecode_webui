@@ -25,6 +25,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Protocol
 
+from . import history_search as hs
 from .models.messages import LegacyMessageFormatError
 
 logger = logging.getLogger(__name__)
@@ -109,6 +110,10 @@ class MessageHistoryReader(Protocol):
         skip_line: Callable[[bytes, int, int], bool] | None = None,
         include_unterminated: bool = True, throttle: float = 0.0,
     ) -> Iterator[tuple[int, int, dict]]: ...
+
+    def search(
+        self, query: str, cursor: str | None, caps: "hs.SearchCaps", cancel: Any = None
+    ) -> "hs.SearchPage": ...
 
     def probe(self) -> tuple[str, int]: ...
 
@@ -294,6 +299,18 @@ class FileMessageHistoryReader:
                 record = self._try_json(carry)
                 if record is not None:
                     yield offset, offset + len(carry), record
+
+    def search(
+        self, query: str, cursor: str | None, caps: "hs.SearchCaps", cancel: Any = None
+    ) -> "hs.SearchPage":
+        """One newest-first page of the whole-history substring search (issue #2030 stage 3).
+
+        Synchronous worker-thread code (the search pool). ``cursor`` is None for the first page or
+        a previous page's ``next_cursor``. Raises ``hs.SearchQueryError`` for a bad query and
+        ``CursorInvalidError`` for a cursor that is malformed, from another file generation, or
+        not at a line start. See ``history_search.py`` for the matching rules.
+        """
+        return _FileSearch(self, hs.QueryMatcher(query), cursor, caps, cancel).run()
 
     # ------------------------------------------------------------------ internals
 
@@ -611,3 +628,312 @@ def build_budget(
         hard_ceiling_bytes=defaults.hard_ceiling_bytes,
         last_turn_guarantee=not before,
     )
+
+
+# ---------------------------------------------------------------------- whole-history search
+
+_SEARCH_BLOCK = 1024 * 1024
+_PACE_AFTER_S = 0.003
+_PACE_THROTTLE = 3.0
+
+
+class _FileSearch:
+    """One backward search page over a ``messages.jsonl`` (see ``FileMessageHistoryReader.search``).
+
+    The file is read backward in ~1 MiB blocks cut at line starts. Per block, candidate lines come
+    from the matcher's prefilter (ASCII query: lower-case the block once and ``bytes.find``;
+    non-matching lines are never visited from Python; other queries: see ``QueryMatcher``). Lines are handled strictly newest-first. A ``tool_call`` candidate yields hits that
+    wait in ``pending`` (keyed by ``tool_use_id``, newest record wins) until the scan reaches the
+    message record that lists the tool id in ``metadata.tool_uses``; that message's matches
+    (content, thinking, then its tools in ``tool_uses`` order) are emitted atomically. Pending ids
+    are also located by a direct byte search so a parent that is not itself a query candidate is
+    still visited in order. A page ends at a message boundary once a cap is reached; hits still
+    waiting for their parent ride in the continuation cursor.
+    """
+
+    def __init__(self, reader, matcher, cursor, caps, cancel):
+        self.reader = reader
+        self.m = matcher
+        self.cursor = cursor
+        self.caps = caps
+        self.cancel = cancel
+        self.results: list[dict] = []
+        self.pending: dict[str, list[dict]] = {}
+        self.pending_bytes: dict[str, bytes] = {}
+        self.seen_tools: set[str] = set()
+        self.scanned = 0
+        self.progressed = False
+        self.dropped = 0
+        self._busy_since = time.perf_counter()
+        self.started = time.monotonic()
+
+    def _pace(self) -> None:
+        """Duty-cycle throttle: after ``_PACE_AFTER_S`` of continuous work sleep a fraction of it,
+        so the GIL is regularly free for the event loop and the critical-path reads (the index
+        scan does the same, see ``iter_records_with_offsets(throttle=...)``)."""
+        now = time.perf_counter()
+        busy = now - self._busy_since
+        if busy >= _PACE_AFTER_S:
+            time.sleep(busy * _PACE_THROTTLE)
+            self._busy_since = time.perf_counter()
+
+    # -- caps ----------------------------------------------------------------
+
+    def _stop_reason(self, hard: bool) -> str | None:
+        scale = self.caps.grace if hard else 1.0
+        if len(self.results) >= self.caps.max_results and not hard:
+            return "results"
+        if self.scanned >= self.caps.max_scan_bytes * scale:
+            return "bytes"
+        if time.monotonic() - self.started >= self.caps.max_wall_s * scale:
+            return "time"
+        return None
+
+    def _may_stop(self) -> str | None:
+        """Stop reason when the page may end here: a cap is reached and the carry is small, or the
+        hard grace limit is reached (then the oldest surplus carried hits are dropped)."""
+        reason = self._stop_reason(hard=False)
+        if reason is None:
+            return None
+        if self._carry_too_big():
+            if self._stop_reason(hard=True) is None:
+                return None  # keep scanning: the parents of the waiting hits are probably close
+            # Newest tool records come first and have the nearest parents: drop the latest-added.
+            for tool_id in reversed(list(self.pending)):
+                if not self._carry_too_big():
+                    break
+                self._drop_pending(tool_id)
+        return reason
+
+    def _carry_too_big(self) -> bool:
+        """The continuation cursor carries the waiting hits: bound its size (tools and hits)."""
+        return len(self.pending) > hs.MAX_CARRY_TOOLS or (
+            sum(len(h) for h in self.pending.values()) > hs.MAX_CARRY_HITS
+        )
+
+    def _drop_pending(self, tool_id: str) -> None:
+        self.dropped += len(self.pending.pop(tool_id, ()))
+        self.pending_bytes.pop(tool_id, None)
+
+    # -- driver ----------------------------------------------------------------
+
+    def run(self) -> "hs.SearchPage":
+        try:
+            f = open(self.reader.path, "rb")
+        except FileNotFoundError:
+            return hs.SearchPage(
+                [], None, True, self.reader._empty_history_id(), 0, 1.0, 0
+            )
+        with f:
+            st = os.fstat(f.fileno())
+            end, read = self.reader._complete_end(f, st.st_size)
+            self.scanned += read
+            history_id = self.reader._history_id(st)
+            pos = end
+            if self.cursor is not None:
+                parsed = hs.decode_search_cursor(self.cursor)
+                if parsed is None or parsed.history_id != history_id or parsed.offset > end:
+                    raise CursorInvalidError(self.cursor)
+                if parsed.offset > 0:
+                    f.seek(parsed.offset - 1)
+                    if f.read(1) != b"\n":
+                        raise CursorInvalidError(self.cursor)
+                pos = parsed.offset
+                for tool_id, hits in parsed.pending.items():
+                    self._add_pending(tool_id, hits)
+            next_off, stopped_by, cancelled = self._scan(f, pos)
+            exhausted = next_off == 0 and stopped_by is None and not cancelled
+            pending = {} if exhausted else dict(self.pending)
+            next_cursor = (
+                None
+                if exhausted or cancelled
+                else hs.encode_search_cursor(history_id, next_off, pending)
+            )
+            # (an exhausted scan leaves orphan tool calls unmatched, like the browser)
+            return hs.SearchPage(
+                self.results,
+                next_cursor,
+                exhausted,
+                history_id,
+                self.scanned,
+                (end - next_off) / end if end else 1.0,
+                end,
+                dropped_tool_hits=self.dropped,
+                stopped_by=stopped_by,
+                cancelled=cancelled,
+            )
+
+    def _add_pending(self, tool_id: str, hits: list[dict]) -> None:
+        raw = tool_id.encode()
+        if not tool_id.isascii() or b'"' in raw or b"\\" in raw or len(self.pending) >= hs.MAX_PENDING_TOOLS:
+            self.dropped += len(hits)
+            return
+        self.pending[tool_id] = hits
+        self.pending_bytes[tool_id] = raw
+
+    def _scan(self, f, pos: int) -> tuple[int, str | None, bool]:
+        """Scan backward from ``pos``; returns (resume offset, stop reason, cancelled)."""
+        block = _SEARCH_BLOCK
+        while pos > 0:
+            if self.cancel is not None and self.cancel.is_set():
+                return pos, None, True
+            # (always scan one block per page first: a page must make progress)
+            reason = self._may_stop() if self.progressed else None
+            if reason is not None:
+                return pos, reason, False
+            start = max(0, pos - block)
+            f.seek(start)
+            chunk = f.read(pos - start)
+            self.scanned += len(chunk)
+            if start > 0:
+                first_nl = chunk.find(b"\n")
+                if first_nl == -1 or start + first_nl + 1 >= pos:
+                    block *= 2  # a single line longer than the block: widen and retry
+                    continue
+                usable_start = start + first_nl + 1
+                region = chunk[first_nl + 1 :]
+            else:
+                usable_start = 0
+                region = chunk
+            block = _SEARCH_BLOCK
+            self.progressed = True
+            stop_at = self._scan_region(region, usable_start)
+            if stop_at is not None:
+                # (no stop reason = the cancel flag fired mid-region: the page is incomplete)
+                return stop_at[0], stop_at[1], stop_at[1] is None
+            if self.cancel is not None and self.cancel.is_set():
+                return usable_start, None, True
+            pos = usable_start
+        return 0, None, False
+
+    # -- one region ----------------------------------------------------------------
+
+    def _candidates(self, region: bytes) -> list[tuple[int, int]]:
+        """Candidate (line_start, line_end) pairs of ``region`` in ascending order."""
+        out: list[tuple[int, int]] = []
+        m = self.m
+        if m.mode == "bytes" and not any(alias in region for alias in hs.ALIAS_BYTES):
+            # ASCII query on a block without KELVIN SIGN / U+0130: lower-case once, then `find`
+            # (5-10x faster than the case-insensitive class regex, and shorter GIL holds).
+            lowered, needle, n = region.lower(), m.needle, len(region)
+            find = lowered.find
+            pos = 0
+            while True:
+                hit = find(needle, pos)
+                if hit == -1:
+                    break
+                ls = region.rfind(b"\n", 0, hit) + 1
+                le = region.find(b"\n", hit)
+                if le == -1:
+                    le = n
+                out.append((ls, le))
+                pos = le + 1
+            return out
+        if m.mode == "bytes":
+            search = m.pattern.search
+            pos = 0
+            n = len(region)
+            while True:
+                hit = search(region, pos)
+                if hit is None:
+                    break
+                ls = region.rfind(b"\n", 0, hit.start()) + 1
+                le = region.find(b"\n", hit.start())
+                if le == -1:
+                    le = n
+                out.append((ls, le))
+                pos = le + 1
+            return out
+        pos = 0
+        n = len(region)
+        while pos < n:
+            le = region.find(b"\n", pos)
+            if le == -1:
+                le = n
+            if le > pos and (m.mode == "parse" or m.line_candidate(region[pos:le])):
+                out.append((pos, le))
+            pos = le + 1
+            self._pace()
+            if self.cancel is not None and self.cancel.is_set():
+                break
+        return out
+
+    def _scan_region(self, region: bytes, base: int):
+        cands = self._candidates(region)
+        self._pace()
+        qi = len(cands) - 1
+        limit = len(region)
+        nxt: dict[str, int] = {}
+        processed_counter = 0
+        while True:
+            if self.cancel is not None and self.cancel.is_set():
+                return base, None
+            best = -1
+            if qi >= 0:
+                best = cands[qi][0]
+            for tool_id, raw in self.pending_bytes.items():
+                p = nxt.get(tool_id)
+                if p is None or p >= limit:
+                    p = region.rfind(raw, 0, limit)
+                    nxt[tool_id] = p
+                if p > best:
+                    best = p
+            if best < 0:
+                break
+            ls = region.rfind(b"\n", 0, best) + 1
+            while qi >= 0 and cands[qi][0] >= ls:
+                qi -= 1
+            le = region.find(b"\n", ls)
+            if le == -1:
+                le = len(region)
+            limit = ls
+            self._handle_line(region[ls:le], base + ls)
+            self._pace()
+            processed_counter += 1
+            if processed_counter % 8 == 0 or self.results:
+                reason = self._may_stop()
+                if reason is not None:
+                    return base + ls, reason
+        return None
+
+    # -- one line ----------------------------------------------------------------
+
+    def _handle_line(self, line: bytes, offset: int) -> None:
+        if not line or line.isspace():
+            return
+        record = self.reader._try_json(line)
+        if record is None:
+            return
+        if record.get("type") == "tool_call":
+            tool_id = record.get("tool_use_id")
+            if not isinstance(tool_id, str) or not tool_id or tool_id in self.seen_tools:
+                return
+            self.seen_tools.add(tool_id)
+            hits = hs.tool_call_hits(self.m, record)
+            for hit in hits:
+                hit["offset"] = offset
+            if hits and tool_id not in self.pending:
+                self._add_pending(tool_id, hits)
+            return
+        hits = hs.message_hits(self.m, record)
+        for hit in hits:
+            hit["offset"] = offset
+        resolved = []
+        for tool_id in hs.tool_use_ids(record):
+            if tool_id in self.pending:
+                if len(hits) <= hs.MAX_HITS_PER_MESSAGE:
+                    hits = hits + self.pending[tool_id]
+                else:
+                    self.dropped += len(self.pending[tool_id])
+                resolved.append(tool_id)
+        for tool_id in set(resolved):
+            self.pending.pop(tool_id, None)
+            self.pending_bytes.pop(tool_id, None)
+        if hits:
+            self.results.extend(
+                hs.finalize_group(
+                    record,
+                    hits,
+                    record.get("id") or record.get("message_id") or None,
+                )
+            )

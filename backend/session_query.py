@@ -30,7 +30,9 @@ from .cold_scan import ColdScanManager
 from .config_manager import PerformanceConfig
 from .config_resolution import resolve_effective_config
 from .history_index import HistoryIndexBuildingError, HistoryIndexState, scan_file_into
+from .history_search import DEFAULT_MAX_RESULTS, SearchCaps
 from .message_history_reader import FileMessageHistoryReader, build_budget, read_history_payload
+from .search_scan import SearchScanManager
 from .session_lifecycle import is_live, is_paused
 from .task_list import TASK_TOOL_NAMES, TaskListState
 from .task_registry import TASK_LIFECYCLE_SUBTYPES, TaskLegRegistry
@@ -64,6 +66,11 @@ class SessionQuery:
         # per-(session, kind) single-flight; see backend/cold_scan.py.
         performance = performance or self._load_performance_config(coordinator)
         self._cold_scans = ColdScanManager(performance.cold_scan_workers)
+        # Issue #2030 stage 3 (PR 3B): whole-history search runs on its own small pool, never on
+        # the cold-scan pool or the default executor; see backend/search_scan.py.
+        self._searches = SearchScanManager(
+            performance.search_workers, performance.search_max_flights_per_session
+        )
         self._history_index_cache_max = max(1, int(performance.history_index_cache_max or 1))
         self._history_index_wait_s = max(0.1, float(performance.history_index_wait_s or 20.0))
         # key (session_id, or "<sid>/archive/<aid>") -> state; LRU, most recent last.
@@ -83,6 +90,7 @@ class SessionQuery:
 
     def shutdown(self) -> None:
         self._cold_scans.shutdown()
+        self._searches.shutdown()
 
     # --- Collaborator managers: live passthrough to the coordinator ----------
     session_manager = property(lambda self: self._coordinator.session_manager)
@@ -438,6 +446,7 @@ class SessionQuery:
         # scan of the session (queued ones never start, running ones stop at the next batch)
         # and drop its history index.
         self._cold_scans.invalidate(session_id)
+        self._searches.invalidate(session_id)
         live = self._live_registry_inflight.pop(session_id, None)
         if live is not None:
             live[1].set()
@@ -472,11 +481,14 @@ class SessionQuery:
 
     def drop_history_index(self, session_id: str, *, abandon_scans: bool = False) -> None:
         """Drop a session's cached index (stop/terminate/delete/reset). ``abandon_scans`` also
-        abandons an in-flight index scan (its waiters get 503 ``index_building`` and retry)."""
+        abandons an in-flight index scan (its waiters get 503 ``index_building`` and retry); it
+        leaves in-flight searches alone (a stop does not change the history file)."""
         self._history_indexes.pop(session_id, None)
         self._history_index_pending.pop(session_id, None)
         if abandon_scans:
             self._cold_scans.invalidate(session_id, kinds=("index",))
+            # (searches deliberately survive a stop: it does not change the history file and
+            # nothing is cached; delete / reset abandon them via clear_task_list)
 
     def attach_history_index_feed(self, storage_manager: Any, session_id: str) -> bool:
         """Register the live feed on a storage manager's ``on_append`` (idempotent). The hook runs
@@ -621,3 +633,39 @@ class SessionQuery:
             return state
 
         return await self._await_index(key, "index", _flight, after=())
+
+    # ==================== WHOLE-HISTORY SEARCH (Issue #2030, stage 3) ====================
+
+    async def search_history(
+        self, session_id: str, query: str, cursor: str | None, limit: int | None, client_id,
+        is_disconnected,
+    ) -> dict[str, Any] | None:
+        """One newest-first page of the whole-history search of a live session (``None`` when the
+        search was superseded / abandoned). Raises ``SearchQueryError``, ``CursorInvalidError``,
+        ``SearchBusyError``."""
+        storage = self._storage_managers.get(session_id)
+        if storage:
+            reader = storage.reader
+        else:
+            session_dir = await self.session_manager.get_session_directory(session_id)
+            if session_dir is None:
+                return None
+            reader = FileMessageHistoryReader(session_dir / "messages.jsonl", label=session_id)
+        return await self._search(
+            session_id, reader, query, cursor, limit, client_id, is_disconnected
+        )
+
+    async def search_archive_history(
+        self, session_id: str, archive_id: str, messages_file: Any, query: str,
+        cursor: str | None, limit: int | None, client_id, is_disconnected,
+    ) -> dict[str, Any] | None:
+        key = f"{session_id}/archive/{archive_id}"
+        reader = FileMessageHistoryReader(messages_file, label=key, strict_legacy=False)
+        return await self._search(key, reader, query, cursor, limit, client_id, is_disconnected)
+
+    async def _search(self, key, reader, query, cursor, limit, client_id, is_disconnected):
+        caps = SearchCaps(max_results=min(max(1, limit or DEFAULT_MAX_RESULTS), DEFAULT_MAX_RESULTS))
+        page = await self._searches.search(
+            key, reader, query, cursor, caps, client_id=client_id, is_disconnected=is_disconnected,
+        )
+        return None if page is None else page.to_payload()

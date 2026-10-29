@@ -112,6 +112,11 @@ def build(args):
         from backend import history_index
 
         history_index.INDEX_SCAN_THROTTLE = float(os.environ["LOAD_INDEX_THROTTLE"])
+    if os.environ.get("LOAD_SEARCH_THROTTLE") is not None:  # experiment knobs (search pacing; defaults 0.003 s / 3.0)
+        from backend import message_history_reader
+
+        message_history_reader._PACE_THROTTLE = float(os.environ["LOAD_SEARCH_THROTTLE"])
+        message_history_reader._PACE_AFTER_S = float(os.environ.get("LOAD_SEARCH_PACE_AFTER", "0.003"))
     from backend.tenant_context import TenantContext
     from backend.web_server import BackendApp
 
@@ -179,6 +184,19 @@ def install_routes(backend, monitor: LagMonitor) -> None:
                 "index_over_snapshot": scans.index_over_snapshot,
                 "snapshot_over_index": scans.snapshot_over_index,
             }
+        searches = getattr(query, "_searches", None)
+        if searches is not None:  # issue #2030 stage 3 PR 3B
+            out["search"] = {
+                "workers": searches.workers,
+                "inflight": searches.inflight_count,
+                "inflight_keys": sorted(searches.inflight_keys()),
+                "waiters": searches.waiter_count,
+                "running": searches.running,
+                "max_running": searches.max_running,
+                "superseded": searches.superseded,
+                "disconnected": searches.disconnected,
+                "timed_out": searches.timed_out,
+            }
         sampler = getattr(monitor, "sampler", None)
         if sampler is not None:
             out["block_stacks"] = sorted(sampler.counts.items(), key=lambda kv: -kv[1])[:12]
@@ -186,6 +204,8 @@ def install_routes(backend, monitor: LagMonitor) -> None:
                 sampler.counts.clear()
         if reset:
             _reset_peak_rss()
+            if searches is not None:
+                searches._scans.max_running = 0
             if scans is not None:
                 scans.max_running = 0
                 scans.max_running_per_key.clear()

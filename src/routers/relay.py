@@ -8,8 +8,10 @@ with genuine process separation, a single generic proxy achieves the same
 from Backend's contract by forgetting to mirror a new route.
 """
 
+import asyncio
+
 import httpx
-from fastapi import APIRouter, Request
+from fastapi import APIRouter, Request, Response
 
 from shared.exception_handlers import handle_exceptions
 
@@ -29,6 +31,33 @@ _MCP_CONFIG_MUTATION_METHODS = {"POST", "PUT", "DELETE"}
 # removed from DataStorageManager.cleanup()).
 _HALT_ALL_TIMEOUT_SECONDS = 120.0
 
+# Issue #2030 stage 3 (PR 3B): whole-history search scans can take seconds, and a plain ASGI
+# handler is not cancelled when the browser aborts. Poll for the browser's disconnect while a
+# `/search` relay is in flight and cancel it, which closes the upstream connection: Backend then
+# sees the disconnect and cancels the scan (backend/search_scan.py).
+_DISCONNECT_POLL_SECONDS = 0.2
+
+
+def _is_search_path(full_path: str) -> bool:
+    return full_path.endswith("/search") and (
+        full_path.startswith("sessions/") or full_path.startswith("projects/")
+    )
+
+
+async def _relay_until_disconnect(request: Request, relay_coro) -> Response:
+    task = asyncio.ensure_future(relay_coro)
+    try:
+        while True:
+            done, _ = await asyncio.wait({task}, timeout=_DISCONNECT_POLL_SECONDS)
+            if done:
+                return task.result()
+            if await request.is_disconnected():
+                task.cancel()
+                return Response(status_code=499)
+    finally:
+        if not task.done():
+            task.cancel()
+
 
 def build_router(webui) -> APIRouter:
     router = APIRouter()
@@ -41,7 +70,11 @@ def build_router(webui) -> APIRouter:
     async def relay_to_backend(full_path: str, request: Request):
         timeout = _HALT_ALL_TIMEOUT_SECONDS if full_path.endswith("/halt-all") else None
         try:
-            response = await webui.backend_client.relay(request, f"/api/{full_path}", timeout=timeout)
+            relayed = webui.backend_client.relay(request, f"/api/{full_path}", timeout=timeout)
+            if request.method == "GET" and _is_search_path(full_path):
+                response = await _relay_until_disconnect(request, relayed)
+            else:
+                response = await relayed
         except httpx.RequestError as e:
             raise to_http_exception(e, degraded=is_backend_degraded(webui)) from e
         if full_path.startswith("mcp-configs") and request.method in _MCP_CONFIG_MUTATION_METHODS:
