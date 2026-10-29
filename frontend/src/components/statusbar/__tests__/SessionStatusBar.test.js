@@ -144,6 +144,32 @@ describe('SessionStatusBar turn navigation (issue #2030)', () => {
       expect(prev().disabled).toBe(false) // not left stuck in the jumping state
     })
 
+    it('nothing is fetched or started while the confirm is open; OK starts the jump, Cancel never does', async () => {
+      const beforeRequests = () => apiMock.get.mock.calls.filter(([url]) => String(url).includes('before='))
+      const requestUntil = vi.spyOn(historyBackfill, 'requestUntil').mockReturnValue({ promise: Promise.resolve(), cancel() {} })
+      const { virtualNav } = await mountBar({ prevTurn: target({ sizeHint: 0 }), startOffset: 30 * MB })
+      const atConfirm = []
+      vi.spyOn(window, 'confirm').mockImplementation(() => {
+        // state at the moment the dialog is open: no jump, no request, no jump status/banner
+        atConfirm.push({
+          requestUntil: requestUntil.mock.calls.length, begin: virtualNav.beginTurnJump.mock.calls.length,
+          beforeRequests: beforeRequests().length, jumpStatus: historyBackfill.statusBySession.value.get(SID)?.jump ?? null,
+        })
+        return atConfirm.length > 1 // first Cancel, then OK
+      })
+      prev().click()
+      await flush()
+      expect(atConfirm[0]).toEqual({ requestUntil: 0, begin: 0, beforeRequests: 0, jumpStatus: null })
+      expect(requestUntil).not.toHaveBeenCalled() // Cancel: nothing started
+      expect(virtualNav.beginTurnJump).not.toHaveBeenCalled()
+      expect(beforeRequests()).toHaveLength(0)
+      prev().click()
+      await flush()
+      expect(atConfirm[1]).toEqual({ requestUntil: 0, begin: 0, beforeRequests: 0, jumpStatus: null })
+      expect(requestUntil).toHaveBeenCalledTimes(1) // only after OK
+      expect(virtualNav.beginTurnJump).toHaveBeenCalledTimes(1)
+    })
+
     it('uses the observed wire ratio once a page has been measured', async () => {
       const confirm = vi.spyOn(window, 'confirm').mockReturnValue(false)
       const { messageStore } = await mountBar({ prevTurn: target({ sizeHint: 0 }), startOffset: 30 * MB })
