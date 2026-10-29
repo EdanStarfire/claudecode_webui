@@ -720,7 +720,7 @@ watch(() => messageSearch.isOpen.value, (open) => {
   if (!open) { navigationSeq++; cancelSearchJump(); stopKeeper() }
 })
 watch(viewSessionId, () => { navigationSeq++; cancelSearchJump(); stopKeeper() })
-watch(() => messageSearch.query.value, () => stopKeeper())
+watch(() => messageSearch.query.value, () => { stopKeeper(); clearActiveHighlight() })
 
 function isUnloadedHit(match) {
   const sessionId = viewSessionId.value
@@ -757,6 +757,7 @@ async function jumpToUnloadedHit(match, began) {
 
 async function scrollToMessageMatch(match) {
   const seq = ++navigationSeq
+  const startedAt = performance.now()
   cancelSearchJump()
 
   if (!match) {
@@ -787,7 +788,7 @@ async function scrollToMessageMatch(match) {
   try {
     const landed = await scrollToLoadedMatch(match, index, seq)
     // background: re-applies the highlight if the row re-renders (only for the newest navigation, only when it was applied)
-    if (landed && seq === navigationSeq && highlightedEl) keepHighlight(match, seq)
+    if (landed && seq === navigationSeq && highlightedEl && lastUserScrollAt < startedAt) keepHighlight(match, seq)
     return landed
   } finally {
     if (began.value) endTurnJump()
@@ -809,7 +810,12 @@ function stopKeeper() {
   activeKeeper = null
 }
 
-function noteUserScroll() { stopKeeper() }
+// Time of the last wheel / touch / mouse / scroll-key input: a keeper never starts for a navigation the user scrolled away from.
+let lastUserScrollAt = 0
+function noteUserScroll() {
+  lastUserScrollAt = performance.now()
+  stopKeeper()
+}
 
 async function keepHighlight(match, seq) {
   stopKeeper()
@@ -838,12 +844,14 @@ async function keepHighlight(match, seq) {
   activeKeeper = keeper
   try {
     // ... and a slower tick covers a row that left the mounted window or sits under the bar.
+    let revealed = null
     for (let tick = 0; tick < 120 && alive; tick++) {
       await new Promise(resolve => setTimeout(resolve, 250))
       if (!alive || seq !== navigationSeq) return
       const mark = restore()
       if (mark) {
-        if (tick < 4) revealMark(mark) // the layout reads only matter right after landing
+        // layout reads only for a mark that is new (first landing, or re-applied after a re-render)
+        if (mark !== revealed) { revealed = mark; revealMark(mark) }
       } else {
         const index = matchRowIndex(match)
         if (index != null) {
@@ -1280,6 +1288,8 @@ onDeactivated(() => {
   // Issue #2012: a highlighted row's content could change via background live updates while
   // this instance is deactivated (recently-viewed sessions keep polling) — don't risk a <mark>
   // sitting around a since-changed text node once reactivated.
+  navigationSeq++
+  cancelSearchJump()
   stopKeeper()
   clearActiveHighlight()
 })

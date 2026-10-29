@@ -2283,6 +2283,31 @@ describe('tail-first history (issue #2030, stage 1b)', () => {
         tracker.restore()
       })
 
+      it('editing the query drops the old mark, and a user scroll during a far jump means no keeper starts after it lands', async () => {
+        const tracker = trackObservers()
+        const { wrapper, container, messageStore } = await mountSearchable()
+        await searchAlpha()
+        await fireEvent.update(document.querySelector('.message-search-input'), 'alpha x')
+        expect(marks()).toHaveLength(0)
+        expect(tracker.live.size).toBe(0)
+
+        const { historyBackfill } = await import('@/composables/useHistoryBackfill')
+        vi.spyOn(historyBackfill, 'requestUntil').mockImplementation((sessionId) => {
+          const promise = (async () => {
+            container.querySelector('.messages-area').dispatchEvent(new WheelEvent('wheel')) // the user scrolls away mid-jump
+            messageStore.applyFetchedOlderPage(sessionId, await messageStore.fetchOlderPage(sessionId, { signal: new AbortController().signal }))
+          })()
+          return { promise, cancel: vi.fn() }
+        })
+        await fireEvent.update(document.querySelector('.message-search-input'), 'Message')
+        await wrapper.vm.scrollToMessageMatch({ messageId: 'msg-5', toolId: null, field: 'content', matchStart: 0, matchLength: 7, occurrenceIndex: 0, cursor: 'b:5', sizeHint: 5 })
+        await new Promise(r => setTimeout(r, 60)) // inside the 200 ms search debounce: no result navigation yet
+        expect(marks().length).toBeGreaterThan(0) // the highlight itself was applied
+        expect(tracker.live.size).toBe(0)
+        vi.restoreAllMocks()
+        tracker.restore()
+      })
+
       it('unmounting the list ends the keeper', async () => {
         const tracker = trackObservers()
         const { wrapper } = await mountSearchable()
