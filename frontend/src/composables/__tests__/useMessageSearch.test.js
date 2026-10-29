@@ -489,3 +489,70 @@ describe('useMessageSearch — partially loaded history (issue #2030)', () => {
     expect(search.matches.value.map(m => `${m.messageId}:${m.occurrenceIndex}`)).toEqual(['m7:0', 'm7:1', 'm6:0'])
   })
 })
+
+describe('useMessageSearch — result order and local/server transitions (issue #2030 stage 3)', () => {
+  // A store whose completeness the test flips; `needle` messages m1..m3, m2 has two matches.
+  function flexStore() {
+    const state = ref(false) // history complete?
+    const messages = [
+      { id: 'm1', content: 'needle one', metadata: {} },
+      { id: 'm2', content: 'needle two needle again', metadata: {} },
+      { id: 'm3', content: 'needle three', metadata: {} },
+    ]
+    return {
+      state,
+      messagesBySession: new Map([['s1', messages]]),
+      toolCallsBySession: new Map(),
+      toolIndexBySession: new Map(),
+      isHistoryComplete: () => state.value,
+      getHistoryState: () => ({ startCursor: 'b:100', baseUrl: '/api/sessions/s1/messages' }),
+    }
+  }
+  const serverPage = (ids) => ({
+    results: ids.map(id => ({ message_id: id, tool_id: null, field: 'content', match_start: 0, match_length: 6, snippet: 's', occurrence_index: 0, cursor: 'b:1', size_hint: 1 })),
+    next_cursor: null, exhausted: true, history_id: 'h',
+  })
+  const type = async (search, text) => { search.query.value = text; await vi.advanceTimersByTimeAsync(200) }
+
+  it('local results use the server convention: newest message first, a message\'s own matches in occurrence order', async () => {
+    vi.useFakeTimers()
+    const store = flexStore()
+    store.state.value = true
+    const search = useMessageSearch(ref('s1'), { messageStore: store })
+    await type(search, 'needle')
+    expect(search.matches.value.map(m => `${m.messageId}:${m.occurrenceIndex}`)).toEqual(['m3:0', 'm2:0', 'm2:1', 'm1:0'])
+    expect(search.currentMatch.value.messageId).toBe('m3') // result 1 == newest
+    await search.next()
+    expect(search.currentMatch.value.messageId).toBe('m2') // next == older
+    search.prev()
+    expect(search.currentMatch.value.messageId).toBe('m3') // prev == newer
+  })
+
+  it('a server search keeps its results, selection and highlight key when the history completes meanwhile', async () => {
+    vi.useFakeTimers()
+    apiMock.get.mockReset()
+    apiMock.get.mockResolvedValue(serverPage(['m3', 'm2', 'm1']))
+    const store = flexStore()
+    const search = useMessageSearch(ref('s1'), { messageStore: store })
+    await type(search, 'needle')
+    await search.next()
+    const before = { ids: search.matches.value.map(m => m.messageId), index: search.currentIndex.value, key: search.currentMatch.value }
+    store.state.value = true // history completes mid-navigation
+    await vi.advanceTimersByTimeAsync(1000)
+    expect(search.matches.value.map(m => m.messageId)).toEqual(before.ids)
+    expect(search.currentIndex.value).toBe(before.index)
+    expect(search.currentMatch.value).toBe(before.key)
+    expect(search.phase.value).toBe('server')
+    expect(apiMock.get).toHaveBeenCalledTimes(1)
+
+    // the next query uses the local search (no request)...
+    await type(search, 'needle t')
+    expect(search.phase.value).toBe('local')
+    expect(apiMock.get).toHaveBeenCalledTimes(1)
+    // ...and once the history is incomplete again (reset / resync gap-replace) the next query uses the server
+    store.state.value = false
+    await type(search, 'needle th')
+    expect(search.phase.value).toBe('server')
+    expect(apiMock.get).toHaveBeenCalledTimes(2)
+  })
+})

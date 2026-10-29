@@ -10,9 +10,12 @@ const MAX_RESTARTS = 2
  * Reactive UI state for the message-list search feature (issue #2012). Wraps the pure
  * `messageSearch.js` module with debounced querying, match navigation, and session-change reset.
  *
- * Issue #2030 (stage 3): while only a suffix of the history is loaded, the query runs on the
- * server over the WHOLE history (newest-first pages, "Load more results", auto-fetch when
- * navigating past the last loaded result). Whenever the whole history is already loaded, or the
+ * Issue #2030 (stage 3): results are newest-first in BOTH modes ("result 3 of N+", next = older,
+ * prev = newer; "N+" until the server search is exhausted, an exact count otherwise). While only a
+ * suffix of the history is loaded, the query runs on the server over the WHOLE history
+ * (newest-first pages, "Load more results", auto-fetch when navigating past the last loaded
+ * result). A running server search keeps its results, selection and highlight when the history
+ * completes meanwhile; the NEXT query picks the mode again. Whenever the whole history is already loaded, or the
  * server search is unavailable (404 / 503 `search_busy` / network failure / repeated 409), it runs
  * over the loaded messages (`findMatches`) — with the "loaded only" indicator in the failure case.
  *
@@ -79,8 +82,20 @@ export function useMessageSearch(sessionIdRef, { messageStore, getPageLimit } = 
     currentIndex.value = index
   }
 
+  // `findMatches` is chronological; the UI has ONE convention in both modes, the server's: newest
+  // message first (next = older, prev = newer), a message's own matches in occurrence order.
+  function newestFirst(list) {
+    const groups = new Map()
+    for (const m of list) {
+      const group = groups.get(m.messageId)
+      if (group) group.push(m)
+      else groups.set(m.messageId, [m])
+    }
+    return [...groups.values()].reverse().flat()
+  }
+
   function runLocal(previous, nextPhase) {
-    matches.value = findMatches(sessionIdRef.value, query.value, { messageStore })
+    matches.value = newestFirst(findMatches(sessionIdRef.value, query.value, { messageStore }))
     selectIndex(previous)
     phase.value = nextPhase
     hasMore.value = false
