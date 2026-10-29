@@ -26,7 +26,7 @@ export function clearHighlight(container) {
  * highlight the specific occurrence the user is currently navigating to rather than always the
  * first one found — an approximation, not an exact raw-offset mapping (see module comment).
  */
-export function applyHighlight(container, query, occurrenceIndex = 0) {
+export function applyHighlight(container, query, occurrenceIndex = 0, { scroll = true } = {}) {
   if (!container) return false
   const trimmed = (query || '').trim()
   if (!trimmed) return false
@@ -74,6 +74,6 @@ export function applyHighlight(container, query, occurrenceIndex = 0) {
   parent.insertBefore(mark, after)
   parent.insertBefore(before, mark)
 
-  mark.scrollIntoView({ behavior: 'smooth', block: 'center' })
+  if (scroll) mark.scrollIntoView({ behavior: 'smooth', block: 'center' })
   return true
 }

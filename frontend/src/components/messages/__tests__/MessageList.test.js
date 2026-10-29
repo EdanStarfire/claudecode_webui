@@ -2002,6 +2002,352 @@ describe('tail-first history (issue #2030, stage 1b)', () => {
     })
   })
 
+  describe('search hit navigation (issue #2030, stage 3 PR 3E)', () => {
+    async function mountTail() {
+      const { createFakeHistoryServer } = await import('@/stores/__tests__/helpers/historyServer')
+      const mounted = await mountWithStore()
+      const all = [...messagesAt(0, 30), ...messagesAt(30, 60)]
+      const server = createFakeHistoryServer(all, { tailStart: 30, pageSize: 30 })
+      apiMock.get.mockImplementation((url) => server.handle(url))
+      await mounted.messageStore.loadMessages(SESSION, null, 0, { window: 'tail', signal: new AbortController().signal })
+      await new Promise(r => setTimeout(r, 50))
+      stubScrollMechanics(mounted.container.querySelector('.messages-area'))
+      return mounted
+    }
+
+    const hit = (id, sizeHint) => ({ messageId: id, toolId: null, field: 'content', matchStart: 0, matchLength: 2, occurrenceIndex: 0, cursor: `b:${sizeHint}`, sizeHint })
+
+    it('a hit whose row is loaded just scrolls: no jump, no confirm', async () => {
+      const { historyBackfill } = await import('@/composables/useHistoryBackfill')
+      const { wrapper } = await mountTail()
+      const requestUntil = vi.spyOn(historyBackfill, 'requestUntil')
+      const confirm = vi.spyOn(window, 'confirm').mockReturnValue(true)
+      await wrapper.vm.scrollToMessageMatch(hit('msg-45', 45))
+      expect(requestUntil).not.toHaveBeenCalled()
+      expect(confirm).not.toHaveBeenCalled()
+      vi.restoreAllMocks()
+    })
+
+    it('a hit before the loaded suffix uses the stage-2 jump with turn-navigation style meta, then scrolls to it', async () => {
+      const { historyBackfill } = await import('@/composables/useHistoryBackfill')
+      const { wrapper, messageStore, pinia } = await mountTail()
+      const { useUIStore } = await import('@/stores/ui')
+      const setSticky = vi.spyOn(useUIStore(pinia), 'setStickyToBottom')
+      const start = Number(/^b:(\d+)$/.exec(messageStore.getHistoryState(SESSION).startCursor)[1])
+      // Stands in for the backfill loop: applies the next older page, then settles the jump.
+      const jumpFn = vi.spyOn(historyBackfill, 'requestUntil').mockImplementation((sessionId) => {
+        const promise = (async () => {
+          messageStore.applyFetchedOlderPage(sessionId, await messageStore.fetchOlderPage(sessionId, { signal: new AbortController().signal }))
+        })()
+        return { promise, cancel: vi.fn() }
+      })
+      const confirm = vi.spyOn(window, 'confirm').mockReturnValue(true)
+
+      const result = await wrapper.vm.scrollToMessageMatch(hit('msg-5', 5))
+      expect(jumpFn).toHaveBeenCalledWith(SESSION, 'msg-5', { label: 'search result', fromOffset: start, toOffset: 5 })
+      expect(confirm).not.toHaveBeenCalled() // a small jump on a fast link: no confirm
+      expect(messageStore.isMessageLoaded(SESSION, 'msg-5')).toBe(true)
+      expect(result).toBeTruthy()
+      expect(setSticky).toHaveBeenCalledWith(expect.anything(), false) // beginTurnJump
+      vi.restoreAllMocks()
+    })
+
+    it('slow link always asks first; declining starts no jump', async () => {
+      const { historyBackfill } = await import('@/composables/useHistoryBackfill')
+      const { wrapper } = await mountTail()
+      vi.spyOn(historyBackfill, 'getMode').mockReturnValue('manual')
+      const requestUntil = vi.spyOn(historyBackfill, 'requestUntil')
+      const confirm = vi.spyOn(window, 'confirm').mockReturnValue(false)
+      await expect(wrapper.vm.scrollToMessageMatch(hit('msg-5', 5))).resolves.toBe(false)
+      expect(confirm).toHaveBeenCalledTimes(1)
+      expect(confirm.mock.calls[0][0]).toMatch(/^Jump to search result\? Loads about \d/)
+      expect(requestUntil).not.toHaveBeenCalled()
+      vi.restoreAllMocks()
+    })
+
+    it('a fast link asks only for a big download', async () => {
+      const { historyBackfill } = await import('@/composables/useHistoryBackfill')
+      const { wrapper, messageStore } = await mountTail()
+      const start = Number(/^b:(\d+)$/.exec(messageStore.getHistoryState(SESSION).startCursor)[1])
+      const requestUntil = vi.spyOn(historyBackfill, 'requestUntil')
+      const confirm = vi.spyOn(window, 'confirm').mockReturnValue(false)
+      // far beyond ~2 MiB wire-equivalent: place the loaded start 50 MB after the hit
+      messageStore.getHistoryState(SESSION).startCursor = `b:${start + 50 * 1024 * 1024}`
+      await wrapper.vm.scrollToMessageMatch(hit('msg-5', 5))
+      expect(confirm).toHaveBeenCalledTimes(1)
+      expect(requestUntil).not.toHaveBeenCalled()
+      vi.restoreAllMocks()
+    })
+
+    it('a jump that ends cancelled leaves the list alone; not-found marks the match as not locatable', async () => {
+      const { historyBackfill } = await import('@/composables/useHistoryBackfill')
+      const { wrapper, messageStore } = await mountTail()
+      await fireEvent.click(document.querySelector('.message-search-toggle'))
+      await fireEvent.update(document.querySelector('.message-search-input'), 'x')
+      vi.spyOn(historyBackfill, 'requestUntil').mockImplementation((sessionId) => {
+        const err = Object.assign(new Error('Jump cancelled'), { reason: 'cancelled' })
+        return { promise: Promise.reject(err), cancel: vi.fn() }
+      })
+      await wrapper.vm.scrollToMessageMatch(hit('msg-5', 5))
+      expect(document.querySelector('.message-search-count').textContent).not.toContain("Couldn't locate")
+
+      vi.spyOn(historyBackfill, 'requestUntil').mockImplementation(() => {
+        const err = Object.assign(new Error('Turn jump failed: not-found'), { reason: 'not-found' })
+        return { promise: Promise.reject(err), cancel: vi.fn() }
+      })
+      await wrapper.vm.scrollToMessageMatch(hit('msg-5', 5))
+      await new Promise(r => setTimeout(r, 20))
+      expect(document.querySelector('.message-search-count').textContent).toContain("Couldn't locate")
+      expect(messageStore.getHistoryState(SESSION).hasMoreBefore).toBe(true)
+      vi.restoreAllMocks()
+    })
+
+    it('a newer navigation cancels the pending search jump', async () => {
+      const { historyBackfill } = await import('@/composables/useHistoryBackfill')
+      const { wrapper } = await mountTail()
+      const cancel = vi.fn()
+      vi.spyOn(historyBackfill, 'requestUntil').mockImplementation(() => ({ promise: new Promise(() => {}), cancel }))
+      wrapper.vm.scrollToMessageMatch(hit('msg-5', 5))
+      await new Promise(r => setTimeout(r, 10))
+      await wrapper.vm.scrollToMessageMatch(hit('msg-45', 45))
+      expect(cancel).toHaveBeenCalledTimes(1)
+      vi.restoreAllMocks()
+    })
+
+    it('a declined confirm leaves the sticky pin alone (no jump began, so none ends)', async () => {
+      const { historyBackfill } = await import('@/composables/useHistoryBackfill')
+      const { wrapper, pinia } = await mountTail()
+      const { useUIStore } = await import('@/stores/ui')
+      const setSticky = vi.spyOn(useUIStore(pinia), 'setStickyToBottom')
+      vi.spyOn(historyBackfill, 'getMode').mockReturnValue('manual')
+      vi.spyOn(window, 'confirm').mockReturnValue(false)
+      await wrapper.vm.scrollToMessageMatch(hit('msg-5', 5))
+      expect(setSticky).not.toHaveBeenCalled()
+      vi.restoreAllMocks()
+    })
+
+    it('overlapping jumps re-derive the sticky state only when the last one ends', async () => {
+      const { wrapper, container, pinia } = await mountTail()
+      const { useUIStore } = await import('@/stores/ui')
+      const setSticky = vi.spyOn(useUIStore(pinia), 'setStickyToBottom')
+      const el = container.querySelector('.messages-area')
+      Object.defineProperty(el, 'scrollHeight', { configurable: true, get: () => 600 }) // content fits: "at bottom"
+      wrapper.vm.beginTurnJump()
+      wrapper.vm.beginTurnJump()
+      setSticky.mockClear()
+      wrapper.vm.endTurnJump() // the superseded jump ends first: no recompute while the newer one runs
+      expect(setSticky).not.toHaveBeenCalled()
+      wrapper.vm.endTurnJump()
+      expect(setSticky).toHaveBeenLastCalledWith(expect.anything(), true)
+    })
+
+    it('closing the search cancels a pending search jump', async () => {
+      const { historyBackfill } = await import('@/composables/useHistoryBackfill')
+      const { wrapper } = await mountTail()
+      const cancel = vi.fn()
+      vi.spyOn(historyBackfill, 'requestUntil').mockImplementation(() => ({ promise: new Promise(() => {}), cancel }))
+      await fireEvent.click(document.querySelector('.message-search-toggle'))
+      wrapper.vm.scrollToMessageMatch(hit('msg-5', 5))
+      await new Promise(r => setTimeout(r, 10))
+      await fireEvent.click(document.querySelector('[aria-label="Close search"]'))
+      await new Promise(r => setTimeout(r, 10))
+      expect(cancel).toHaveBeenCalledTimes(1)
+      vi.restoreAllMocks()
+    })
+
+    describe('highlight of the current server hit', () => {
+      const SEARCH_SESSION_ROWS = [
+        { id: 'msg-45', message_id: 'msg-45', type: 'user', content: 'alpha one alpha two', timestamp: 1700000045 },
+        { id: 'msg-50', message_id: 'msg-50', type: 'user', content: 'plain alpha here', timestamp: 1700000050 },
+      ]
+      const row = (id, extra = {}) => ({
+        message_id: id, tool_id: null, field: 'content', match_start: 0, match_length: 5, snippet: 's',
+        occurrence_index: 0, cursor: 'b:1', size_hint: 1, ...extra,
+      })
+
+      // Partial history (tail loaded); /search answers the scripted newest-first page.
+      async function mountSearchable() {
+        const { createFakeHistoryServer } = await import('@/stores/__tests__/helpers/historyServer')
+        const mounted = await mountWithStore()
+        const all = [...messagesAt(0, 30), ...messagesAt(30, 45), ...SEARCH_SESSION_ROWS, ...messagesAt(51, 60)]
+        const server = createFakeHistoryServer(all, { tailStart: 30, pageSize: 30 })
+        apiMock.get.mockImplementation((url) => {
+          if (url.includes('/search?')) {
+            return Promise.resolve({
+              results: [row('msg-50'), row('msg-45', { occurrence_index: 0, match_start: 0 }), row('msg-45', { occurrence_index: 1, match_start: 10 })],
+              next_cursor: null, exhausted: true, history_id: 'h',
+            })
+          }
+          return server.handle(url)
+        })
+        await mounted.messageStore.loadMessages(SESSION, null, 0, { window: 'tail', signal: new AbortController().signal })
+        await new Promise(r => setTimeout(r, 50))
+        stubScrollMechanics(mounted.container.querySelector('.messages-area'))
+        Element.prototype.scrollIntoView = vi.fn()
+        return mounted
+      }
+
+      const marks = () => [...document.querySelectorAll('mark.message-search-highlight')]
+      const markedOccurrence = (mark) => {
+        // the index of this <mark> among all 'alpha' occurrences of its row
+        const text = mark.closest('[role="article"]').textContent
+        const before = [...mark.closest('[role="article"]').childNodes]
+        let seen = 0
+        for (const node of before) {
+          if (node === mark) return seen
+          seen += (node.textContent.match(/alpha/gi) || []).length
+        }
+        return text.length
+      }
+      const waitFor = async (fn) => { for (let i = 0; i < 40 && !fn(); i++) await new Promise(r => setTimeout(r, 25)) }
+
+      it('applies the highlight to the right occurrence of a loaded server hit, and next/prev moves it', async () => {
+        await mountSearchable()
+        await fireEvent.click(document.querySelector('.message-search-toggle'))
+        await fireEvent.update(document.querySelector('.message-search-input'), 'alpha')
+        await new Promise(r => setTimeout(r, 400)) // debounce + page
+        await waitFor(() => marks().length === 1)
+        expect(document.querySelector('.message-search-count').textContent).toBe('1 of 3')
+        // result 1 = newest hit = msg-50, its first (only) occurrence
+        expect(marks()).toHaveLength(1)
+        expect(marks()[0].closest('[role="article"]').textContent).toContain('plain')
+        expect(marks()[0].textContent).toBe('alpha')
+
+        // next: msg-45 occurrence 0, next: msg-45 occurrence 1 (the SECOND "alpha" of the row)
+        await fireEvent.click(document.querySelector('[aria-label="Next match"]'))
+        await waitFor(() => marks().length === 1 && marks()[0].closest('[role="article"]').textContent.includes('one'))
+        expect(marks()[0].closest('[role="article"]').textContent).toContain('alpha one alpha two')
+        expect(markedOccurrence(marks()[0])).toBe(0)
+        await fireEvent.click(document.querySelector('[aria-label="Next match"]'))
+        await waitFor(() => marks().length === 1 && markedOccurrence(marks()[0]) === 1)
+        expect(markedOccurrence(marks()[0])).toBe(1)
+        expect(document.querySelector('.message-search-count').textContent).toBe('3 of 3')
+
+        // prev moves it back
+        await fireEvent.click(document.querySelector('[aria-label="Previous match"]'))
+        await waitFor(() => marks().length === 1 && markedOccurrence(marks()[0]) === 0)
+        expect(markedOccurrence(marks()[0])).toBe(0)
+        expect(document.querySelector('.message-search-count').textContent).toBe('2 of 3')
+      })
+
+      // Counts the MutationObservers that are observing right now (the keeper's is the only one MessageList creates).
+      function trackObservers() {
+        const live = new Set()
+        const observe = vi.spyOn(MutationObserver.prototype, 'observe').mockImplementation(function () { live.add(this) })
+        const disconnect = vi.spyOn(MutationObserver.prototype, 'disconnect').mockImplementation(function () { live.delete(this) })
+        return { live, restore: () => { observe.mockRestore(); disconnect.mockRestore() } }
+      }
+
+      async function searchAlpha() {
+        await fireEvent.click(document.querySelector('.message-search-toggle'))
+        await fireEvent.update(document.querySelector('.message-search-input'), 'alpha')
+        await new Promise(r => setTimeout(r, 400))
+        await waitFor(() => marks().length === 1)
+      }
+
+      it('the highlight keeper exists only while a hit is current, and is torn down on close, user scroll, query edit and a new navigation', async () => {
+        const tracker = trackObservers()
+        const { wrapper, container } = await mountSearchable()
+        expect(tracker.live.size).toBe(0) // search closed: nothing observes
+        await searchAlpha()
+        expect(tracker.live.size).toBe(1)
+
+        // new navigation (next): the old keeper is replaced, never stacked
+        await fireEvent.click(document.querySelector('[aria-label="Next match"]'))
+        await waitFor(() => marks().length === 1 && marks()[0].closest('[role="article"]').textContent.includes('one'))
+        await new Promise(r => setTimeout(r, 300))
+        expect(tracker.live.size).toBe(1)
+
+        // user scroll by hand: the keeper ends, a dropped mark is no longer re-applied
+        container.querySelector('.messages-area').dispatchEvent(new WheelEvent('wheel'))
+        expect(tracker.live.size).toBe(0)
+        const article = marks()[0].closest('[role="article"]')
+        article.textContent = article.textContent
+        await new Promise(r => setTimeout(r, 400))
+        expect(marks()).toHaveLength(0)
+
+        // a fresh navigation starts one again; editing the query ends it
+        await fireEvent.click(document.querySelector('[aria-label="Previous match"]'))
+        await waitFor(() => tracker.live.size === 1)
+        await fireEvent.update(document.querySelector('.message-search-input'), 'alpha x')
+        expect(tracker.live.size).toBe(0)
+
+        // closing the search ends it too
+        await fireEvent.update(document.querySelector('.message-search-input'), 'alpha')
+        await new Promise(r => setTimeout(r, 450))
+        await waitFor(() => tracker.live.size === 1)
+        await fireEvent.click(document.querySelector('[aria-label="Close search"]'))
+        await new Promise(r => setTimeout(r, 30))
+        expect(tracker.live.size).toBe(0)
+        wrapper.unmount()
+        tracker.restore()
+      })
+
+      it('editing the query drops the old mark, and a user scroll during a far jump means no keeper starts after it lands', async () => {
+        const tracker = trackObservers()
+        const { wrapper, container, messageStore } = await mountSearchable()
+        await searchAlpha()
+        await fireEvent.update(document.querySelector('.message-search-input'), 'alpha x')
+        expect(marks()).toHaveLength(0)
+        expect(tracker.live.size).toBe(0)
+
+        const { historyBackfill } = await import('@/composables/useHistoryBackfill')
+        vi.spyOn(historyBackfill, 'requestUntil').mockImplementation((sessionId) => {
+          const promise = (async () => {
+            container.querySelector('.messages-area').dispatchEvent(new WheelEvent('wheel')) // the user scrolls away mid-jump
+            messageStore.applyFetchedOlderPage(sessionId, await messageStore.fetchOlderPage(sessionId, { signal: new AbortController().signal }))
+          })()
+          return { promise, cancel: vi.fn() }
+        })
+        await fireEvent.update(document.querySelector('.message-search-input'), 'Message')
+        await wrapper.vm.scrollToMessageMatch({ messageId: 'msg-5', toolId: null, field: 'content', matchStart: 0, matchLength: 7, occurrenceIndex: 0, cursor: 'b:5', sizeHint: 5 })
+        await new Promise(r => setTimeout(r, 60)) // inside the 200 ms search debounce: no result navigation yet
+        expect(marks().length).toBeGreaterThan(0) // the highlight itself was applied
+        expect(tracker.live.size).toBe(0)
+        vi.restoreAllMocks()
+        tracker.restore()
+      })
+
+      it('unmounting the list ends the keeper', async () => {
+        const tracker = trackObservers()
+        const { wrapper } = await mountSearchable()
+        await searchAlpha()
+        expect(tracker.live.size).toBe(1)
+        wrapper.unmount()
+        expect(tracker.live.size).toBe(0)
+        tracker.restore()
+      })
+
+      it('re-applies the highlight when the row re-renders and drops it', async () => {
+        await mountSearchable()
+        await fireEvent.click(document.querySelector('.message-search-toggle'))
+        await fireEvent.update(document.querySelector('.message-search-input'), 'alpha')
+        await new Promise(r => setTimeout(r, 400))
+        await waitFor(() => marks().length === 1)
+        // simulate a re-render of the row: the mark disappears from the DOM
+        const article = marks()[0].closest('[role="article"]')
+        article.textContent = article.textContent
+        expect(marks()).toHaveLength(0)
+        await waitFor(() => marks().length === 1)
+        expect(marks()).toHaveLength(1)
+        expect(marks()[0].textContent).toBe('alpha')
+      })
+    })
+
+    it('the jump banner names the search result', async () => {
+      const { historyBackfill } = await import('@/composables/useHistoryBackfill')
+      const { messageStore } = await mountTail()
+      const start = Number(/^b:(\d+)$/.exec(messageStore.getHistoryState(SESSION).startCursor)[1])
+      historyBackfill.statusBySession.value = new Map([[SESSION, {
+        mode: 'auto', paused: null, loading: true, error: null,
+        jump: { messageId: 'msg-3', label: 'search result', fromOffset: start + 20, toOffset: start - 20 },
+      }]])
+      await new Promise(r => setTimeout(r, 50))
+      expect(document.querySelector('[data-testid="history-banner"]').textContent).toContain('Loading older history to reach search result')
+      historyBackfill.statusBySession.value = new Map()
+    })
+  })
+
   it('keeps the same row at the same viewport offset when an older page is prepended (anchor-preserving prepend)', async () => {
     const { wrapper, container, messageStore } = await mountWithStore()
     await installTail(messageStore, messagesAt(30, 90))

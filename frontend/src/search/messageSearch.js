@@ -1,7 +1,8 @@
-// Pure, framework-agnostic match-finding for the message-list search feature (issue #2012).
-// Knows nothing about Vue/DOM/the virtualizer — only raw message-store data. This is the seam
-// issue #2030 (tail-first loading) will swap to a backend-search call behind, without the UI
-// composable/components changing.
+// Match-finding for the message-list search feature (issue #2012). Knows nothing about
+// Vue/DOM/the virtualizer. `findMatches` searches the loaded messages of the message store;
+// `searchServer` (issue #2030 stage 3) searches the whole history through the server and
+// returns the same match descriptors, so the UI composable/components handle both alike.
+import { api } from '@/utils/api'
 
 export const MIN_QUERY_LENGTH = 2
 
@@ -113,4 +114,72 @@ export function findMatches(sessionId, query, { messageStore } = {}) {
   }
 
   return matches
+}
+
+// ---- whole-history server search (issue #2030, stage 3) ----
+
+// Random per tab / page load, sent on EVERY /search request (continuations included): the server
+// supersedes a client's older query on a session when the same client starts a newer one, and
+// never touches another tab's searches.
+const CLIENT_ID = (typeof crypto !== 'undefined' && crypto.randomUUID)
+  ? crypto.randomUUID()
+  : `c${Math.random().toString(36).slice(2)}${Date.now().toString(36)}`
+
+export function getSearchClientId() {
+  return CLIENT_ID
+}
+
+/** A request this long without an answer is treated like a failed endpoint (the server caps a page at ~2 s). */
+export const SEARCH_REQUEST_TIMEOUT_MS = 20000
+
+/** Server result row -> the match descriptor `findMatches` produces (+ `cursor`/`sizeHint`). */
+export function toMatchDescriptor(result) {
+  return {
+    messageId: result.message_id,
+    toolId: result.tool_id ?? null,
+    field: result.field,
+    matchStart: result.match_start,
+    matchLength: result.match_length,
+    snippet: result.snippet,
+    occurrenceIndex: result.occurrence_index,
+    cursor: result.cursor ?? null,
+    sizeHint: typeof result.size_hint === 'number' ? result.size_hint : null,
+  }
+}
+
+/**
+ * One newest-first page of the server's whole-history search. `searchUrl` is the history
+ * endpoint's `/search` sibling (live session or archive). Resolves to
+ * `{ superseded, matches, nextCursor, exhausted, scannedFraction, historyId }`; rejects with the
+ * API error (`status` 400/404/409/503/0) — or the caller's own abort — untouched, so the caller
+ * can map each to its fallback. A request that gets no answer within the timeout rejects with
+ * `err.timedOut`.
+ */
+export async function searchServer(searchUrl, query, cursor, { signal, limit } = {}) {
+  const params = [`q=${encodeURIComponent((query || '').trim())}`, `client_id=${encodeURIComponent(CLIENT_ID)}`]
+  if (cursor) params.push(`cursor=${encodeURIComponent(cursor)}`)
+  if (limit) params.push(`limit=${limit}`)
+  const timeout = new AbortController()
+  const timer = setTimeout(() => timeout.abort(), SEARCH_REQUEST_TIMEOUT_MS)
+  const fetchSignal = signal ? AbortSignal.any([signal, timeout.signal]) : timeout.signal
+  try {
+    const data = await api.get(`${searchUrl}?${params.join('&')}`, { signal: fetchSignal, priority: 'low' })
+    return {
+      superseded: !!data.superseded,
+      matches: (data.results || []).map(toMatchDescriptor),
+      nextCursor: data.next_cursor ?? null,
+      exhausted: !!data.exhausted,
+      scannedFraction: typeof data.scanned_fraction === 'number' ? data.scanned_fraction : null,
+      historyId: data.history_id ?? null,
+    }
+  } catch (err) {
+    if (!signal?.aborted && timeout.signal.aborted) {
+      const timedOut = new Error('Search timed out')
+      timedOut.timedOut = true
+      throw timedOut
+    }
+    throw err
+  } finally {
+    clearTimeout(timer)
+  }
 }
