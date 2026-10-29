@@ -74,18 +74,21 @@
         <button
           class="btn btn-sm btn-outline-secondary"
           @click="jumpToPrevTurn"
-          :disabled="turnNavLocked || !hasPrevTurn || isJumpingTurn"
+          :disabled="prevTurnLocked || !hasPrevTurn || isJumpingTurn"
           aria-label="Jump to previous turn"
-          :title="turnNavLocked ? TURN_NAV_LOCKED_TITLE : 'Jump to previous user message or comm'"
+          data-testid="turn-prev"
+          :title="prevTurnLocked ? TURN_NAV_LOCKED_TITLE : 'Jump to previous user message or comm'"
         >
-          ⏮️ <span class="button-label">Prev</span>
+          <!-- while a jump loads, the percentage replaces the icon so the button barely grows (390 px phones) -->
+          <span v-if="jumpPercent != null" class="jump-percent" data-testid="turn-jump-progress">{{ jumpPercent }}%</span><template v-else>⏮️</template> <span class="button-label">Prev</span>
         </button>
         <button
           class="btn btn-sm btn-outline-secondary"
           @click="jumpToNextTurn"
-          :disabled="turnNavLocked || !hasNextTurn || isJumpingTurn"
+          :disabled="!hasNextTurn || isJumpingTurn"
           aria-label="Jump to next turn"
-          :title="turnNavLocked ? TURN_NAV_LOCKED_TITLE : 'Jump to next user message or comm'"
+          data-testid="turn-next"
+          :title="indexUnavailable ? TURN_NAV_LOCKED_TITLE : 'Jump to next user message or comm'"
         >
           ⏭️ <span class="button-label">Next</span>
         </button>
@@ -125,6 +128,8 @@ import { useSessionStore } from '@/stores/session'
 import { useUIStore } from '@/stores/ui'
 import { useMessageStore } from '@/stores/message'
 import { useScheduleStore } from '@/stores/schedule'
+import { historyBackfill } from '@/composables/useHistoryBackfill'
+import { cursorOffset, estimateJumpWireBytes, formatJumpSize, jumpNeedsConfirm, jumpProgress } from '@/utils/turnNavigation'
 import RateLimitBadge from './RateLimitBadge.vue'
 import AutoResumeBadge from './AutoResumeBadge.vue'
 
@@ -270,18 +275,38 @@ const autoResumeSchedule = computed(() => scheduleStore.getAutoResumeSchedule(pr
 // same way it already is to PermissionQueue — provide/inject doesn't reach siblings.
 const isJumpingTurn = ref(false)
 
-// Issue #2030: turn boundaries are indexed over the loaded list, so navigation is only
-// meaningful once the whole history is loaded (stage 3 adds a server turn index).
+// Issue #2030: turn navigation runs over the server's history index, so Prev works right after
+// first paint on a tail-only load. A target older than the loaded suffix extends the suffix
+// (historyBackfill.requestUntil) — after a confirm when that is a big download or the link is slow.
+// Without a usable index (old server, failure, still loading) Prev keeps the stage-1 behaviour:
+// locked until the whole history is loaded. Next only ever needs loaded rows (the suffix always
+// reaches the newest turn).
 const messageStore = useMessageStore()
-const turnNavLocked = computed(() => !messageStore.isHistoryComplete(props.sessionId))
 const TURN_NAV_LOCKED_TITLE = 'Loading older history…'
 
-const hasPrevTurn = computed(() => props.virtualNav?.findPrevTurnIndex?.() != null)
-const hasNextTurn = computed(() => props.virtualNav?.findNextTurnIndex?.() != null)
+const prevTurn = computed(() => props.virtualNav?.findPrevTurn?.() ?? null)
+// An 'idle' index (not requested) is fetched automatically on a normal link, so Prev waits for it
+// like for a loading one; on a slow link nothing loads unrequested, so Prev stays enabled and
+// pressing it fetches the index.
+const slowLink = computed(() => historyBackfill.statusBySession.value.get(props.sessionId)?.mode === 'manual')
+// Old server / failed index: the stage-1 behaviour — both buttons locked until the history is complete.
+const indexUnavailable = computed(() =>
+  !messageStore.isHistoryComplete(props.sessionId) && messageStore.getHistoryIndex(props.sessionId)?.status === 'unavailable')
+const prevTurnLocked = computed(() => indexUnavailable.value ||
+  (prevTurn.value?.kind === 'pending' && (prevTurn.value.reason !== 'idle' || !slowLink.value)))
+const hasPrevTurn = computed(() => prevTurn.value != null)
+const hasNextTurn = computed(() => !indexUnavailable.value && props.virtualNav?.findNextTurnIndex?.() != null)
 
-async function jumpToTurn(findIndex) {
+const jumpPercent = computed(() => {
+  const jump = historyBackfill.statusBySession.value.get(props.sessionId)?.jump
+  if (!jump) return null
+  const progress = jumpProgress(messageStore.getHistoryState(props.sessionId)?.startCursor, jump)
+  return progress == null ? null : Math.round(progress * 100)
+})
+
+async function jumpToNextTurn() {
   if (isJumpingTurn.value) return
-  const index = findIndex?.()
+  const index = props.virtualNav?.findNextTurnIndex?.()
   if (index == null) return
   isJumpingTurn.value = true
   try {
@@ -291,12 +316,48 @@ async function jumpToTurn(findIndex) {
   }
 }
 
-function jumpToPrevTurn() {
-  return jumpToTurn(props.virtualNav?.findPrevTurnIndex)
+async function jumpToPrevTurn() {
+  if (isJumpingTurn.value) return
+  isJumpingTurn.value = true
+  try {
+    let target = props.virtualNav?.findPrevTurn?.()
+    if (target?.kind === 'pending' && target.reason === 'idle') {
+      await messageStore.ensureHistoryIndex(props.sessionId)
+      target = props.virtualNav?.findPrevTurn?.()
+    }
+    if (!target || target.kind === 'pending') return
+    if (target.kind === 'loaded') {
+      await props.virtualNav.scrollToItemIndex(target.index, { align: 'start', behavior: 'auto' })
+      return
+    }
+    await jumpToUnloadedTurn(target)
+  } finally {
+    isJumpingTurn.value = false
+  }
 }
 
-function jumpToNextTurn() {
-  return jumpToTurn(props.virtualNav?.findNextTurnIndex)
+async function jumpToUnloadedTurn(target) {
+  const sessionId = props.sessionId
+  const fromOffset = cursorOffset(messageStore.getHistoryState(sessionId)?.startCursor)
+  if (fromOffset == null) return
+  const estimatedWireBytes = estimateJumpWireBytes(fromOffset, target.sizeHint, messageStore.getWireRatio(sessionId))
+  if (jumpNeedsConfirm({ slowLink: slowLink.value, estimatedWireBytes }) &&
+      typeof window !== 'undefined' && typeof window.confirm === 'function' &&
+      !window.confirm(`Jump to turn ${target.ordinal}? Loads about ${formatJumpSize(estimatedWireBytes)} of older history`)) {
+    return
+  }
+  props.virtualNav?.beginTurnJump?.()
+  const jump = historyBackfill.requestUntil(sessionId, target.messageId, {
+    ordinal: target.ordinal, fromOffset, toOffset: target.sizeHint,
+  })
+  try {
+    await jump.promise
+    await props.virtualNav?.scrollToTurnMessage?.(target.messageId)
+  } catch {
+    // cancelled, session switched or target missing: the loaded suffix is simply left as is
+  } finally {
+    props.virtualNav?.endTurnJump?.()
+  }
 }
 
 </script>
@@ -304,6 +365,16 @@ function jumpToNextTurn() {
 <style scoped>
 .session-status-bar {
   background-color: var(--bs-secondary-bg);
+}
+
+.jump-percent {
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+/* The progress text must not wrap the icon onto two lines (390 px phones). */
+[data-testid='turn-prev'] {
+  white-space: nowrap;
 }
 
 /* Hide button labels on mobile */

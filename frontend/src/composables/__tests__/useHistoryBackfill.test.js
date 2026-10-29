@@ -28,6 +28,10 @@ function setup({ pages = 5, pageMs = 100, history = {}, polling = {}, hidden = (
     }),
     applyFetchedOlderPage: vi.fn(() => { state.remaining--; state.applied.push(clock); return true }),
     loadMessages: vi.fn(async (...args) => { state.restarts.push(args) }),
+    isHistoryComplete: () => !(state.remaining > 0 && historyState.hasMoreBefore),
+    // Turn jump (stage 2): the target message is "loaded" once `state.loadedAfter` pages were applied.
+    isMessageLoaded: vi.fn(() => state.loadedAfter != null && state.applied.length >= state.loadedAfter),
+    ensureHistoryIndex: vi.fn(async () => null),
   }
   const scheduler = createHistoryBackfill({
     messageStore: () => messageStore,
@@ -315,6 +319,124 @@ describe('history backfill scheduler (issue #2030, minimum pacing rules)', () =>
     await settle(t.scheduler, 500)
     expect(t.scheduler.statusBySession.value.get(SID).error).toBe('boom')
     expect(t.scheduler.isRunning(SID)).toBe(false)
+  })
+})
+
+describe('requestUntil — turn-jump priority pages (issue #2030 stage 2)', () => {
+  const settleJump = async (jump) => { await jump.promise.catch(() => {}) }
+
+  it('resolves immediately when the target is already loaded', async () => {
+    const t = setup({ pages: 3 })
+    t.state.loadedAfter = 0
+    const jump = t.scheduler.requestUntil(SID, 'm1', { ordinal: 2 })
+    await expect(jump.promise).resolves.toBeUndefined()
+    expect(t.state.fetched).toHaveLength(0)
+  })
+
+  it('fetches 512 KiB pages with no gap until the target is loaded, then resolves and clears the jump status', async () => {
+    const t = setup({ pages: 10, pageMs: 600 })
+    t.state.loadedAfter = 3
+    const jump = t.scheduler.requestUntil(SID, 'm1', { ordinal: 4, fromOffset: 900, toOffset: 100 })
+    expect(t.scheduler.statusBySession.value.get(SID).jump).toMatchObject({ messageId: 'm1', ordinal: 4 })
+    await jump.promise
+    expect(t.state.applied).toHaveLength(3)
+    expect(t.state.fetched.map(f => f.opts.maxBytes)).toEqual([512 * 1024, 512 * 1024, 512 * 1024])
+    // no inter-page gap even though pages took 600 ms each (the plain loop would sleep ~300 ms)
+    expect(t.state.sleeps.filter(ms => ms > 0 && ms < 10000).every(ms => ms <= 250)).toBe(true)
+    expect(t.scheduler.statusBySession.value.get(SID)?.jump ?? null).toBeNull()
+  })
+
+  it('works in slow-link (manual) mode, where nothing else loads', async () => {
+    const t = setup({ pages: 6, slow: () => true })
+    t.scheduler.start(SID)
+    await new Promise(r => setTimeout(r, 20))
+    expect(t.state.fetched).toHaveLength(0)
+    t.state.loadedAfter = 2
+    await t.scheduler.requestUntil(SID, 'm1').promise
+    expect(t.state.applied).toHaveLength(2)
+    expect(t.scheduler.getMode(SID)).toBe('manual')
+  })
+
+  it('cancel rejects with reason "cancelled", clears the status and leaves what was loaded', async () => {
+    const t = setup({ pages: 50, slow: () => true })
+    t.state.loadedAfter = 40
+    let calls = 0
+    const real = t.messageStore.fetchOlderPage.getMockImplementation()
+    // the third page never completes until it is aborted (the user cancels while it is in flight)
+    t.messageStore.fetchOlderPage.mockImplementation((sid, opts) => (++calls < 3 ? real(sid, opts) : new Promise((_res, rej) => {
+      opts.signal.addEventListener('abort', () => rej(new DOMException('Aborted', 'AbortError')))
+    })))
+    const jump = t.scheduler.requestUntil(SID, 'm1', { ordinal: 9 })
+    for (let i = 0; i < 100 && calls < 3; i++) await new Promise(r => setTimeout(r, 1))
+    expect(calls).toBe(3)
+    jump.cancel()
+    await expect(jump.promise).rejects.toMatchObject({ reason: 'cancelled' })
+    expect(t.state.applied).toHaveLength(2)
+    expect(t.scheduler.statusBySession.value.get(SID)?.jump ?? null).toBeNull()
+    t.scheduler.stop(SID)
+  })
+
+  it('cancelJump (the banner button) cancels the pending jump', async () => {
+    const t = setup({ pages: 50, slow: () => true })
+    t.state.loadedAfter = 40
+    const jump = t.scheduler.requestUntil(SID, 'm1')
+    t.scheduler.cancelJump(SID)
+    await expect(jump.promise).rejects.toMatchObject({ reason: 'cancelled' })
+  })
+
+  it('rejects with "aborted" when the session stops being current mid-jump', async () => {
+    const t = setup({ pages: 50, pageMs: 50 })
+    t.state.loadedAfter = 40
+    const jump = t.scheduler.requestUntil(SID, 'm1')
+    t.pollingStore.currentSessionId = 'other'
+    await expect(jump.promise).rejects.toMatchObject({ reason: 'aborted' })
+  })
+
+  it('rejects with "not-found" when the history completes without the target', async () => {
+    const t = setup({ pages: 2 })
+    const jump = t.scheduler.requestUntil(SID, 'm1')
+    await expect(jump.promise).rejects.toMatchObject({ reason: 'not-found' })
+  })
+
+  it('a second jump supersedes the first', async () => {
+    const t = setup({ pages: 50, slow: () => true })
+    t.state.loadedAfter = 3
+    const first = t.scheduler.requestUntil(SID, 'm1')
+    const second = t.scheduler.requestUntil(SID, 'm2')
+    await expect(first.promise).rejects.toMatchObject({ reason: 'superseded' })
+    await second.promise
+  })
+
+  it('still pauses while the live stream is catching up (priority, not a bypass of the pause rules)', async () => {
+    let t
+    t = setup({ pages: 5, polling: { getLastBatchInfo: () => ({ at: t.clock(), count: CATCHUP_EVENT_COUNT }) } })
+    t.state.loadedAfter = 1
+    const jump = t.scheduler.requestUntil(SID, 'm1')
+    await new Promise(r => setTimeout(r, 5))
+    expect(t.state.fetched).toHaveLength(0)
+    t.pollingStore.getLastBatchInfo = () => null
+    await jump.promise
+    expect(t.state.fetched).toHaveLength(1)
+  })
+
+  it('scheduleIndex fetches the index after the snapshots settle, but not on a slow link or when complete', async () => {
+    const t = setup({ pages: 3 })
+    let release
+    const snapshot = new Promise(r => { release = r })
+    const pending = t.scheduler.scheduleIndex(SID, [snapshot, Promise.reject(new Error('snapshot failed'))])
+    await new Promise(r => setTimeout(r, 5))
+    expect(t.messageStore.ensureHistoryIndex).not.toHaveBeenCalled()
+    release()
+    await pending
+    expect(t.messageStore.ensureHistoryIndex).toHaveBeenCalledWith(SID)
+
+    const slow = setup({ pages: 3, slow: () => true })
+    await slow.scheduler.scheduleIndex(SID)
+    expect(slow.messageStore.ensureHistoryIndex).not.toHaveBeenCalled()
+
+    const done = setup({ pages: 0 })
+    await done.scheduler.scheduleIndex(SID)
+    expect(done.messageStore.ensureHistoryIndex).not.toHaveBeenCalled()
   })
 })
 

@@ -1896,6 +1896,112 @@ describe('tail-first history (issue #2030, stage 1b)', () => {
     vi.restoreAllMocks()
   })
 
+  describe('turn navigation over the history index (stage 2 PR B)', () => {
+    const turnIds = (all) => all.filter(m => m.type === 'user').map(m => m.message_id)
+
+    async function mountTail({ index } = {}) {
+      const { createFakeHistoryServer } = await import('@/stores/__tests__/helpers/historyServer')
+      const mounted = await mountWithStore()
+      const all = [...messagesAt(0, 30), ...messagesAt(30, 60)]
+      const server = createFakeHistoryServer(all, { tailStart: 30, pageSize: 30, index: index === undefined ? { turns: turnIds(all) } : index })
+      apiMock.get.mockImplementation((url) => server.handle(url))
+      await mounted.messageStore.loadMessages(SESSION, null, 0, { window: 'tail', signal: new AbortController().signal })
+      await new Promise(r => setTimeout(r, 50))
+      stubScrollMechanics(mounted.container.querySelector('.messages-area'))
+      return { ...mounted, all }
+    }
+
+    it('no usable index yet: pending (idle -> loading -> unavailable keeps Prev locked); Next unaffected', async () => {
+      const { wrapper, messageStore } = await mountTail({ index: null })
+      expect(wrapper.vm.findPrevTurn()).toEqual({ kind: 'pending', reason: 'idle' })
+      const pending = messageStore.ensureHistoryIndex(SESSION)
+      expect(wrapper.vm.findPrevTurn()).toEqual({ kind: 'pending', reason: 'loading' })
+      await pending // old server: 404
+      expect(wrapper.vm.findPrevTurn()).toEqual({ kind: 'pending', reason: 'unavailable' })
+    })
+
+    it('with the index ready, the previous turn above the loaded suffix is the newest older index turn', async () => {
+      const { wrapper, messageStore } = await mountTail()
+      await messageStore.ensureHistoryIndex(SESSION)
+      // viewport at the top of the loaded list: the first loaded turn row is visible, none above it
+      expect(wrapper.vm.findPrevTurn()).toEqual({ kind: 'unloaded', messageId: 'msg-29', ordinal: 30, sizeHint: 29 })
+    })
+
+    it('a loaded turn above the viewport wins over the index', async () => {
+      const { wrapper, messageStore } = await mountTail()
+      await messageStore.ensureHistoryIndex(SESSION)
+      await wrapper.vm.scrollToItemIndex(25, { align: 'start', behavior: 'auto' })
+      await new Promise(r => setTimeout(r, 30))
+      expect(wrapper.vm.findPrevTurn()).toMatchObject({ kind: 'loaded' })
+    })
+
+    it('there is no previous turn when the oldest turn of a complete history is in view', async () => {
+      const { wrapper, messageStore, container } = await mountWithStore()
+      messageStore.messagesBySession.set(SESSION, messagesAt(0, 1))
+      messageStore.messagesBySession = new Map(messageStore.messagesBySession)
+      await new Promise(r => setTimeout(r, 50))
+      stubScrollMechanics(container.querySelector('.messages-area'))
+      expect(messageStore.isHistoryComplete(SESSION)).toBe(true)
+      expect(wrapper.vm.findPrevTurn()).toBeNull()
+    })
+
+    it('there is no previous turn when the index has nothing older than the loaded suffix', async () => {
+      const { createFakeHistoryServer } = await import('@/stores/__tests__/helpers/historyServer')
+      const { wrapper, messageStore, container } = await mountWithStore()
+      const all = messagesAt(0, 40)
+      // the server snapped the window at the very first turn, but older records (non-turn) remain
+      const server = createFakeHistoryServer(all, { tailStart: 0, pageSize: 30, index: { turns: all.map(m => m.message_id) } })
+      apiMock.get.mockImplementation((url) => server.handle(url))
+      await messageStore.loadMessages(SESSION, null, 0, { window: 'tail', signal: new AbortController().signal })
+      await new Promise(r => setTimeout(r, 50))
+      stubScrollMechanics(container.querySelector('.messages-area'))
+      await wrapper.vm.scrollToItemIndex(0, { align: 'start', behavior: 'auto' })
+      await new Promise(r => setTimeout(r, 30))
+      expect(messageStore.isHistoryComplete(SESSION)).toBe(true)
+      expect(wrapper.vm.findPrevTurn()).toBeNull()
+    })
+
+    it('scrollToTurnMessage scrolls to a loaded turn and reports false for one that is not loaded', async () => {
+      const { wrapper } = await mountTail()
+      await expect(wrapper.vm.scrollToTurnMessage('msg-45')).resolves.toBeTruthy()
+      await expect(wrapper.vm.scrollToTurnMessage('msg-3')).resolves.toBe(false)
+    })
+
+    it('beginTurnJump drops the sticky-to-bottom pin (so the prepended page cannot snap the list back); endTurnJump re-derives it', async () => {
+      const { wrapper, pinia, container } = await mountTail()
+      const { useUIStore } = await import('@/stores/ui')
+      const setSticky = vi.spyOn(useUIStore(pinia), 'setStickyToBottom')
+      wrapper.vm.beginTurnJump()
+      expect(setSticky).toHaveBeenLastCalledWith(expect.anything(), false)
+      // list is at the very bottom (jsdom: scrollTop 0 of scrollHeight 100000 is NOT bottom) -> not sticky
+      wrapper.vm.endTurnJump()
+      expect(setSticky).toHaveBeenLastCalledWith(expect.anything(), false)
+      const el = container.querySelector('.messages-area')
+      Object.defineProperty(el, 'scrollHeight', { configurable: true, get: () => 600 })
+      wrapper.vm.endTurnJump() // content fits: back at the bottom -> sticky again
+      expect(setSticky).toHaveBeenLastCalledWith(expect.anything(), true)
+    })
+
+    it('shows the jump banner with progress and a Cancel button that cancels the jump', async () => {
+      const { historyBackfill } = await import('@/composables/useHistoryBackfill')
+      const { messageStore } = await mountTail()
+      const cancel = vi.spyOn(historyBackfill, 'cancelJump').mockImplementation(() => {})
+      const start = Number(/^b:(\d+)$/.exec(messageStore.getHistoryState(SESSION).startCursor)[1])
+      historyBackfill.statusBySession.value = new Map([[SESSION, {
+        mode: 'auto', paused: null, loading: true, error: null,
+        jump: { messageId: 'msg-3', ordinal: 4, fromOffset: start + 20, toOffset: start - 20 },
+      }]])
+      await new Promise(r => setTimeout(r, 50))
+      const banner = document.querySelector('[data-testid="history-banner"]')
+      expect(banner.textContent).toContain('Loading older history to reach turn 4')
+      expect(banner.textContent).toContain('50 %')
+      await fireEvent.click(document.querySelector('[data-testid="history-jump-cancel"]'))
+      expect(cancel).toHaveBeenCalledWith(SESSION)
+      historyBackfill.statusBySession.value = new Map()
+      vi.restoreAllMocks()
+    })
+  })
+
   it('keeps the same row at the same viewport offset when an older page is prepended (anchor-preserving prepend)', async () => {
     const { wrapper, container, messageStore } = await mountWithStore()
     await installTail(messageStore, messagesAt(30, 90))

@@ -55,6 +55,26 @@ describe('getItemKey (issue #2030)', () => {
   })
 })
 
+describe('compaction group key (issue #2030 stage 2)', () => {
+  const sys = (id, sec, metadata) => ({ type: 'system', message_id: id, content: '', timestamp: ts(sec), metadata })
+  const group = (prefix, sec) => [
+    sys(`${prefix}-compacting`, sec, { subtype: 'status', init_data: { status: 'compacting' } }),
+    sys(`${prefix}-idle`, sec + 1, { subtype: 'status', init_data: { status: null } }),
+    sys(`${prefix}-boundary`, sec + 2, { subtype: 'compact_boundary' }),
+    user(`${prefix}-cont`, sec + 3, 'This session is being continued from a previous conversation that ran out of context.'),
+  ]
+
+  it('keys each group by its first record message_id, independent of preceding groups', () => {
+    const messages = [user('u1', 0), ...group('g1', 10), user('u2', 20), ...group('g2', 30), user('u3', 40)]
+    const groups = build(messages).filter(i => i.type === 'compaction')
+    expect(groups.map(g => g.groupKey)).toEqual(['g1-compacting', 'g2-compacting'])
+    // a window starting after the first group sees the same key for the second one
+    const tail = build(messages.slice(5)).filter(i => i.type === 'compaction')
+    expect(tail.map(g => g.groupKey)).toEqual(['g2-compacting'])
+    expect(tail.every(g => g.groupIndex === undefined)).toBe(true) // the ordinal path is gone
+  })
+})
+
 describe('leg-terminal signals across the window boundary (issue #2030, plan §5 exception 1)', () => {
   const leg = (taskId, endedAt) => ({
     task_id: taskId, session_id: SID,

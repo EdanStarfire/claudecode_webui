@@ -12,6 +12,11 @@ export function createFakeHistoryServer(records, {
   historyId = 'h1',
   latestInit = null,
   eventCursor = 7,
+  // Issue #2030 (stage 2 PR B): `GET .../history_index` — `{ turns: [messageId], compactions: [...] }`
+  // (turn ids; offsets are record indices, matching this fake's `b:<record index>` cursors) or an
+  // Error-with-status / `null` to answer 404 like a server without the endpoint.
+  index = null,
+  indexError = null,
 } = {}) {
   const requests = []
 
@@ -28,6 +33,22 @@ export function createFakeHistoryServer(records, {
 
   async function handle(url) {
     requests.push(url)
+    if (String(url).split('?')[0].endsWith('/history_index')) {
+      if (index === null || indexError) {
+        const err = new Error(indexError?.message || 'not found')
+        err.status = indexError?.status || 404
+        throw err
+      }
+      const position = new Map(records.map((r, i) => [r.message_id, i]))
+      return {
+        history_id: historyId,
+        total_bytes: records.length,
+        turns: index.turns.map(id => [`b:${position.get(id)}`, id, position.get(id)]),
+        compactions: index.compactions || [],
+        event_cursor: eventCursor,
+        epoch: 'e1',
+      }
+    }
     const query = String(url).split('?')[1] || ''
     const params = new URLSearchParams(query)
     if (params.get('window') === 'tail') {

@@ -32,8 +32,6 @@ export function buildDisplayableItems(ctx) {
   const items = []
   let i = 0
 
-  let compactionGroupCount = 0
-
   while (i < messages.length) {
     const msg = messages[i]
 
@@ -49,9 +47,9 @@ export function buildDisplayableItems(ctx) {
       items.push({
         type: 'compaction',
         messages: compactionMessages,
-        groupIndex: compactionGroupCount,  // Issue #1350: ordinal for PreCompact hook lookup
+        // Issue #2030: the first record's message_id keys the group (PreCompact hook lookup)
+        groupKey: resolveMessageId(compactionMessages[0]),
       })
-      compactionGroupCount++
       i += messageCount // Skip the compaction messages
       continue
     }

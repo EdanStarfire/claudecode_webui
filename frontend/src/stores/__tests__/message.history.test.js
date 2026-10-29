@@ -227,14 +227,189 @@ describe('gating flag (turn navigation / PreCompact / search all read it)', () =
     expect(flags).toEqual([false, false, false, false, true])
   })
 
-  it('PreCompact hooks are suppressed until the history is complete', async () => {
+  it('PreCompact hooks resolve under the loaded compaction group key on a tail-only window (issue #2030 stage 2)', async () => {
     const { store } = await setup()
-    serve(Array.from({ length: 4 }, () => user()), { tailStart: 3 })
+    const compacting = (id) => ({ type: 'system', message_id: id, timestamp: 5000, content: '', metadata: { subtype: 'status', init_data: { status: 'compacting' } } })
+    const hook = (id, phase) => ({
+      type: 'system', message_id: `${phase}-${id}`, timestamp: 5001,
+      content: '', metadata: { subtype: phase === 'hs' ? 'hook_started' : 'hook_response', init_data: { hook_id: id, hook_event: 'PreCompact', hook_name: 'h', exit_code: 0 } },
+    })
+    const records = [user(), compacting('cs-old'), hook('h0', 'hs'), hook('h0', 'hr'), user(), compacting('cs-new'), hook('h1', 'hs'), hook('h1', 'hr'), user()]
+    serve(records, { tailStart: 4 })
     await store.loadMessages(SID, null, 0, { window: 'tail', signal: signalOf() })
-    expect(store.hooksForCompaction(SID, 0)).toEqual([])
+    expect(store.isHistoryComplete(SID)).toBe(false)
+    expect(store.hooksForCompaction(SID, 'cs-new')).toHaveLength(1)
+    expect(store.hooksForCompaction(SID, 'cs-new')[0].hook_event).toBe('PreCompact')
+    expect(store.hooksForCompaction(SID, 'cs-old')).toEqual([]) // not loaded yet
+    expect(store.hooksForCompaction(SID, null)).toEqual([])
     store.applyFetchedOlderPage(SID, await store.fetchOlderPage(SID, { signal: signalOf() }))
-    expect(store.isHistoryComplete(SID)).toBe(true)
-    expect(Array.isArray(store.hooksForCompaction(SID, 0))).toBe(true)
+    expect(store.hooksForCompaction(SID, 'cs-old')).toHaveLength(1)
+    expect(store.hooksForCompaction(SID, 'cs-new')).toHaveLength(1)
+  })
+})
+
+describe('history index store (issue #2030 stage 2 PR B)', () => {
+  const turnsOf = (records) => records.filter(r => r.type === 'user').map(r => r.message_id)
+  const indexCalls = () => apiMock.get.mock.calls.filter(([u]) => String(u).includes('/history_index'))
+
+  async function loaded(options = {}) {
+    const { store } = await setup()
+    const records = Array.from({ length: 12 }, (_, i) => (i % 3 === 0 ? user() : assistant()))
+    const server = serve(records, { tailStart: 6, pageSize: 3, index: { turns: turnsOf(records) }, ...options })
+    await store.loadMessages(SID, null, 0, { window: 'tail', signal: signalOf() })
+    return { store, records, server }
+  }
+
+  it('is not requested by loading the window (the scheduler asks after the snapshots)', async () => {
+    const { store } = await loaded()
+    expect(indexCalls()).toHaveLength(0)
+    expect(store.getHistoryIndex(SID)).toBeNull()
+  })
+
+  it('fetches once from <baseUrl dir>/history_index at low priority and exposes turns/compactions', async () => {
+    const { store, records } = await loaded()
+    const [first, second] = [store.ensureHistoryIndex(SID), store.ensureHistoryIndex(SID)]
+    expect(store.getHistoryIndex(SID).status).toBe('loading')
+    const entry = await first
+    await second
+    expect(indexCalls()).toHaveLength(1)
+    expect(indexCalls()[0]).toEqual([`/api/sessions/${SID}/history_index`, { signal: expect.anything(), priority: 'low' }])
+    expect(entry).toMatchObject({ status: 'ready', historyId: 'h1' })
+    expect(entry.turns.map(t => t[1])).toEqual(turnsOf(records))
+    expect(store.getHistoryIndex(SID).status).toBe('ready')
+    await store.ensureHistoryIndex(SID) // idempotent once ready
+    expect(indexCalls()).toHaveLength(1)
+  })
+
+  it('uses the archive endpoint next to the archive messages URL', async () => {
+    const { store } = await setup()
+    const records = Array.from({ length: 6 }, () => user())
+    serve(records, { tailStart: 3, index: { turns: turnsOf(records) } })
+    const baseUrl = '/api/projects/p1/archives/s1/a1/messages'
+    await store.loadMessages(SID, null, 0, { window: 'tail', source: 'archive', baseUrl, signal: signalOf() })
+    await store.ensureHistoryIndex(SID)
+    expect(indexCalls()[0][0]).toBe('/api/projects/p1/archives/s1/a1/history_index')
+  })
+
+  it('does nothing once the whole history is loaded', async () => {
+    const { store } = await setup()
+    serve(Array.from({ length: 3 }, () => user()), { tailStart: 0 })
+    await store.loadMessages(SID, null, 0, { window: 'tail', signal: signalOf() })
+    expect(await store.ensureHistoryIndex(SID)).toBeNull()
+    expect(indexCalls()).toHaveLength(0)
+  })
+
+  it('an old server (404) leaves the index unavailable without retrying', async () => {
+    const { store } = await loaded({ index: null })
+    const entry = await store.ensureHistoryIndex(SID)
+    expect(entry.status).toBe('unavailable')
+    expect(indexCalls()).toHaveLength(1)
+    await store.ensureHistoryIndex(SID)
+    expect(indexCalls()).toHaveLength(1)
+  })
+
+  it('a 503 (index building) is retried once after a backoff, then unavailable', async () => {
+    vi.useFakeTimers()
+    try {
+      const { store } = await loaded({ index: { turns: [] }, indexError: { status: 503, message: 'index_building' } })
+      const pending = store.ensureHistoryIndex(SID)
+      await vi.advanceTimersByTimeAsync(100)
+      expect(indexCalls()).toHaveLength(1)
+      await vi.advanceTimersByTimeAsync(6000)
+      const entry = await pending
+      expect(indexCalls()).toHaveLength(2)
+      expect(entry.status).toBe('unavailable')
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('drops a response whose history_id no longer matches the loaded history', async () => {
+    const { store, records } = await loaded()
+    apiMock.get.mockImplementation(async (url) => (String(url).includes('/history_index')
+      ? { history_id: 'other', total_bytes: 1, turns: [], compactions: [] }
+      : createFakeHistoryServer(records, { tailStart: 6 }).handle(url)))
+    expect(await store.ensureHistoryIndex(SID)).toBeNull()
+    expect(store.getHistoryIndex(SID)).toBeNull()
+  })
+
+  it('dropping the index during the retry wait settles the awaited promise (no hung callers)', async () => {
+    vi.useFakeTimers()
+    try {
+      const { store } = await loaded({ index: { turns: [] }, indexError: { status: 503, message: 'index_building' } })
+      const pending = store.ensureHistoryIndex(SID)
+      await vi.advanceTimersByTimeAsync(100) // first attempt failed, now waiting to retry
+      store.clearMessages(SID)
+      await expect(pending).resolves.toBeNull()
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('a transient failure is retried later (cooldown), a permanent one (404) never is', async () => {
+    vi.useFakeTimers()
+    try {
+      const { store, records } = await loaded({ index: { turns: [] }, indexError: { status: 503, message: 'index_building' } })
+      const pending = store.ensureHistoryIndex(SID)
+      await vi.advanceTimersByTimeAsync(6000)
+      expect((await pending).status).toBe('unavailable')
+      // the server recovers; the cooldown retry picks it up without any user action
+      serve(records, { tailStart: 6, pageSize: 3, index: { turns: turnsOf(records) } })
+      await vi.advanceTimersByTimeAsync(31000)
+      expect(store.getHistoryIndex(SID).status).toBe('ready')
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('an index is unusable (unavailable) when the loaded start is not a b:<offset> cursor', async () => {
+    const { store, records } = await loaded()
+    apiMock.get.mockImplementation(async (url) => (String(url).includes('/history_index')
+      ? { history_id: 'h1', total_bytes: 1, turns: [['x', 'u', 1]], compactions: [] }
+      : createFakeHistoryServer(records, { tailStart: 6 }).handle(url)))
+    store.getHistoryState(SID).startCursor = 'opaque'
+    expect((await store.ensureHistoryIndex(SID)).status).toBe('unavailable')
+  })
+
+  it('is dropped when the suffix is replaced (gap-replace / restart) and refetched on demand', async () => {
+    const { store, records } = await loaded()
+    await store.ensureHistoryIndex(SID)
+    expect(store.getHistoryIndex(SID).status).toBe('ready')
+    serve(records, { tailStart: 8, index: { turns: turnsOf(records) } })
+    await store.loadMessages(SID, null, 0, { window: 'tail', signal: signalOf() }) // replaces
+    expect(store.getHistoryIndex(SID)).toBeNull()
+    await store.ensureHistoryIndex(SID)
+    expect(store.getHistoryIndex(SID).status).toBe('ready')
+  })
+
+  it('survives a resync merge that keeps the loaded suffix', async () => {
+    const { store, records } = await loaded()
+    await store.ensureHistoryIndex(SID)
+    serve(records, { tailStart: 7, index: { turns: turnsOf(records) } })
+    const result = await store.loadMessages(SID, null, 0, { window: 'tail', resync: true, signal: signalOf() })
+    expect(result.replaced).toBe(false)
+    expect(store.getHistoryIndex(SID).status).toBe('ready')
+  })
+
+  it('is dropped (and an in-flight request aborted) when the session state is cleared', async () => {
+    const { store } = await loaded()
+    let aborted = false
+    apiMock.get.mockImplementation((url, opts) => (String(url).includes('/history_index')
+      ? new Promise((_res, rej) => opts.signal.addEventListener('abort', () => { aborted = true; rej(new DOMException('Aborted', 'AbortError')) }))
+      : Promise.reject(new Error('unexpected'))))
+    const pending = store.ensureHistoryIndex(SID)
+    store.clearMessages(SID)
+    expect(await pending).toBeNull()
+    expect(aborted).toBe(true)
+    expect(store.getHistoryIndex(SID)).toBeNull()
+  })
+
+  it('isMessageLoaded reflects the loaded suffix and grows with older pages', async () => {
+    const { store, records } = await loaded()
+    expect(store.isMessageLoaded(SID, records[7].message_id)).toBe(true)
+    expect(store.isMessageLoaded(SID, records[0].message_id)).toBe(false)
+    store.applyFetchedOlderPage(SID, await store.fetchOlderPage(SID, { signal: signalOf() }))
+    expect(store.isMessageLoaded(SID, records[4].message_id)).toBe(true)
   })
 })
 
