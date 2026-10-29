@@ -1971,6 +1971,12 @@ button:focus {
     line-height: 1;
 }
 
+/* Issue #2030 stage 3: "Load more results" sits on its own line below the controls. */
+.message-search-expanded .message-search-more .btn {
+    font-size: 0.8rem;
+    line-height: 1.4;
+}
+
 mark.message-search-highlight {
     background-color: #ffe066;
     color: #212529;

@@ -40,16 +40,24 @@
         >&#xD7;</button>
       </div>
       <!-- Issue #2030: its own line below the controls (never squeezed beside the input), with a
-           short form on narrow screens. Search only covers the loaded messages until the history
-           has fully arrived. -->
+           short form on narrow screens. Shown when the whole-history server search is unavailable
+           (the search then covers the loaded messages only), and for "Load more results". -->
       <div
-        v-if="search.historyScope?.value"
+        v-if="search.loadedOnly?.value"
         class="message-search-scope small text-muted"
         data-testid="search-history-scope"
-        title="Search covers the messages loaded so far; older history is still loading."
+        title="The server search is unavailable: only the messages loaded so far are searched."
       >
-        <span class="scope-long">{{ scopeLabel }}</span>
-        <span class="scope-short">{{ scopeShortLabel }}</span>
+        <span class="scope-long">Searching loaded messages only</span>
+        <span class="scope-short">Loaded only</span>
+      </div>
+      <div v-if="showMore" class="message-search-more small">
+        <button
+          class="btn btn-sm btn-outline-secondary py-0"
+          data-testid="search-load-more"
+          :disabled="search.loadingMore.value"
+          @click="search.loadMore()"
+        >{{ search.loadingMore.value ? `Searching…${percentLabel}` : 'Load more results' }}</button>
       </div>
     </div>
   </div>
@@ -67,25 +75,25 @@ const inputEl = ref(null)
 
 const hasMatches = computed(() => props.search.matches.value.length > 0)
 
+const percentLabel = computed(() => {
+  const percent = props.search.percent?.value
+  return percent != null ? ` ${percent} %` : ''
+})
+
+// "N+" while the server search has more pages; "Searching… X %" until the first result arrives.
 const countLabel = computed(() => {
   const trimmedQuery = props.search.query.value.trim()
   if (!trimmedQuery) return 'Search…'
   if (props.search.notFound.value) return "Couldn't locate match"
   const total = props.search.matches.value.length
-  if (total === 0) return 'No results'
-  return `${props.search.currentIndex.value + 1} of ${total}`
+  if (total === 0) {
+    return props.search.phase?.value === 'searching' ? `Searching…${percentLabel.value}` : 'No results'
+  }
+  const plus = props.search.hasMore?.value ? '+' : ''
+  return `${props.search.currentIndex.value + 1} of ${total}${plus}`
 })
 
-// Issue #2030: search only sees loaded messages until the full history has arrived.
-const scopeLabel = computed(() => {
-  const percent = props.search.historyScope?.value?.percent
-  return percent != null ? `Searching ${percent} % of history — still loading` : 'Searching loaded history — still loading'
-})
-
-const scopeShortLabel = computed(() => {
-  const percent = props.search.historyScope?.value?.percent
-  return percent != null ? `${percent} % loaded` : 'Partial history'
-})
+const showMore = computed(() => !!props.search.hasMore?.value && props.search.matches.value.length > 0)
 
 function handleOpen() {
   props.search.open()
@@ -115,7 +123,7 @@ function onKeydown(e) {
 watch(
   () => {
     const m = props.search.currentMatch.value
-    return m ? `${props.search.query.value}|${m.messageId}|${m.toolId}|${m.field}|${m.matchStart}|${m.occurrenceIndex}` : null
+    return m ? `${props.search.query.value}|${m.messageId}|${m.toolId}|${m.field}|${m.matchStart}|${m.occurrenceIndex}|${props.search.navTick?.value ?? 0}` : null
   },
   () => emit('navigate', props.search.currentMatch.value)
 )

@@ -185,7 +185,7 @@ import { buildDisplayableItems, computeItemKeys } from '@/utils/displayableItems
 import { historyBackfill } from '@/composables/useHistoryBackfill'
 import { useHydrationStage } from '@/composables/useHydrationStage'
 import { HYDRATION_STAGE_LABELS } from '@/utils/hydrationStage'
-import { cursorOffset, findTurnBefore, jumpProgress } from '@/utils/turnNavigation'
+import { cursorOffset, estimateJumpWireBytes, findTurnBefore, formatJumpSize, jumpNeedsConfirm, jumpProgress } from '@/utils/turnNavigation'
 
 const messageStore = useMessageStore()
 const sessionStore = useSessionStore()
@@ -238,7 +238,12 @@ const tts = useTTSReadAloud()
 provide('ttsReadAloud', tts)
 
 // In-app message search (issue #2012)
-const messageSearch = useMessageSearch(viewSessionId, { messageStore })
+const SLOW_LINK_SEARCH_PAGE = 20
+// Smaller server search pages on a slow link (nothing there loads more than it must).
+const messageSearch = useMessageSearch(viewSessionId, {
+  messageStore,
+  getPageLimit: () => (historyBackfill.getMode(viewSessionId.value) === 'manual' ? SLOW_LINK_SEARCH_PAGE : undefined),
+})
 
 // Provide all messages for play-from-here navigation
 provide('allMessages', sessionMessages)
@@ -407,7 +412,7 @@ const historyBanner = computed(() => {
   if (status?.jump) {
     const progress = jumpProgress(messageStore.getHistoryState(sessionId)?.startCursor, status.jump)
     const jumpPercent = progress != null ? ` ${Math.round(progress * 100)} %` : ''
-    return { kind: 'jump', text: `Loading older history to reach turn ${status.jump.ordinal}…${jumpPercent}${status.paused ? ' (paused)' : ''}` }
+    return { kind: 'jump', text: `Loading older history to reach ${status.jump.label || `turn ${status.jump.ordinal}`}…${jumpPercent}${status.paused ? ' (paused)' : ''}` }
   }
   if (status?.mode === 'manual') {
     return { kind: 'manual', text: `Showing newest messages — older history isn't loaded automatically on this connection.${percent && ` (${percent.trim()} loaded)`}` }
@@ -506,13 +511,18 @@ function findPrevTurn() {
 // A turn jump to unloaded history is a deliberate navigation away from the bottom: drop the
 // sticky-to-bottom pin up front (otherwise the prepended page's relayout snaps the list back to
 // the bottom before the jump lands) and re-derive it from the real position when the jump ends.
+let turnJumpsOpen = 0
 function beginTurnJump() {
+  turnJumpsOpen++
   renewGestureWindow()
   stickyToBottom.value = false
   uiStore.setStickyToBottom(viewSessionId.value, false)
 }
 
 function endTurnJump() {
+  // Jumps can overlap (a newer one supersedes an older one): re-derive the sticky state only when the last one ends.
+  if (turnJumpsOpen > 0) turnJumpsOpen--
+  if (turnJumpsOpen > 0) return
   if (messagesArea.value) recomputeStickyFromScroll(messagesArea.value)
 }
 
@@ -688,18 +698,120 @@ function resolveMainTimelineScopeKey(messageId) {
 // recent call's already-applied highlight once its own await finally resolves.
 let navigationSeq = 0
 
+function matchRowIndex({ messageId, toolId }) {
+  return toolId != null
+    ? indexMaps.value.toolUseIndex.get(toolId)
+    : indexMaps.value.messageIdIndex.get(messageId)
+}
+
+// Issue #2030 (stage 3): a server search hit that lies before the loaded suffix opens through the
+// stage-2 jump (`requestUntil`: older pages until the message is loaded), with the same confirm
+// guard (slow link always, otherwise above the wire-size cap), progress banner and cancel as turn
+// navigation. Resolves 'loaded' | 'declined' | 'cancelled' | 'not-found'.
+let activeSearchJump = null
+
+function cancelSearchJump() {
+  activeSearchJump?.cancel()
+  activeSearchJump = null
+}
+
+// Closing the search or switching session abandons a pending search jump (and any navigation in flight).
+watch(() => messageSearch.isOpen.value, (open) => {
+  if (!open) { navigationSeq++; cancelSearchJump() }
+})
+watch(viewSessionId, () => { navigationSeq++; cancelSearchJump() })
+
+function isUnloadedHit(match) {
+  const sessionId = viewSessionId.value
+  return match.sizeHint != null && !!messageStore.getHistoryState(sessionId)?.hasMoreBefore &&
+    !messageStore.isMessageLoaded(sessionId, match.messageId)
+}
+
+// `began` (set once the jump really started, i.e. after the confirm) tells the caller whether it owes an endTurnJump().
+async function jumpToUnloadedHit(match, began) {
+  const sessionId = viewSessionId.value
+  const fromOffset = cursorOffset(messageStore.getHistoryState(sessionId)?.startCursor)
+  if (fromOffset == null) return 'not-found'
+  const estimatedWireBytes = estimateJumpWireBytes(fromOffset, match.sizeHint, messageStore.getWireRatio(sessionId))
+  if (jumpNeedsConfirm({ slowLink: historyBackfill.getMode(sessionId) === 'manual', estimatedWireBytes }) &&
+      typeof window !== 'undefined' && typeof window.confirm === 'function' &&
+      !window.confirm(`Jump to search result? Loads about ${formatJumpSize(estimatedWireBytes)} of older history`)) {
+    return 'declined'
+  }
+  beginTurnJump()
+  began.value = true
+  const jump = historyBackfill.requestUntil(sessionId, match.messageId, {
+    label: 'search result', fromOffset, toOffset: match.sizeHint,
+  })
+  activeSearchJump = jump
+  try {
+    await jump.promise
+    return 'loaded'
+  } catch (err) {
+    return err?.reason === 'not-found' ? 'not-found' : 'cancelled'
+  } finally {
+    if (activeSearchJump === jump) activeSearchJump = null
+  }
+}
+
 async function scrollToMessageMatch(match) {
   const seq = ++navigationSeq
+  cancelSearchJump()
 
   if (!match) {
     clearActiveHighlight()
     return false
   }
 
+  let index = matchRowIndex(match)
+  const began = { value: false }
+  if (index == null && isUnloadedHit(match)) {
+    const outcome = await jumpToUnloadedHit(match, began)
+    if (outcome !== 'loaded') {
+      if (began.value) endTurnJump()
+      if (outcome === 'not-found' && seq === navigationSeq) {
+        clearActiveHighlight()
+        messageSearch.markNotFound()
+      }
+      return false
+    }
+    // The jump just prepended pages and the banner changed height (the list area resizes a few
+    // frames later): let the list and the virtualizer settle before resolving the row, or the
+    // re-render that follows would drop the highlight applied below.
+    await nextTick()
+    for (let frame = 0; frame < 4; frame++) await new Promise(resolve => requestAnimationFrame(resolve))
+    if (seq !== navigationSeq) { endTurnJump(); return false }
+    index = matchRowIndex(match)
+  }
+  try {
+    const landed = await scrollToLoadedMatch(match, index, seq)
+    if (began.value && landed) await keepHighlightAfterJump(match, seq)
+    return landed
+  } finally {
+    if (began.value) endTurnJump()
+  }
+}
+
+// After a far jump the rows around the target are measured for the first time while the list
+// settles (the virtualizer's estimate corrects the scroll position and remounts the row), which
+// drops the DOM highlight applied on the first mount. Re-apply it until it has stayed put.
+async function keepHighlightAfterJump(match, seq) {
+  let stableChecks = 0
+  for (let attempt = 0; attempt < 12 && stableChecks < 2; attempt++) {
+    await new Promise(resolve => setTimeout(resolve, 150))
+    if (seq !== navigationSeq) return
+    const index = matchRowIndex(match)
+    const rowEl = index == null ? null : messagesContent.value?.querySelector(`.virtual-item-row[data-index="${index}"]`)
+    if (!rowEl) { stableChecks = 0; continue }
+    if (rowEl.querySelector('mark.message-search-highlight')) { stableChecks++; continue }
+    stableChecks = 0
+    clearActiveHighlight()
+    if (applyHighlight(rowEl, messageSearch.query.value, match.occurrenceIndex ?? 0)) highlightedEl = rowEl
+  }
+}
+
+async function scrollToLoadedMatch(match, index, seq) {
   const { messageId, toolId } = match
-  const index = toolId != null
-    ? indexMaps.value.toolUseIndex.get(toolId)
-    : indexMaps.value.messageIdIndex.get(messageId)
   if (index == null) {
     clearActiveHighlight()
     messageSearch.markNotFound()
