@@ -78,23 +78,123 @@ async def test_identical_requests_share_one_scan(manager):
 
 
 @pytest.mark.asyncio
-async def test_new_query_supersedes_older_query_of_same_session(manager):
+async def test_new_query_from_the_same_client_supersedes_its_older_query(manager):
     reader = FakeReader()
-    old = asyncio.ensure_future(manager.search("k", reader, "first", None, CAPS))
+    old = asyncio.ensure_future(manager.search("k", reader, "first", None, CAPS, client_id="tab1"))
     await _until(reader.started.is_set)
     other_session = FakeReader("other")
-    other = asyncio.ensure_future(manager.search("k2", other_session, "other", None, CAPS))
+    other = asyncio.ensure_future(
+        manager.search("k2", other_session, "other", None, CAPS, client_id="tab1")
+    )
     new_reader = FakeReader("new")
     new_reader.release.set()
-    page = await manager.search("k", new_reader, "second", None, CAPS)
+    page = await manager.search("k", new_reader, "second", None, CAPS, client_id="tab1")
     assert page.results == [{"q": "second"}]
     assert await old is None  # superseded: no result, no error
-    assert reader.cancelled_seen.is_set()
+    assert reader.cancelled_seen.wait(2)
     assert manager.superseded == 1
     # a different session was untouched
     other_session.release.set()
     assert (await other).results == [{"q": "other"}]
     assert not other_session.cancelled_seen.is_set()
+    await _until(lambda: _settled(manager))
+
+
+@pytest.mark.asyncio
+async def test_two_clients_different_queries_same_session_do_not_cancel_each_other(manager):
+    a, b = FakeReader("a"), FakeReader("b")
+    ta = asyncio.ensure_future(manager.search("k", a, "alpha query", None, CAPS, client_id="tab1"))
+    tb = asyncio.ensure_future(manager.search("k", b, "beta query", None, CAPS, client_id="tab2"))
+    await _until(lambda: a.started.is_set() and b.started.is_set())
+    a.release.set()
+    b.release.set()
+    pa, pb = await asyncio.gather(ta, tb)
+    assert pa.results == [{"q": "alpha query"}] and pb.results == [{"q": "beta query"}]
+    assert manager.superseded == 0 and not a.cancelled_seen.is_set() and not b.cancelled_seen.is_set()
+    await _until(lambda: _settled(manager))
+
+
+@pytest.mark.asyncio
+async def test_requests_without_client_id_never_cancel_or_get_cancelled(manager):
+    a, b = FakeReader("a"), FakeReader("b")
+    ta = asyncio.ensure_future(manager.search("k", a, "alpha query", None, CAPS))
+    await _until(a.started.is_set)
+    tb = asyncio.ensure_future(manager.search("k", b, "beta query", None, CAPS))
+    tc = asyncio.ensure_future(manager.search("k", FakeReader("c"), "gamma", None, CAPS, client_id="tab1"))
+    await asyncio.sleep(0.05)
+    a.release.set()
+    b.release.set()
+    assert (await ta) is not None and (await tb) is not None
+    assert manager.superseded == 0
+    tc.cancel()
+    await asyncio.gather(tc, return_exceptions=True)
+
+
+@pytest.mark.asyncio
+async def test_identical_queries_from_two_clients_share_one_scan_and_survive_one_superseding(manager):
+    reader = FakeReader()
+    t1 = asyncio.ensure_future(manager.search("k", reader, "shared", None, CAPS, client_id="tab1"))
+    t2 = asyncio.ensure_future(manager.search("k", reader, "shared", None, CAPS, client_id="tab2"))
+    await _until(reader.started.is_set)
+    other = FakeReader("other")
+    other.release.set()
+    # tab1 moves on to a different query: its waiter is superseded, tab2's shared scan continues
+    p = await manager.search("k", other, "different", None, CAPS, client_id="tab1")
+    assert p.results == [{"q": "different"}]
+    assert await t1 is None
+    assert not reader.cancelled_seen.is_set()
+    reader.release.set()
+    assert (await t2).results == [{"q": "shared"}]
+    assert len(reader.calls) == 1 and manager.superseded == 1
+    await _until(lambda: _settled(manager))
+
+
+@pytest.mark.asyncio
+async def test_superseding_the_last_waiter_cancels_the_scan(manager):
+    reader = FakeReader()
+    t1 = asyncio.ensure_future(manager.search("k", reader, "first", None, CAPS, client_id="tab1"))
+    await _until(reader.started.is_set)
+    nxt = FakeReader("n")
+    nxt.release.set()
+    await manager.search("k", nxt, "second", None, CAPS, client_id="tab1")
+    assert await t1 is None and reader.cancelled_seen.wait(2)
+    await _until(lambda: _settled(manager))
+
+
+@pytest.mark.asyncio
+async def test_flight_cap_per_session_refuses_extra_distinct_flights():
+    manager = SearchScanManager(workers=4)  # (the cap, not the pool, is under test)
+    try:
+        await _cap_scenario(manager)
+    finally:
+        manager.shutdown()
+
+
+async def _cap_scenario(manager):
+    await _refused_request_keeps_own_older_query(manager)
+    assert manager.max_flights_per_key == 2
+    r1, r2, r3 = FakeReader("1"), FakeReader("2"), FakeReader("3")
+    t1 = asyncio.ensure_future(manager.search("k", r1, "one one", None, CAPS, client_id="a"))
+    t2 = asyncio.ensure_future(manager.search("k", r2, "two two", None, CAPS, client_id="b"))
+    await _until(lambda: r1.started.is_set() and r2.started.is_set())
+    with pytest.raises(SearchBusyError):
+        await manager.search("k", r3, "three", None, CAPS, client_id="c")
+    assert manager.refused == 2 and r3.calls == []  # (one refusal came from the helper above)
+    # an identical query joins the existing flight (no new flight), another session is unaffected
+    joiner = asyncio.ensure_future(manager.search("k", r1, "one one", None, CAPS, client_id="d"))
+    other_session = FakeReader("o")
+    other_session.release.set()
+    assert (await manager.search("k2", other_session, "three", None, CAPS, client_id="c")) is not None
+    r1.release.set()
+    r2.release.set()
+    assert (await joiner) is not None and (await t1) is not None and (await t2) is not None
+    # a client's own query change frees its flight slot immediately
+    r4, r5 = FakeReader("4"), FakeReader("5")
+    first = asyncio.ensure_future(manager.search("k", r4, "four", None, CAPS, client_id="x"))
+    await _until(r4.started.is_set)
+    r5.release.set()
+    assert (await manager.search("k", r5, "five", None, CAPS, client_id="x")) is not None
+    assert await first is None
     await _until(lambda: _settled(manager))
 
 
@@ -379,6 +479,39 @@ async def test_search_route_errors(tmp_path):
 
 
 @pytest.mark.asyncio
+async def test_route_client_id_supersede_and_cap(tmp_path):
+    coordinator, _ = await _coordinator(tmp_path, _history(5))
+    try:
+        app = _app(coordinator)
+        url = f"/api/sessions/{SID}/search"
+        searches = coordinator._session_query._searches
+        calls = []
+
+        async def fake(key, reader, query, cursor, caps, *, client_id=None, is_disconnected=None):
+            calls.append((query, client_id))
+            return None
+
+        searches.search = fake
+        resp = await _get(app, url, q="needle", client_id="tab-9")
+        assert resp.json()["superseded"] is True and calls == [("needle", "tab-9")]
+        await _get(app, url, q="needle")
+        assert calls[-1] == ("needle", None)
+        await _get(app, url, q="needle", client_id="x" * 500)
+        assert calls[-1][1] == "x" * 500  # (bounded to 64 inside SearchScanManager)
+    finally:
+        coordinator._session_query.shutdown()
+
+
+def test_search_max_flights_config_roundtrip():
+    from backend.config_manager import AppConfig
+
+    assert PerformanceConfig().search_max_flights_per_session == 2
+    config = AppConfig.from_dict({"performance": {"search_max_flights_per_session": 3}})
+    assert config.performance.search_max_flights_per_session == 3
+    assert SearchScanManager(workers=1, max_flights_per_key=0).max_flights_per_key == 1
+
+
+@pytest.mark.asyncio
 async def test_reset_or_delete_mid_search_drops_the_scan(tmp_path):
     coordinator, storage = await _coordinator(tmp_path, _history(50))
     query = coordinator._session_query
@@ -398,7 +531,7 @@ async def test_reset_or_delete_mid_search_drops_the_scan(tmp_path):
 
     reader_cls.search = blocked
     try:
-        task = asyncio.ensure_future(coordinator.search_history(SID, "needle", None, None, None))
+        task = asyncio.ensure_future(coordinator.search_history(SID, "needle", None, None, None, None))
         await _until(started.is_set)
         coordinator._clear_task_list(SID)  # the reset / delete hook
         assert await task is None
@@ -411,19 +544,43 @@ async def test_reset_or_delete_mid_search_drops_the_scan(tmp_path):
 
 
 @pytest.mark.asyncio
-async def test_stop_drops_searches_and_session_without_storage_uses_directory(tmp_path):
+async def test_stop_does_not_cancel_searches_and_terminated_session_uses_directory(tmp_path):
     coordinator, storage = await _coordinator(tmp_path, _history(10))
     query = coordinator._session_query
+    reader_cls = type(storage.reader)
+    started, release = threading.Event(), threading.Event()
+    seen_cancel = threading.Event()
+    real = reader_cls.search
+
+    def blocked(self, q, cursor, caps, cancel=None):
+        started.set()
+        while not release.is_set():
+            if cancel is not None and cancel.is_set():
+                seen_cancel.set()
+                break
+            time.sleep(0.005)
+        return real(self, q, cursor, caps, cancel)
+
+    reader_cls.search = blocked
     try:
-        page = await coordinator.search_history(SID, "needle", None, None, None)
-        assert len(page["results"]) == 10
+        task = asyncio.ensure_future(coordinator.search_history(SID, "needle", None, None, "c1", None))
+        await _until(started.is_set)
         query.drop_history_index(SID, abandon_scans=True)  # stop / terminate path
         coordinator._storage_managers.pop(SID)  # terminated: storage manager dropped
+        await asyncio.sleep(0.1)
+        assert not seen_cancel.is_set() and not task.done()
+        release.set()
+        page = await task  # the search survived the stop: the history file did not change
+        assert page is not None and len(page["results"]) == 10
+    finally:
+        release.set()
+        reader_cls.search = real
+    try:
         coordinator.session_manager.get_session_directory = AsyncMock(return_value=tmp_path / "sessions" / SID)
-        page = await coordinator.search_history(SID, "needle", None, None, None)
-        assert len(page["results"]) == 10
+        page = await coordinator.search_history(SID, "needle", None, None, None, None)
+        assert len(page["results"]) == 10  # a terminated session is searched through its directory
         coordinator.session_manager.get_session_directory = AsyncMock(return_value=None)
-        assert await coordinator.search_history(SID, "needle", None, None, None) is None
+        assert await coordinator.search_history(SID, "needle", None, None, None, None) is None
     finally:
         query.shutdown()
 
@@ -471,7 +628,7 @@ async def test_search_does_not_use_default_executor_or_cold_pool(tmp_path):
         blockers = [loop.run_in_executor(None, release.wait, 5) for _ in range(64)]
         try:
             page = await asyncio.wait_for(
-                coordinator.search_history(SID, "needle", None, None, None), timeout=3
+                coordinator.search_history(SID, "needle", None, None, None, None), timeout=3
             )
             assert page["results"]
         finally:
@@ -481,3 +638,55 @@ async def test_search_does_not_use_default_executor_or_cold_pool(tmp_path):
         assert query._searches.max_running >= 1
     finally:
         query.shutdown()
+
+
+async def _refused_request_keeps_own_older_query(manager):
+    r1, r2, r3 = FakeReader("1"), FakeReader("2"), FakeReader("3")
+    own = asyncio.ensure_future(manager.search("kk", r1, "own old", None, CAPS, client_id="a"))
+    other = asyncio.ensure_future(manager.search("kk", r2, "other tab", None, CAPS, client_id="b"))
+    await _until(lambda: r1.started.is_set() and r2.started.is_set())
+    third = asyncio.ensure_future(manager.search("kk", FakeReader("x"), "third", None, CAPS, client_id="c"))
+    await asyncio.sleep(0.05)  # cap reached: refused without touching anyone
+    with pytest.raises(SearchBusyError):
+        await third
+    # tab a's NEW query replaces its own older one (frees its own slot), so it is admitted
+    r3.release.set()
+    page = await manager.search("kk", r3, "own new", None, CAPS, client_id="a")
+    assert page is not None and await own is None
+    r2.release.set()
+    await other
+    await _until(lambda: _settled(manager))
+
+
+@pytest.mark.asyncio
+async def test_refused_request_does_not_supersede_the_clients_older_query():
+    manager = SearchScanManager(workers=4, max_flights_per_key=1)
+    try:
+        r1 = FakeReader("1")
+        old = asyncio.ensure_future(manager.search("k", r1, "old query", None, CAPS, client_id="a"))
+        await _until(r1.started.is_set)
+        # another client's request is refused (cap 1, a's flight is live) and touches nothing
+        with pytest.raises(SearchBusyError):
+            await manager.search("k", FakeReader("b"), "b query", None, CAPS, client_id="b")
+        assert not r1.cancelled_seen.is_set() and manager.superseded == 0
+        # the same client's replacement query is admitted: its own old flight does not count
+        r2 = FakeReader("2")
+        r2.release.set()
+        assert (await manager.search("k", r2, "new query", None, CAPS, client_id="a")) is not None
+        assert await old is None and manager.superseded == 1
+        await _until(lambda: _settled(manager))
+    finally:
+        manager.shutdown()
+
+
+@pytest.mark.asyncio
+async def test_client_id_is_bounded_in_the_manager(manager):
+    long_id = "x" * 500
+    reader = FakeReader()
+    t = asyncio.ensure_future(manager.search("k", reader, "one one", None, CAPS, client_id=long_id))
+    await _until(reader.started.is_set)
+    other = FakeReader("o")
+    other.release.set()
+    # a different 500-char id sharing the first 64 chars is the same client
+    await manager.search("k", other, "two two", None, CAPS, client_id="x" * 64 + "y" * 436)
+    assert await t is None and manager.superseded == 1

@@ -36,6 +36,7 @@ def test_search_load_quick_mode_invariants(tmp_path):
     with_search = report["search_load"]["with_search"]
     assert with_search["ops"]["searches"] > 0 and with_search["ops"]["supersede_pairs"] > 0
     assert with_search["server_search_counters"]["max_running"] <= with_search["params"]["search_workers"]
+    assert all(report["search_clients"]["checks"].values()), report["search_clients"]
     single = report["search_single"]
     assert set(single) == {"small", "medium", "huge"}
     assert all(row["nohit"]["status"] == 200 and row["nohit"]["results"] == 0 for row in single.values())

@@ -567,12 +567,14 @@ SEARCH_MIX = ["frequent"] * 3 + ["frequent_short"] + ["rare"] * 3 + ["nohit"] * 
 
 
 async def search_page(be: Backend, sid: str, query: str, cursor: str | None = None,
-                      abandon_after: float | None = None) -> dict:
+                      abandon_after: float | None = None, client_id: str | None = None) -> dict:
     """One search page. ``abandon_after`` closes the connection after that many seconds (a
     disconnecting browser)."""
     params = {"q": query}
     if cursor:
         params["cursor"] = cursor
+    if client_id:
+        params["client_id"] = client_id
     t0 = time.perf_counter()
     try:
         coro = be.client.get(f"/api/sessions/{sid}/search", params=params)
@@ -733,32 +735,33 @@ async def phase_search_load(be: Backend, fixtures: dict[str, Path], report: dict
             page_ms_all.append(page["ms"])
             max_results_in_page = max(max_results_in_page, len(page["body"].get("results", [])))
 
-    async def one_search(r: random.Random, sid: str) -> None:
+    async def one_search(r: random.Random, sid: str, cid: str) -> None:
         kind = r.choice(SEARCH_MIX)
         stats["searches"] += 1
         abandon = r.uniform(0.01, 0.3) if r.random() < 0.12 else None
-        page = await search_page(be, sid, SEARCH_QUERIES[kind], abandon_after=abandon)
+        page = await search_page(be, sid, SEARCH_QUERIES[kind], abandon_after=abandon, client_id=cid)
         record(kind, page)
         cursor = (page.get("body") or {}).get("next_cursor")
         for _ in range(r.choice([0, 0, 1, 2])):
             if not cursor or page["status"] != 200:
                 break
-            page = await search_page(be, sid, SEARCH_QUERIES[kind], cursor)
+            page = await search_page(be, sid, SEARCH_QUERIES[kind], cursor, client_id=cid)
             stats["continuations"] += 1
             record(kind, page)
             cursor = (page.get("body") or {}).get("next_cursor")
 
-    async def supersede_pair(r: random.Random, sid: str) -> None:
+    async def supersede_pair(r: random.Random, sid: str, cid: str) -> None:
         a, b = r.sample(list(SEARCH_QUERIES), 2)
         stats["supersede_pairs"] += 1
-        first = asyncio.create_task(search_page(be, sid, SEARCH_QUERIES[a]))
+        first = asyncio.create_task(search_page(be, sid, SEARCH_QUERIES[a], client_id=cid))
         await asyncio.sleep(r.uniform(0.005, 0.15))
-        second = await search_page(be, sid, SEARCH_QUERIES[b])
+        second = await search_page(be, sid, SEARCH_QUERIES[b], client_id=cid)
         record(b, second)
         record(a, await first)
 
     async def browser(idx: int) -> None:
         r = random.Random(seed * 100 + idx)
+        cid = f"tab-{label}-{idx}"  # one per simulated browser window (per page load)
         while time.time() < stop_at:
             sid = r.choice(live_pool())
             if r.random() < 0.1:
@@ -772,10 +775,10 @@ async def phase_search_load(be: Backend, fixtures: dict[str, Path], report: dict
                     index_durations.append(res["index"])
                 other_durations.extend(res[k] for k in ("window", "agents", "tasks", "background"))
             elif r.random() < 0.2:
-                await supersede_pair(r, sid)
+                await supersede_pair(r, sid, cid)
             else:
                 # the browser opens the session and searches it at the same time
-                await asyncio.gather(open_session(be, sid, with_index=True), one_search(r, sid))
+                await asyncio.gather(open_session(be, sid, with_index=True), one_search(r, sid, cid))
                 stats["opens"] += 1
             await asyncio.sleep(r.uniform(0.0, 0.2))
 
@@ -855,11 +858,49 @@ async def phase_search_load(be: Backend, fixtures: dict[str, Path], report: dict
     report.setdefault("search_load", {})[label] = out
 
 
+async def phase_search_clients(be: Backend, fixtures: dict[str, Path], report: dict, *,
+                               rounds: int) -> None:
+    """Two windows (client_ids) per session: different queries on the SAME session must never
+    cancel each other; the same window's newer query supersedes its older one (200 superseded)."""
+    sessions = [await be.new_session(fixtures[c], f"clients-{c}") for c in ("medium", "huge")]
+    out = {"rounds": 0, "cross_superseded": 0, "own_superseded": 0, "own_not_superseded": 0,
+           "busy_503": 0, "errors": 0}
+    slow = [SEARCH_QUERIES[k] for k in ("nohit", "long", "unsafe_parse", "unicode_lines")]
+    for i in range(rounds):
+        for sid in sessions:
+            qa, qb, qa2 = slow[i % 4], slow[(i + 1) % 4], slow[(i + 2) % 4]
+            a = asyncio.create_task(search_page(be, sid, qa, client_id="win-A"))
+            b = asyncio.create_task(search_page(be, sid, qb, client_id="win-B"))
+            await asyncio.sleep(0.05)
+            a2 = asyncio.create_task(search_page(be, sid, qa2, client_id="win-A"))  # A moves on
+            ra, rb, ra2 = await asyncio.gather(a, b, a2)
+            out["rounds"] += 1
+            for page in (rb, ra2):
+                if page["status"] == 503:
+                    out["busy_503"] += 1
+                elif page["status"] != 200:
+                    out["errors"] += 1
+            if rb["status"] == 200 and rb["superseded"]:
+                out["cross_superseded"] += 1  # window B was cancelled by window A: must stay 0
+            if ra["status"] == 200:
+                out["own_superseded" if ra["superseded"] else "own_not_superseded"] += 1
+    m = await be.metrics()
+    out["server"] = m.get("search")
+    out["checks"] = {
+        "no_cross_client_cancel": out["cross_superseded"] == 0,
+        "own_older_query_superseded": out["own_superseded"] >= max(1, out["rounds"] // 2),
+        "no_errors": out["errors"] == 0,
+    }
+    report["search_clients"] = out
+
+
 async def phase_search(be: Backend, fixtures: dict[str, Path], report: dict, *, duration: float,
                        browsers: int, seed: int, scale: float, churn: bool,
-                       parts: str = "single,isolation,load") -> None:
+                       parts: str = "single,clients,isolation,load") -> None:
     if "single" in parts:
         await phase_search_single(be, fixtures, report)
+    if "clients" in parts:
+        await phase_search_clients(be, fixtures, report, rounds=8)
     if "isolation" in parts:
         await phase_search_isolation(be, fixtures, report, seconds=max(8.0, duration / 3))
     if "control" in parts and "load" not in parts:  # open-only control (also runs against main)
@@ -954,8 +995,8 @@ def main() -> None:
     ap.add_argument("--out", default=None)
     ap.add_argument("--no-churn", action="store_true", help="skip delete/reset churn (isolates scan load)")
     ap.add_argument("--assert-checks", action="store_true")
-    ap.add_argument("--search-parts", default="single,isolation,load",
-                    help="subset of the search phase: single,isolation,load (load = control + search arms),"
+    ap.add_argument("--search-parts", default="single,clients,isolation,load",
+                    help="subset of the search phase: single,clients,isolation,load (load = control + search arms),"
                          " control (open-only arm alone: run it against --tree main for the baseline)")
     ap.add_argument("--probe", action="store_true", help=argparse.SUPPRESS)
     ap.add_argument("--probe-y", default="", help=argparse.SUPPRESS)

@@ -266,6 +266,8 @@ class PerformanceConfig:
     # Threads in the dedicated whole-history search pool (issue #2030 stage 3); separate from
     # the cold-scan pool and the default executor. Clamped >= 1 at use.
     search_workers: int = 2
+    # Concurrent distinct search flights per session (extra requests answer 503 search_busy).
+    search_max_flights_per_session: int = 2
 
 
 @dataclass
@@ -375,6 +377,7 @@ class AppConfig:
             history_index_cache_max=perf_data.get("history_index_cache_max", 32),
             history_index_wait_s=perf_data.get("history_index_wait_s", 20.0),
             search_workers=perf_data.get("search_workers", 2),
+            search_max_flights_per_session=perf_data.get("search_max_flights_per_session", 2),
         )
         # Strip legacy key so next save cleans up old config files (migration handled by ProviderCatalogStore)
         data.pop("provider_catalog", None)
@@ -484,6 +487,7 @@ class AppConfig:
                 "history_index_cache_max": self.performance.history_index_cache_max,
                 "history_index_wait_s": self.performance.history_index_wait_s,
                 "search_workers": self.performance.search_workers,
+                "search_max_flights_per_session": self.performance.search_max_flights_per_session,
             },
         }
 

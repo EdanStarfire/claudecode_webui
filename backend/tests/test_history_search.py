@@ -470,3 +470,43 @@ def test_carried_cursor_stays_small_and_nothing_is_lost_when_parents_are_close_e
     results, pages = search_all(reader, "needle", caps)
     assert len(results) == 30 * 8 and sum(p.dropped_tool_hits for p in pages) == 0
     assert all(len(p.next_cursor or "") < 12_000 for p in pages)
+
+
+def test_parent_more_than_16_mib_before_its_tool_calls_is_attributed_across_pages(tmp_path):
+    """Grace / continuation path with a far parent: the hits wait in the cursor across several
+    pages and come out exactly as one big-cap scan produces them (a tool with three records,
+    the newest one wins; message hits keep findMatches' order)."""
+    path = tmp_path / "m.jsonl"
+    filler = json.dumps({"type": "assistant", "message_id": "f", "content": "y" * 1000,
+                         "metadata": {}}) + "\n"
+    with open(path, "w", encoding="utf-8") as f:
+        f.write(json.dumps({"type": "assistant", "message_id": "far", "content": "needle in the parent",
+                            "metadata": {"tool_uses": [{"id": "toolu_far"}, {"id": "toolu_far2"}]}}) + "\n")
+        for _ in range(18 * 1024):  # ~18 MiB
+            f.write(filler)
+        for status, result in (("pending", None), ("running", None), ("completed", "needle result")):
+            rec = {"type": "tool_call", "message_id": f"tc-{status}", "tool_use_id": "toolu_far",
+                   "name": "Bash", "input": {"command": "needle cmd"}, "status": status}
+            if result:
+                rec["result"] = result
+            f.write(json.dumps(rec) + "\n")
+        f.write(json.dumps({"type": "tool_call", "message_id": "tc2", "tool_use_id": "toolu_far2",
+                            "name": "Read", "input": {"p": "needle two"}, "status": "completed"}) + "\n")
+        f.write(json.dumps({"type": "user", "message_id": "u-last", "content": "needle last"}) + "\n")
+    reader = FileMessageHistoryReader(path)
+    assert path.stat().st_size > 16 * 1024 * 1024
+    big, _ = search_all(reader, "needle", BIG)
+    small, pages = search_all(
+        reader, "needle", SearchCaps(max_results=50, max_scan_bytes=2 * 1024 * 1024, max_wall_s=600, grace=1000.0)
+    )
+    assert small == big and len(pages) > 5
+    assert [(r["message_id"], r["field"], r["tool_id"]) for r in big] == [
+        ("u-last", "content", None),
+        ("far", "content", None),
+        ("far", "tool_input", "toolu_far"),
+        ("far", "tool_result", "toolu_far"),
+        ("far", "tool_input", "toolu_far2"),
+    ]
+    assert [r["occurrence_index"] for r in big[1:]] == [0, 1, 2, 3]
+    assert any(p.next_cursor and p.next_cursor.count(":") == 3 for p in pages)  # carried
+    assert sum(p.dropped_tool_hits for p in pages) == 0

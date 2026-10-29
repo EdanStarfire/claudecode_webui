@@ -31,11 +31,12 @@ async def test_search_is_relayed_with_query_string_and_no_cursor_substitution(pa
     payload = {"results": [], "next_cursor": None, "exhausted": True, "superseded": False}
     app, webui = _app(AsyncMock(return_value=JSONResponse(payload)))
     async with AsyncClient(transport=ASGITransport(app=app), base_url="http://t") as client:
-        resp = await client.get(path, params={"q": "needle", "cursor": "s1:h:5"})
+        resp = await client.get(path, params={"q": "needle", "cursor": "s1:h:5", "client_id": "tab-1"})
     assert resp.status_code == 200 and resp.json() == payload
     request, relayed_path = webui.backend_client.relay.call_args.args[:2]
     assert relayed_path == path
     assert request.query_params["q"] == "needle" and request.query_params["cursor"] == "s1:h:5"
+    assert request.query_params["client_id"] == "tab-1"
     webui.poll_relay.touch_session.assert_not_called()
     webui.poll_relay.wait_until_relayed.assert_not_called()
 

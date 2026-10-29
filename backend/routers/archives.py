@@ -70,7 +70,7 @@ def build_router(webui) -> APIRouter:
     @handle_exceptions("search archive history")
     async def search_archive_history(
         project_id: str, session_id: str, archive_id: str, request: Request, q: str,
-        cursor: str | None = None, limit: int | None = None,
+        cursor: str | None = None, limit: int | None = None, client_id: str | None = None,
     ):
         """Whole-history search of an archive (same contract as the live-session route)."""
         if not await webui.service.validate_project_exists(project_id):
@@ -79,7 +79,7 @@ def build_router(webui) -> APIRouter:
             return await run_search(
                 request,
                 lambda gone: webui.service.search_archive_history(
-                    session_id, archive_id, q, cursor, limit, gone
+                    session_id, archive_id, q, cursor, limit, client_id, gone
                 ),
             )
         except ValueError as e:
