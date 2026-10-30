@@ -1924,7 +1924,7 @@ describe('tail-first history (issue #2030, stage 1b)', () => {
       const { wrapper, messageStore } = await mountTail()
       await messageStore.ensureHistoryIndex(SESSION)
       // viewport at the top of the loaded list: the first loaded turn row is visible, none above it
-      expect(wrapper.vm.findPrevTurn()).toEqual({ kind: 'unloaded', messageId: 'msg-29', ordinal: 30, sizeHint: 29 })
+      expect(wrapper.vm.findPrevTurn()).toEqual({ kind: 'unloaded', messageId: 'msg-29', ordinal: 30, sizeHint: 29, cursor: 'b:29' })
     })
 
     it('a loaded turn above the viewport wins over the index', async () => {
@@ -1982,19 +1982,17 @@ describe('tail-first history (issue #2030, stage 1b)', () => {
       expect(setSticky).toHaveBeenLastCalledWith(expect.anything(), true)
     })
 
-    it('shows the jump banner with progress and a Cancel button that cancels the jump', async () => {
+    it('shows the jump banner and a Cancel button that cancels the jump', async () => {
       const { historyBackfill } = await import('@/composables/useHistoryBackfill')
       const { messageStore } = await mountTail()
       const cancel = vi.spyOn(historyBackfill, 'cancelJump').mockImplementation(() => {})
-      const start = Number(/^b:(\d+)$/.exec(messageStore.getHistoryState(SESSION).startCursor)[1])
       historyBackfill.statusBySession.value = new Map([[SESSION, {
         mode: 'auto', paused: null, loading: true, error: null,
-        jump: { messageId: 'msg-3', ordinal: 4, fromOffset: start + 20, toOffset: start - 20 },
+        jump: { ordinal: 4 },
       }]])
       await new Promise(r => setTimeout(r, 50))
       const banner = document.querySelector('[data-testid="history-banner"]')
-      expect(banner.textContent).toContain('Loading older history to reach turn 4')
-      expect(banner.textContent).toContain('50 %')
+      expect(banner.textContent).toContain('Loading turn 4…')
       await fireEvent.click(document.querySelector('[data-testid="history-jump-cancel"]'))
       expect(cancel).toHaveBeenCalledWith(SESSION)
       historyBackfill.statusBySession.value = new Map()
@@ -2020,62 +2018,60 @@ describe('tail-first history (issue #2030, stage 1b)', () => {
     it('a hit whose row is loaded just scrolls: no jump, no confirm', async () => {
       const { historyBackfill } = await import('@/composables/useHistoryBackfill')
       const { wrapper } = await mountTail()
-      const requestUntil = vi.spyOn(historyBackfill, 'requestUntil')
+      const jumpAround = vi.spyOn(historyBackfill, 'jumpAround')
       const confirm = vi.spyOn(window, 'confirm').mockReturnValue(true)
       await wrapper.vm.scrollToMessageMatch(hit('msg-45', 45))
-      expect(requestUntil).not.toHaveBeenCalled()
+      expect(jumpAround).not.toHaveBeenCalled()
       expect(confirm).not.toHaveBeenCalled()
       vi.restoreAllMocks()
     })
 
-    it('a hit before the loaded suffix uses the stage-2 jump with turn-navigation style meta, then scrolls to it', async () => {
+    it('a hit before the loaded suffix opens ONE around window by the hit cursor (an island), then scrolls to it; no confirm on a fast link', async () => {
       const { historyBackfill } = await import('@/composables/useHistoryBackfill')
       const { wrapper, messageStore, pinia } = await mountTail()
       const { useUIStore } = await import('@/stores/ui')
       const setSticky = vi.spyOn(useUIStore(pinia), 'setStickyToBottom')
-      const start = Number(/^b:(\d+)$/.exec(messageStore.getHistoryState(SESSION).startCursor)[1])
-      // Stands in for the backfill loop: applies the next older page, then settles the jump.
-      const jumpFn = vi.spyOn(historyBackfill, 'requestUntil').mockImplementation((sessionId) => {
-        const promise = (async () => {
-          messageStore.applyFetchedOlderPage(sessionId, await messageStore.fetchOlderPage(sessionId, { signal: new AbortController().signal }))
-        })()
-        return { promise, cancel: vi.fn() }
-      })
+      const suffixBefore = messageStore.messagesBySession.get(SESSION).length
+      const jumpFn = vi.spyOn(historyBackfill, 'jumpAround')
       const confirm = vi.spyOn(window, 'confirm').mockReturnValue(true)
 
       const result = await wrapper.vm.scrollToMessageMatch(hit('msg-5', 5))
-      expect(jumpFn).toHaveBeenCalledWith(SESSION, 'msg-5', { label: 'search result', fromOffset: start, toOffset: 5 })
-      expect(confirm).not.toHaveBeenCalled() // a small jump on a fast link: no confirm
+      expect(jumpFn).toHaveBeenCalledWith(SESSION, { cursor: 'b:5' }, { label: 'search result' })
+      expect(confirm).not.toHaveBeenCalled()
       expect(messageStore.isMessageLoaded(SESSION, 'msg-5')).toBe(true)
+      expect(messageStore.getIsland(SESSION)).toBeTruthy()
+      expect(messageStore.messagesBySession.get(SESSION)).toHaveLength(suffixBefore) // the suffix is untouched
       expect(result).toBeTruthy()
       expect(setSticky).toHaveBeenCalledWith(expect.anything(), false) // beginTurnJump
       vi.restoreAllMocks()
     })
 
-    it('slow link always asks first; declining starts no jump', async () => {
-      const { historyBackfill } = await import('@/composables/useHistoryBackfill')
-      const { wrapper } = await mountTail()
-      vi.spyOn(historyBackfill, 'getMode').mockReturnValue('manual')
-      const requestUntil = vi.spyOn(historyBackfill, 'requestUntil')
-      const confirm = vi.spyOn(window, 'confirm').mockReturnValue(false)
-      await expect(wrapper.vm.scrollToMessageMatch(hit('msg-5', 5))).resolves.toBe(false)
-      expect(confirm).toHaveBeenCalledTimes(1)
-      expect(confirm.mock.calls[0][0]).toMatch(/^Jump to search result\? Loads about \d/)
-      expect(requestUntil).not.toHaveBeenCalled()
-      vi.restoreAllMocks()
-    })
-
-    it('a fast link asks only for a big download', async () => {
+    it('a far hit on a fast link never asks, whatever the distance', async () => {
       const { historyBackfill } = await import('@/composables/useHistoryBackfill')
       const { wrapper, messageStore } = await mountTail()
       const start = Number(/^b:(\d+)$/.exec(messageStore.getHistoryState(SESSION).startCursor)[1])
-      const requestUntil = vi.spyOn(historyBackfill, 'requestUntil')
+      const jumpAround = vi.spyOn(historyBackfill, 'jumpAround')
       const confirm = vi.spyOn(window, 'confirm').mockReturnValue(false)
-      // far beyond ~2 MiB wire-equivalent: place the loaded start 50 MB after the hit
       messageStore.getHistoryState(SESSION).startCursor = `b:${start + 50 * 1024 * 1024}`
       await wrapper.vm.scrollToMessageMatch(hit('msg-5', 5))
+      expect(confirm).not.toHaveBeenCalled()
+      expect(jumpAround).toHaveBeenCalledTimes(1)
+      vi.restoreAllMocks()
+    })
+
+    it('slow link always asks first, naming the window size; declining starts no jump, OK does', async () => {
+      const { historyBackfill } = await import('@/composables/useHistoryBackfill')
+      const { wrapper } = await mountTail()
+      vi.spyOn(historyBackfill, 'getMode').mockReturnValue('manual')
+      const jumpAround = vi.spyOn(historyBackfill, 'jumpAround')
+      const confirm = vi.spyOn(window, 'confirm').mockReturnValue(false)
+      await expect(wrapper.vm.scrollToMessageMatch(hit('msg-5', 5))).resolves.toBe(false)
       expect(confirm).toHaveBeenCalledTimes(1)
-      expect(requestUntil).not.toHaveBeenCalled()
+      expect(confirm.mock.calls[0][0]).toBe('Jump to search result? Loads about 0.5 MB of history')
+      expect(jumpAround).not.toHaveBeenCalled()
+      confirm.mockReturnValue(true)
+      await wrapper.vm.scrollToMessageMatch(hit('msg-5', 5))
+      expect(jumpAround).toHaveBeenCalledTimes(1)
       vi.restoreAllMocks()
     })
 
@@ -2084,21 +2080,22 @@ describe('tail-first history (issue #2030, stage 1b)', () => {
       const { wrapper, messageStore } = await mountTail()
       await fireEvent.click(document.querySelector('.message-search-toggle'))
       await fireEvent.update(document.querySelector('.message-search-input'), 'x')
-      vi.spyOn(historyBackfill, 'requestUntil').mockImplementation((sessionId) => {
-        const err = Object.assign(new Error('Jump cancelled'), { reason: 'cancelled' })
+      vi.spyOn(historyBackfill, 'jumpAround').mockImplementation(() => {
+        const err = Object.assign(new Error('Jump cancelled'), { reason: 'aborted' })
         return { promise: Promise.reject(err), cancel: vi.fn() }
       })
       await wrapper.vm.scrollToMessageMatch(hit('msg-5', 5))
       expect(document.querySelector('.message-search-count').textContent).not.toContain("Couldn't locate")
 
-      vi.spyOn(historyBackfill, 'requestUntil').mockImplementation(() => {
-        const err = Object.assign(new Error('Turn jump failed: not-found'), { reason: 'not-found' })
+      vi.spyOn(historyBackfill, 'jumpAround').mockImplementation(() => {
+        const err = Object.assign(new Error('Message not found'), { reason: 'not-found' })
         return { promise: Promise.reject(err), cancel: vi.fn() }
       })
       await wrapper.vm.scrollToMessageMatch(hit('msg-5', 5))
       await new Promise(r => setTimeout(r, 20))
       expect(document.querySelector('.message-search-count').textContent).toContain("Couldn't locate")
       expect(messageStore.getHistoryState(SESSION).hasMoreBefore).toBe(true)
+      expect(messageStore.getIsland(SESSION)).toBeNull()
       vi.restoreAllMocks()
     })
 
@@ -2106,7 +2103,7 @@ describe('tail-first history (issue #2030, stage 1b)', () => {
       const { historyBackfill } = await import('@/composables/useHistoryBackfill')
       const { wrapper } = await mountTail()
       const cancel = vi.fn()
-      vi.spyOn(historyBackfill, 'requestUntil').mockImplementation(() => ({ promise: new Promise(() => {}), cancel }))
+      vi.spyOn(historyBackfill, 'jumpAround').mockImplementation(() => ({ promise: new Promise(() => {}), cancel }))
       wrapper.vm.scrollToMessageMatch(hit('msg-5', 5))
       await new Promise(r => setTimeout(r, 10))
       await wrapper.vm.scrollToMessageMatch(hit('msg-45', 45))
@@ -2145,7 +2142,7 @@ describe('tail-first history (issue #2030, stage 1b)', () => {
       const { historyBackfill } = await import('@/composables/useHistoryBackfill')
       const { wrapper } = await mountTail()
       const cancel = vi.fn()
-      vi.spyOn(historyBackfill, 'requestUntil').mockImplementation(() => ({ promise: new Promise(() => {}), cancel }))
+      vi.spyOn(historyBackfill, 'jumpAround').mockImplementation(() => ({ promise: new Promise(() => {}), cancel }))
       await fireEvent.click(document.querySelector('.message-search-toggle'))
       wrapper.vm.scrollToMessageMatch(hit('msg-5', 5))
       await new Promise(r => setTimeout(r, 10))
@@ -2292,10 +2289,10 @@ describe('tail-first history (issue #2030, stage 1b)', () => {
         expect(tracker.live.size).toBe(0)
 
         const { historyBackfill } = await import('@/composables/useHistoryBackfill')
-        vi.spyOn(historyBackfill, 'requestUntil').mockImplementation((sessionId) => {
+        vi.spyOn(historyBackfill, 'jumpAround').mockImplementation((sessionId, target) => {
           const promise = (async () => {
             container.querySelector('.messages-area').dispatchEvent(new WheelEvent('wheel')) // the user scrolls away mid-jump
-            messageStore.applyFetchedOlderPage(sessionId, await messageStore.fetchOlderPage(sessionId, { signal: new AbortController().signal }))
+            return messageStore.loadAround(sessionId, target)
           })()
           return { promise, cancel: vi.fn() }
         })
@@ -2336,15 +2333,151 @@ describe('tail-first history (issue #2030, stage 1b)', () => {
 
     it('the jump banner names the search result', async () => {
       const { historyBackfill } = await import('@/composables/useHistoryBackfill')
-      const { messageStore } = await mountTail()
-      const start = Number(/^b:(\d+)$/.exec(messageStore.getHistoryState(SESSION).startCursor)[1])
+      await mountTail()
       historyBackfill.statusBySession.value = new Map([[SESSION, {
         mode: 'auto', paused: null, loading: true, error: null,
-        jump: { messageId: 'msg-3', label: 'search result', fromOffset: start + 20, toOffset: start - 20 },
+        jump: { label: 'search result' },
       }]])
       await new Promise(r => setTimeout(r, 50))
-      expect(document.querySelector('[data-testid="history-banner"]').textContent).toContain('Loading older history to reach search result')
+      expect(document.querySelector('[data-testid="history-banner"]').textContent).toContain('Loading search result…')
       historyBackfill.statusBySession.value = new Map()
+    })
+  })
+
+  describe('island: a jumped-to window next to the live suffix (stage 3 PR 3C-1)', () => {
+    async function mountIsland(serverOptions = {}) {
+      const { createFakeHistoryServer } = await import('@/stores/__tests__/helpers/historyServer')
+      const mounted = await mountWithStore()
+      const all = [...messagesAt(0, 30), ...messagesAt(30, 60)]
+      const server = createFakeHistoryServer(all, { tailStart: 45, pageSize: 30, aroundBefore: 6, aroundAfter: 6, afterPageSize: 4, ...serverOptions })
+      apiMock.get.mockImplementation((url) => server.handle(url))
+      await mounted.messageStore.loadMessages(SESSION, null, 0, { window: 'tail', signal: new AbortController().signal })
+      await new Promise(r => setTimeout(r, 50))
+      stubScrollMechanics(mounted.container.querySelector('.messages-area'))
+      return { ...mounted, server, all }
+    }
+    // The list opens at the live end: bring the island (rows 0..) and its gap row into the mounted range.
+    async function showIslandTop(wrapper) {
+      await wrapper.vm.scrollToItemIndex(0, { align: 'start', behavior: 'auto' })
+      await new Promise(r => setTimeout(r, 80))
+    }
+    // ...and bring the gap row (just below the island's last row) into the mounted range.
+    async function showGap(wrapper) {
+      for (let index = 14; index < 40 && !document.querySelector('[data-testid="history-gap-row"]'); index += 2) {
+        await wrapper.vm.scrollToItemIndex(index, { align: 'start', behavior: 'auto' })
+        await new Promise(r => setTimeout(r, 40))
+      }
+    }
+
+    it('renders the island, then ONE gap row (size text, Load newer, Jump to latest), then the suffix', async () => {
+      const { messageStore, wrapper } = await mountIsland()
+      await messageStore.loadAround(SESSION, { cursor: 'b:10' })
+      await showGap(wrapper)
+      const gap = document.querySelector('[data-testid="history-gap-row"]')
+      expect(gap).toBeTruthy()
+      expect(document.querySelectorAll('[data-testid="history-gap-row"]')).toHaveLength(1)
+      expect(gap.textContent).toMatch(/of history not loaded/)
+      expect(document.querySelector('[data-testid="history-gap-load-newer"]')).toBeTruthy()
+      expect(document.querySelector('[data-testid="history-gap-jump-latest"]')).toBeTruthy()
+    })
+
+    it('with no island there is no gap row and the rows are the plain pipeline output', async () => {
+      await mountIsland()
+      expect(document.querySelector('[data-testid="history-gap-row"]')).toBeNull()
+    })
+
+    it('Load newer fetches one after-page bounded by the suffix start; reaching the suffix merges and removes the gap', async () => {
+      const { messageStore, server, wrapper } = await mountIsland()
+      await messageStore.loadAround(SESSION, { cursor: 'b:10' })
+      let guard = 0
+      while (messageStore.getIsland(SESSION) && guard++ < 20) {
+        await showGap(wrapper)
+        const button = document.querySelector('[data-testid="history-gap-load-newer"]')
+        if (button) await fireEvent.click(button)
+        await new Promise(r => setTimeout(r, 60))
+      }
+      expect(server.requests.filter(u => u.includes('after=')).length).toBeGreaterThan(1)
+      expect(server.requests.filter(u => u.includes('after=')).every(u => u.includes('until='))).toBe(true)
+      expect(messageStore.getIsland(SESSION)).toBeNull()
+      await new Promise(r => setTimeout(r, 50))
+      expect(document.querySelector('[data-testid="history-gap-row"]')).toBeNull()
+    })
+
+    it('Jump to latest scrolls to the live end and keeps the island loaded', async () => {
+      const { messageStore, wrapper } = await mountIsland()
+      await messageStore.loadAround(SESSION, { cursor: 'b:10' })
+      await showGap(wrapper)
+      const scroll = vi.spyOn(wrapper.vm.$el.querySelector('.messages-area'), 'scrollTop', 'set')
+      await fireEvent.click(document.querySelector('[data-testid="history-gap-jump-latest"]'))
+      await new Promise(r => setTimeout(r, 60))
+      expect(messageStore.getIsland(SESSION)).toBeTruthy()
+      expect(scroll).toHaveBeenCalled()
+    })
+
+    it('row keys stay unique across the interval join (the gap row has its own stable key)', async () => {
+      const { messageStore } = await mountIsland()
+      await messageStore.loadAround(SESSION, { cursor: 'b:10' })
+      await new Promise(r => setTimeout(r, 80))
+      const { computeItemKeys, buildIntervalItems } = await import('@/utils/displayableItems')
+      const island = messageStore.getIsland(SESSION)
+      const items = buildIntervalItems({
+        sessionId: SESSION, legEntries: [], getTaskIdForLaunchToolUse: () => null, isHookMessageAttached: () => false,
+        intervals: [
+          { messages: island.messages, toolCalls: island.toolCalls, hasMoreBefore: true, hasMoreAfter: true },
+          { messages: messageStore.messagesBySession.get(SESSION), toolCalls: [], hasMoreBefore: true, hasMoreAfter: false },
+        ],
+        gap: { fromCursor: island.endCursor, toCursor: 'b:45', approxBytes: 1000 },
+      })
+      const keys = computeItemKeys(items)
+      expect(new Set(keys).size).toBe(keys.length)
+      expect(keys).toContain(`gap:${island.endCursor}`)
+    })
+
+    it('scrolling to the top of the island pages the island upward (not the suffix)', async () => {
+      const { historyBackfill } = await import('@/composables/useHistoryBackfill')
+      const { messageStore, wrapper } = await mountIsland({ aroundBefore: 3 })
+      const olderIsland = vi.spyOn(historyBackfill, 'requestIslandOlder').mockResolvedValue(false)
+      const olderSuffix = vi.spyOn(historyBackfill, 'requestOlder')
+      await messageStore.loadAround(SESSION, { cursor: 'b:20' }) // the window starts below the file start: older history remains
+      await new Promise(r => setTimeout(r, 80))
+      olderIsland.mockClear()
+      await wrapper.vm.scrollToItemIndex(30, { align: 'start', behavior: 'auto' })
+      await new Promise(r => setTimeout(r, 80))
+      expect(olderIsland).not.toHaveBeenCalled() // far from the island's top
+      await wrapper.vm.scrollToItemIndex(0, { align: 'start', behavior: 'auto' })
+      await new Promise(r => setTimeout(r, 80))
+      expect(olderIsland).toHaveBeenCalledWith(SESSION)
+      expect(olderSuffix).not.toHaveBeenCalled()
+      vi.restoreAllMocks()
+    })
+
+    it('with the history index: Prev at the suffix top is the turn right before it (unloaded), Next at the island bottom the first turn after it; inside an interval both are plain loaded rows', async () => {
+      const { messageStore, wrapper, all } = await mountIsland({ aroundBefore: 3 })
+      const turnIds = all.filter(m => m.type === 'user').map(m => m.message_id)
+      const real = apiMock.get.getMockImplementation()
+      apiMock.get.mockImplementation((url) => (String(url).includes('/history_index')
+        ? Promise.resolve({ history_id: 'h1', total_bytes: all.length, turns: turnIds.map(id => { const i = all.findIndex(m => m.message_id === id); return [`b:${i}`, id, i] }), compactions: [], event_cursor: 1, epoch: 'e' })
+        : real(url)))
+      await messageStore.ensureHistoryIndex(SESSION)
+      await messageStore.loadAround(SESSION, { cursor: 'b:10' })
+      await new Promise(r => setTimeout(r, 80))
+      const island = messageStore.getIsland(SESSION)
+      expect(island.endCursor).toBe('b:16')
+      await showGap(wrapper)
+      const rows = [...document.querySelectorAll('.virtual-item-row')]
+      const gapIndex = Number(rows.find(r => r.querySelector('[data-testid="history-gap-row"]')).dataset.index)
+      // inside the island: the previous/next turns are loaded rows
+      await wrapper.vm.scrollToItemIndex(gapIndex - 3, { align: 'start', behavior: 'auto' })
+      await new Promise(r => setTimeout(r, 60))
+      expect(wrapper.vm.findPrevTurn()).toMatchObject({ kind: 'loaded' })
+      // viewport at the island's last rows: Next is the first turn after the island end (record 16), not loaded
+      await wrapper.vm.scrollToItemIndex(gapIndex - 1, { align: 'start', behavior: 'auto' })
+      await new Promise(r => setTimeout(r, 60))
+      expect(wrapper.vm.findNextTurn()).toMatchObject({ kind: 'unloaded', messageId: 'msg-16', cursor: 'b:16' })
+      // viewport at the top of the suffix (the first suffix turn): Prev is the turn right before the suffix start (record 44)
+      await wrapper.vm.scrollToItemIndex(gapIndex + 2, { align: 'start', behavior: 'auto' })
+      await new Promise(r => setTimeout(r, 60))
+      expect(wrapper.vm.findPrevTurn()).toMatchObject({ kind: 'unloaded', messageId: 'msg-44', cursor: 'b:44' })
     })
   })
 

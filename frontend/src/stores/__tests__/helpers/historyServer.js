@@ -17,6 +17,14 @@ export function createFakeHistoryServer(records, {
   // Error-with-status / `null` to answer 404 like a server without the endpoint.
   index = null,
   indexError = null,
+  // Issue #2030 (stage 3 PR 3C-1): `around=` / `around_id=` / `after=` windows (3A semantics, in records):
+  // `[snap_back(anchor - aroundBefore), anchor + aroundAfter)` where snap_back moves the start back to the
+  // nearest `user` record (a turn boundary); `after=` pages of `afterPageSize` records stopping at `until`.
+  aroundBefore = 6,
+  aroundAfter = 3,
+  afterPageSize = 5,
+  // Positions (record indices, ascending) a window start may snap back to; default: the nearest `user` record.
+  snapTo = null,
 } = {}) {
   const requests = []
 
@@ -64,6 +72,36 @@ export function createFakeHistoryServer(records, {
       }
       const end = Number(match[1])
       return slice(Math.max(0, end - pageSize), end)
+    }
+    if (params.has('around') || params.has('around_id')) {
+      let anchor
+      if (params.has('around')) {
+        const m = /^b:(\d+)$/.exec(params.get('around'))
+        if (!m || Number(m[1]) >= records.length) throw Object.assign(new Error('cursor_invalid'), { status: 409 })
+        anchor = Number(m[1])
+      } else {
+        const id = params.get('around_id')
+        anchor = records.findIndex(r => r.message_id === id || r.tool_use_id === id ||
+          (r.metadata?.tool_uses || []).some(t => t.id === id))
+        if (anchor < 0) throw Object.assign(new Error('message_not_found'), { status: 404 })
+      }
+      let from = Math.max(0, anchor - aroundBefore)
+      if (snapTo) {
+        let best = 0
+        for (const position of snapTo) { if (position <= from) best = position; else break }
+        from = best
+      } else {
+        while (from > 0 && records[from].type !== 'user') from--
+      }
+      const to = Math.min(records.length, anchor + aroundAfter)
+      return { ...slice(from, to), end_cursor: `b:${to}`, anchor_cursor: `b:${anchor}`, has_more_after: to < records.length }
+    }
+    if (params.has('after')) {
+      const from = Number(/^b:(\d+)$/.exec(params.get('after'))?.[1])
+      const limit = params.has('until') ? Number(/^b:(\d+)$/.exec(params.get('until'))[1]) : records.length
+      if (!(from >= 0) || from > limit) throw Object.assign(new Error('cursor_invalid'), { status: 409 })
+      const to = Math.min(limit, from + afterPageSize)
+      return { ...slice(from, to), end_cursor: `b:${to}`, has_more_after: to < limit }
     }
     throw new Error(`unexpected history request: ${url}`)
   }

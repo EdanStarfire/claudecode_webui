@@ -95,7 +95,7 @@ const skillMessages = computed(() => {
   const sessionId = sessionStore.currentSessionId
   if (!sessionId) return { running: null, content: null }
 
-  const allMessages = messageStore.messagesBySession.get(sessionId) || []
+  const allMessages = messageStore.loadedMessages(sessionId)
 
   // Find the tool result message for this skill invocation
   const toolResultIndex = allMessages.findIndex(msg =>

@@ -52,7 +52,7 @@ async function browserIndex(records, { archive = false } = {}) {
     legEntries: store.allTaskLegEntriesForSession(SID),
     getTaskIdForLaunchToolUse: store.getTaskIdForLaunchToolUse,
     isHookMessageAttached: (id) => store.isHookMessageAttached(SID, id),
-    historyComplete: true,
+    openBefore: false,
   })
   return {
     turns: items

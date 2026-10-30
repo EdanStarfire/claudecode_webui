@@ -68,7 +68,7 @@ function snapshot(store) {
     legEntries: store.allTaskLegEntriesForSession(SESSION_ID),
     getTaskIdForLaunchToolUse: store.getTaskIdForLaunchToolUse,
     isHookMessageAttached: (id) => store.isHookMessageAttached(SESSION_ID, id),
-    historyComplete: store.isHistoryComplete(SESSION_ID),
+    openBefore: !store.isHistoryComplete(SESSION_ID),
   })
   return normalizeForComparison({
     messages,
@@ -238,7 +238,7 @@ function displayItems(store) {
     legEntries: store.allTaskLegEntriesForSession(SESSION_ID),
     getTaskIdForLaunchToolUse: store.getTaskIdForLaunchToolUse,
     isHookMessageAttached: (id) => store.isHookMessageAttached(SESSION_ID, id),
-    historyComplete: store.isHistoryComplete(SESSION_ID),
+    openBefore: !store.isHistoryComplete(SESSION_ID),
   })
 }
 

@@ -14,8 +14,9 @@ const MB = 1024 * 1024
 const flush = () => new Promise(resolve => setTimeout(resolve, 0))
 
 // Issue #2030: turn navigation over the server history index. Prev works on a tail-only load by
-// extending the loaded suffix (guarded by a confirm for big/slow jumps); without a usable index
-// (loading, old server) it keeps the stage-1 lock until the history is complete.
+// opening ONE bounded window around the target turn (stage 3 PR 3C-1: historyBackfill.jumpAround;
+// only a slow link asks first, naming the window size); without a usable index (loading, old
+// server) it keeps the stage-1 lock until the history is complete.
 describe('SessionStatusBar turn navigation (issue #2030)', () => {
   beforeEach(() => apiMock.get.mockReset())
   afterEach(() => vi.restoreAllMocks())
@@ -23,7 +24,7 @@ describe('SessionStatusBar turn navigation (issue #2030)', () => {
   async function mountBar({ prevTurn, nextIndex = 5, startOffset = null } = {}) {
     const virtualNav = {
       findPrevTurn: vi.fn(() => (typeof prevTurn === 'function' ? prevTurn() : prevTurn)),
-      findNextTurnIndex: vi.fn(() => nextIndex),
+      findNextTurn: vi.fn(() => (typeof nextIndex === 'function' ? nextIndex() : (nextIndex == null ? null : { kind: 'loaded', index: nextIndex }))),
       scrollToItemIndex: vi.fn().mockResolvedValue(true),
       scrollToTurnMessage: vi.fn().mockResolvedValue(true),
       beginTurnJump: vi.fn(),
@@ -48,7 +49,7 @@ describe('SessionStatusBar turn navigation (issue #2030)', () => {
 
   const prev = () => document.querySelector('[aria-label="Jump to previous turn"]')
   const next = () => document.querySelector('[aria-label="Jump to next turn"]')
-  const target = (over = {}) => ({ kind: 'unloaded', messageId: 'turn-9', ordinal: 9, sizeHint: 1000, ...over })
+  const target = (over = {}) => ({ kind: 'unloaded', messageId: 'turn-9', cursor: 'b:1000', ordinal: 9, sizeHint: 1000, ...over })
 
   it('a loaded previous turn scrolls straight to it', async () => {
     const { virtualNav } = await mountBar({ prevTurn: { kind: 'loaded', index: 1 } })
@@ -116,94 +117,70 @@ describe('SessionStatusBar turn navigation (issue #2030)', () => {
     historyBackfill.statusBySession.value = new Map()
   })
 
-  describe('jump to a turn older than the loaded suffix', () => {
-    it('a small jump on a fast link proceeds without asking, then scrolls to the loaded turn', async () => {
+  describe('jump to a turn that is not loaded', () => {
+    const jumpAround = (impl) => vi.spyOn(historyBackfill, 'jumpAround').mockImplementation(impl || (() => ({ promise: Promise.resolve({ status: 'island' }), cancel() {} })))
+
+    it('a fast link proceeds without asking: one around window by the turn cursor, then scrolls to the turn', async () => {
       const confirm = vi.spyOn(window, 'confirm').mockReturnValue(true)
-      const requestUntil = vi.spyOn(historyBackfill, 'requestUntil').mockReturnValue({ promise: Promise.resolve(), cancel() {} })
-      const { virtualNav } = await mountBar({ prevTurn: target({ sizeHint: 4_000_000 }), startOffset: 5_000_000 })
+      const spy = jumpAround()
+      const { virtualNav } = await mountBar({ prevTurn: target({ cursor: 'b:4000000', sizeHint: 4_000_000 }), startOffset: 5_000_000 })
       prev().click()
       await flush()
       expect(confirm).not.toHaveBeenCalled()
-      expect(requestUntil).toHaveBeenCalledWith(SID, 'turn-9', { ordinal: 9, fromOffset: 5_000_000, toOffset: 4_000_000 })
+      expect(spy).toHaveBeenCalledWith(SID, { cursor: 'b:4000000' }, { label: 'turn 9', ordinal: 9 })
       expect(virtualNav.scrollToTurnMessage).toHaveBeenCalledWith('turn-9')
       // the sticky-to-bottom pin is dropped for the jump and re-derived once it ended
       expect(virtualNav.beginTurnJump).toHaveBeenCalledTimes(1)
       expect(virtualNav.endTurnJump).toHaveBeenCalledTimes(1)
-      expect(virtualNav.beginTurnJump.mock.invocationCallOrder[0]).toBeLessThan(requestUntil.mock.invocationCallOrder[0])
+      expect(virtualNav.beginTurnJump.mock.invocationCallOrder[0]).toBeLessThan(spy.mock.invocationCallOrder[0])
     })
 
-    it('a big jump asks first with the estimated size (default 5x wire ratio); declining loads nothing', async () => {
+    it('a far jump on a fast link is the same single window: no confirm, no size question', async () => {
       const confirm = vi.spyOn(window, 'confirm').mockReturnValue(false)
-      const requestUntil = vi.spyOn(historyBackfill, 'requestUntil')
-      const { virtualNav } = await mountBar({ prevTurn: target({ ordinal: 12, sizeHint: 0 }), startOffset: 30 * MB })
+      const spy = jumpAround()
+      await mountBar({ prevTurn: target({ ordinal: 12, sizeHint: 0, cursor: 'b:0' }), startOffset: 90 * MB })
       prev().click()
       await flush()
-      expect(confirm).toHaveBeenCalledWith('Jump to turn 12? Loads about 6.0 MB of older history')
-      expect(requestUntil).not.toHaveBeenCalled()
-      expect(virtualNav.scrollToTurnMessage).not.toHaveBeenCalled()
-      expect(prev().disabled).toBe(false) // not left stuck in the jumping state
+      expect(confirm).not.toHaveBeenCalled()
+      expect(spy).toHaveBeenCalledTimes(1)
     })
 
-    it('nothing is fetched or started while the confirm is open; OK starts the jump, Cancel never does', async () => {
-      const beforeRequests = () => apiMock.get.mock.calls.filter(([url]) => String(url).includes('before='))
-      const requestUntil = vi.spyOn(historyBackfill, 'requestUntil').mockReturnValue({ promise: Promise.resolve(), cancel() {} })
-      const { virtualNav } = await mountBar({ prevTurn: target({ sizeHint: 0 }), startOffset: 30 * MB })
+    it('Next walks the index too: an unloaded next turn (below an island) opens a window around it', async () => {
+      const spy = jumpAround()
+      const { virtualNav } = await mountBar({ prevTurn: null, nextIndex: () => target({ messageId: 'turn-30', ordinal: 30, cursor: 'b:300' }), startOffset: 5000 })
+      next().click()
+      await flush()
+      expect(spy).toHaveBeenCalledWith(SID, { cursor: 'b:300' }, { label: 'turn 30', ordinal: 30 })
+      expect(virtualNav.scrollToTurnMessage).toHaveBeenCalledWith('turn-30')
+    })
+
+    it('a slow link asks first naming the window size; nothing starts while the confirm is open, Cancel never starts it, OK does', async () => {
+      const spy = jumpAround()
+      const { virtualNav } = await mountBar({ prevTurn: target({ sizeHint: 0, cursor: 'b:0' }), startOffset: 30 * MB })
+      historyBackfill.statusBySession.value = new Map([[SID, { mode: 'manual', paused: null, loading: false, error: null }]])
+      await nextTick()
       const atConfirm = []
-      vi.spyOn(window, 'confirm').mockImplementation(() => {
-        // state at the moment the dialog is open: no jump, no request, no jump status/banner
-        atConfirm.push({
-          requestUntil: requestUntil.mock.calls.length, begin: virtualNav.beginTurnJump.mock.calls.length,
-          beforeRequests: beforeRequests().length, jumpStatus: historyBackfill.statusBySession.value.get(SID)?.jump ?? null,
-        })
+      const confirm = vi.spyOn(window, 'confirm').mockImplementation(() => {
+        atConfirm.push({ jump: spy.mock.calls.length, begin: virtualNav.beginTurnJump.mock.calls.length, jumpStatus: historyBackfill.statusBySession.value.get(SID)?.jump ?? null })
         return atConfirm.length > 1 // first Cancel, then OK
       })
       prev().click()
       await flush()
-      expect(atConfirm[0]).toEqual({ requestUntil: 0, begin: 0, beforeRequests: 0, jumpStatus: null })
-      expect(requestUntil).not.toHaveBeenCalled() // Cancel: nothing started
-      expect(virtualNav.beginTurnJump).not.toHaveBeenCalled()
-      expect(beforeRequests()).toHaveLength(0)
+      expect(confirm.mock.calls[0][0]).toBe('Jump to turn 9? Loads about 0.5 MB of history')
+      expect(atConfirm[0]).toEqual({ jump: 0, begin: 0, jumpStatus: null })
+      expect(spy).not.toHaveBeenCalled() // Cancel: nothing started
+      expect(prev().disabled).toBe(false) // not left stuck in the jumping state
       prev().click()
       await flush()
-      expect(atConfirm[1]).toEqual({ requestUntil: 0, begin: 0, beforeRequests: 0, jumpStatus: null })
-      expect(requestUntil).toHaveBeenCalledTimes(1) // only after OK
+      expect(atConfirm[1]).toEqual({ jump: 0, begin: 0, jumpStatus: null })
+      expect(spy).toHaveBeenCalledTimes(1) // only after OK
       expect(virtualNav.beginTurnJump).toHaveBeenCalledTimes(1)
-    })
-
-    it('uses the observed wire ratio once a page has been measured', async () => {
-      const confirm = vi.spyOn(window, 'confirm').mockReturnValue(false)
-      const { messageStore } = await mountBar({ prevTurn: target({ sizeHint: 0 }), startOffset: 30 * MB })
-      vi.spyOn(messageStore, 'getWireRatio').mockReturnValue(10)
-      prev().click()
-      await flush()
-      expect(confirm).toHaveBeenCalledWith('Jump to turn 9? Loads about 3.0 MB of older history')
-    })
-
-    it('accepting a big jump requests the turn and scrolls once loaded', async () => {
-      vi.spyOn(window, 'confirm').mockReturnValue(true)
-      const requestUntil = vi.spyOn(historyBackfill, 'requestUntil').mockReturnValue({ promise: Promise.resolve(), cancel() {} })
-      const { virtualNav } = await mountBar({ prevTurn: target({ sizeHint: 0 }), startOffset: 30 * MB })
-      prev().click()
-      await flush()
-      expect(requestUntil).toHaveBeenCalledTimes(1)
-      expect(virtualNav.scrollToTurnMessage).toHaveBeenCalledWith('turn-9')
-    })
-
-    it('a slow link always asks, even for a tiny jump', async () => {
-      const confirm = vi.spyOn(window, 'confirm').mockReturnValue(false)
-      await mountBar({ prevTurn: target({ sizeHint: 4_990_000 }), startOffset: 5_000_000 })
-      historyBackfill.statusBySession.value = new Map([[SID, { mode: 'manual', paused: null, loading: false, error: null }]])
-      await nextTick()
-      prev().click()
-      await flush()
-      expect(confirm).toHaveBeenCalledTimes(1)
-      expect(confirm.mock.calls[0][0]).toMatch(/^Jump to turn 9\? Loads about \d+ KB of older history$/)
       historyBackfill.statusBySession.value = new Map()
     })
 
-    it('a cancelled jump (or a session switch) leaves the list alone and re-enables the buttons', async () => {
-      const err = Object.assign(new Error('Jump cancelled'), { reason: 'cancelled' })
-      vi.spyOn(historyBackfill, 'requestUntil').mockReturnValue({ promise: Promise.reject(err), cancel() {} })
+    it('a cancelled / superseded jump (or a session switch) leaves the list alone and re-enables the buttons', async () => {
+      const err = Object.assign(new Error('Jump cancelled'), { reason: 'aborted' })
+      jumpAround(() => ({ promise: Promise.reject(err), cancel() {} }))
       const { virtualNav } = await mountBar({ prevTurn: target({ sizeHint: 4_000_000 }), startOffset: 5_000_000 })
       prev().click()
       await flush()
@@ -212,19 +189,17 @@ describe('SessionStatusBar turn navigation (issue #2030)', () => {
       expect(prev().disabled).toBe(false)
     })
 
-    it('shows the jump progress on the Prev button while loading', async () => {
+    it('shows a spinner on the Prev button while loading and allows one jump at a time', async () => {
       let resolveJump
-      vi.spyOn(historyBackfill, 'requestUntil').mockReturnValue({ promise: new Promise(r => { resolveJump = r }), cancel() {} })
+      jumpAround(() => ({ promise: new Promise(r => { resolveJump = r }), cancel() {} }))
       await mountBar({ prevTurn: target({ sizeHint: 1_000_000 }), startOffset: 5_000_000 })
       prev().click()
       await flush()
-      expect(prev().disabled).toBe(true) // one jump at a time
-      historyBackfill.statusBySession.value = new Map([[SID, { mode: 'auto', jump: { messageId: 'turn-9', ordinal: 9, fromOffset: 5_000_000, toOffset: 1_000_000 } }]])
-      await nextTick()
-      expect(document.querySelector('[data-testid=turn-jump-progress]').textContent).toBe('0%')
-      resolveJump()
+      expect(prev().disabled).toBe(true)
+      expect(document.querySelector('[data-testid=turn-jump-progress]')).toBeTruthy()
+      resolveJump({ status: 'island' })
       await flush()
-      historyBackfill.statusBySession.value = new Map()
+      expect(document.querySelector('[data-testid=turn-jump-progress]')).toBeNull()
     })
   })
 })

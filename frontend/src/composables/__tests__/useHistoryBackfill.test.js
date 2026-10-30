@@ -322,101 +322,168 @@ describe('history backfill scheduler (issue #2030, minimum pacing rules)', () =>
   })
 })
 
-describe('requestUntil — turn-jump priority pages (issue #2030 stage 2)', () => {
-  const settleJump = async (jump) => { await jump.promise.catch(() => {}) }
+describe('jumpAround / island pages (issue #2030 stage 3 PR 3C-1)', () => {
+  // The island lives in the message store (loadAround / fetchIslandPage / applyIslandPage there);
+  // the scheduler only drives it, publishes the status and keeps the cancel semantics.
+  function withIsland(t, { island = { hasMoreBefore: true, hasMoreAfter: true } } = {}) {
+    const calls = { loadAround: [], fetch: [], apply: [] }
+    t.messageStore.loadAround = vi.fn((sid, target, opts) => {
+      calls.loadAround.push({ sid, target, opts })
+      return new Promise((resolve, reject) => {
+        calls.resolve = () => resolve({ status: 'island' })
+        opts.signal.addEventListener('abort', () => reject(Object.assign(new Error('Jump cancelled'), { reason: 'aborted' })))
+        calls.reject = (reason) => reject(Object.assign(new Error(reason), { reason }))
+      })
+    })
+    t.messageStore.getIsland = () => island
+    t.messageStore.fetchIslandPage = vi.fn(async (sid, edge) => { calls.fetch.push(edge); return { edge, records: [] } })
+    t.messageStore.applyIslandPage = vi.fn((sid, page) => { calls.apply.push(page.edge); return true })
+    return calls
+  }
 
-  it('resolves immediately when the target is already loaded', async () => {
-    const t = setup({ pages: 3 })
-    t.state.loadedAfter = 0
-    const jump = t.scheduler.requestUntil(SID, 'm1', { ordinal: 2 })
-    await expect(jump.promise).resolves.toBeUndefined()
-    expect(t.state.fetched).toHaveLength(0)
-  })
-
-  it('fetches 512 KiB pages with no gap until the target is loaded, then resolves and clears the jump status', async () => {
-    const t = setup({ pages: 10, pageMs: 600 })
-    t.state.loadedAfter = 3
-    const jump = t.scheduler.requestUntil(SID, 'm1', { ordinal: 4, fromOffset: 900, toOffset: 100 })
-    expect(t.scheduler.statusBySession.value.get(SID).jump).toMatchObject({ messageId: 'm1', ordinal: 4 })
-    await jump.promise
-    expect(t.state.applied).toHaveLength(3)
-    expect(t.state.fetched.map(f => f.opts.maxBytes)).toEqual([512 * 1024, 512 * 1024, 512 * 1024])
-    // no inter-page gap even though pages took 600 ms each (the plain loop would sleep ~300 ms)
-    expect(t.state.sleeps.filter(ms => ms > 0 && ms < 10000).every(ms => ms <= 250)).toBe(true)
+  it('publishes the jump on the status while the window loads and clears it when it lands', async () => {
+    const t = setup({ pages: 3, slow: () => true })
+    const calls = withIsland(t)
+    const jump = t.scheduler.jumpAround(SID, { cursor: 'b:5' }, { label: 'turn 4' })
+    expect(calls.loadAround[0].target).toEqual({ cursor: 'b:5' })
+    expect(t.scheduler.statusBySession.value.get(SID).jump).toMatchObject({ label: 'turn 4' })
+    calls.resolve()
+    await expect(jump.promise).resolves.toEqual({ status: 'island' })
     expect(t.scheduler.statusBySession.value.get(SID)?.jump ?? null).toBeNull()
   })
 
-  it('works in slow-link (manual) mode, where nothing else loads', async () => {
-    const t = setup({ pages: 6, slow: () => true })
-    t.scheduler.start(SID)
-    await new Promise(r => setTimeout(r, 20))
-    expect(t.state.fetched).toHaveLength(0)
-    t.state.loadedAfter = 2
-    await t.scheduler.requestUntil(SID, 'm1').promise
-    expect(t.state.applied).toHaveLength(2)
-    expect(t.scheduler.getMode(SID)).toBe('manual')
+  it('a failed jump (busy / not-found / network) is published on the status for the banner; a cancel or supersede is not', async () => {
+    const t = setup({ pages: 3, slow: () => true })
+    const calls = withIsland(t)
+    const busy = t.scheduler.jumpAround(SID, { cursor: 'b:5' }, { label: 'turn 4' })
+    calls.reject('busy')
+    await expect(busy.promise).rejects.toMatchObject({ reason: 'busy' })
+    expect(t.scheduler.statusBySession.value.get(SID).jumpError).toMatch(/busy.*turn 4/)
+    expect(t.scheduler.statusBySession.value.get(SID).jump ?? null).toBeNull()
+    // the next jump clears it; a cancelled one publishes nothing
+    const next = t.scheduler.jumpAround(SID, { cursor: 'b:6' })
+    expect(t.scheduler.statusBySession.value.get(SID).jumpError).toBeNull()
+    next.cancel()
+    await expect(next.promise).rejects.toMatchObject({ reason: 'aborted' })
+    expect(t.scheduler.statusBySession.value.get(SID).jumpError ?? null).toBeNull()
+    const gone = t.scheduler.jumpAround(SID, { messageId: 'x' }, { label: 'search result' })
+    calls.reject('not-found')
+    await expect(gone.promise).rejects.toMatchObject({ reason: 'not-found' })
+    expect(t.scheduler.statusBySession.value.get(SID).jumpError).toMatch(/search result/)
   })
 
-  it('cancel rejects with reason "cancelled", clears the status and leaves what was loaded', async () => {
-    const t = setup({ pages: 50, slow: () => true })
-    t.state.loadedAfter = 40
-    let calls = 0
-    const real = t.messageStore.fetchOlderPage.getMockImplementation()
-    // the third page never completes until it is aborted (the user cancels while it is in flight)
-    t.messageStore.fetchOlderPage.mockImplementation((sid, opts) => (++calls < 3 ? real(sid, opts) : new Promise((_res, rej) => {
-      opts.signal.addEventListener('abort', () => rej(new DOMException('Aborted', 'AbortError')))
-    })))
-    const jump = t.scheduler.requestUntil(SID, 'm1', { ordinal: 9 })
-    for (let i = 0; i < 100 && calls < 3; i++) await new Promise(r => setTimeout(r, 1))
-    expect(calls).toBe(3)
-    jump.cancel()
-    await expect(jump.promise).rejects.toMatchObject({ reason: 'cancelled' })
-    expect(t.state.applied).toHaveLength(2)
-    expect(t.scheduler.statusBySession.value.get(SID)?.jump ?? null).toBeNull()
-    t.scheduler.stop(SID)
+  it('the published jump error expires on its own and never re-creates a cleared status', async () => {
+    vi.useFakeTimers()
+    try {
+      const t = setup({ pages: 3, slow: () => true })
+      const calls = withIsland(t)
+      const failed = t.scheduler.jumpAround(SID, { cursor: 'b:5' }, { label: 'turn 4' })
+      calls.reject('failed')
+      await expect(failed.promise).rejects.toMatchObject({ reason: 'failed' })
+      expect(t.scheduler.statusBySession.value.get(SID).jumpError).toBeTruthy()
+      await vi.advanceTimersByTimeAsync(8100)
+      expect(t.scheduler.statusBySession.value.get(SID).jumpError).toBeNull()
+      // stop() drops a pending expiry: no status is resurrected later
+      const again = t.scheduler.jumpAround(SID, { cursor: 'b:6' }, { label: 'turn 5' })
+      calls.reject('busy')
+      await expect(again.promise).rejects.toMatchObject({ reason: 'busy' })
+      t.scheduler.stop(SID)
+      t.scheduler.statusBySession.value = new Map()
+      await vi.advanceTimersByTimeAsync(8100)
+      expect(t.scheduler.statusBySession.value.has(SID)).toBe(false)
+    } finally {
+      vi.useRealTimers()
+    }
   })
 
-  it('cancelJump (the banner button) cancels the pending jump', async () => {
-    const t = setup({ pages: 50, slow: () => true })
-    t.state.loadedAfter = 40
-    const jump = t.scheduler.requestUntil(SID, 'm1')
+  it('cancel and cancelJump (the banner button) abort the request: reason "aborted", status cleared', async () => {
+    const t = setup({ pages: 3, slow: () => true })
+    withIsland(t)
+    const first = t.scheduler.jumpAround(SID, { cursor: 'b:5' })
+    first.cancel()
+    await expect(first.promise).rejects.toMatchObject({ reason: 'aborted' })
+    const second = t.scheduler.jumpAround(SID, { messageId: 'm1' })
     t.scheduler.cancelJump(SID)
-    await expect(jump.promise).rejects.toMatchObject({ reason: 'cancelled' })
+    await expect(second.promise).rejects.toMatchObject({ reason: 'aborted' })
+    expect(t.scheduler.statusBySession.value.get(SID)?.jump ?? null).toBeNull()
   })
 
-  it('rejects with "aborted" when the session stops being current mid-jump', async () => {
-    const t = setup({ pages: 50, pageMs: 50 })
-    t.state.loadedAfter = 40
-    const jump = t.scheduler.requestUntil(SID, 'm1')
-    t.pollingStore.currentSessionId = 'other'
-    await expect(jump.promise).rejects.toMatchObject({ reason: 'aborted' })
+  it('a second jump aborts the first request', async () => {
+    const t = setup({ pages: 3, slow: () => true })
+    const calls = withIsland(t)
+    const first = t.scheduler.jumpAround(SID, { cursor: 'b:5' })
+    const second = t.scheduler.jumpAround(SID, { cursor: 'b:9' })
+    await expect(first.promise).rejects.toMatchObject({ reason: 'aborted' })
+    expect(calls.loadAround[0].opts.signal.aborted).toBe(true)
+    calls.resolve()
+    await expect(second.promise).resolves.toBeTruthy()
   })
 
-  it('rejects with "not-found" when the history completes without the target', async () => {
-    const t = setup({ pages: 2 })
-    const jump = t.scheduler.requestUntil(SID, 'm1')
-    await expect(jump.promise).rejects.toMatchObject({ reason: 'not-found' })
-  })
-
-  it('a second jump supersedes the first', async () => {
-    const t = setup({ pages: 50, slow: () => true })
-    t.state.loadedAfter = 3
-    const first = t.scheduler.requestUntil(SID, 'm1')
-    const second = t.scheduler.requestUntil(SID, 'm2')
-    await expect(first.promise).rejects.toMatchObject({ reason: 'superseded' })
-    await second.promise
-  })
-
-  it('still pauses while the live stream is catching up (priority, not a bypass of the pause rules)', async () => {
-    let t
-    t = setup({ pages: 5, polling: { getLastBatchInfo: () => ({ at: t.clock(), count: CATCHUP_EVENT_COUNT }) } })
-    t.state.loadedAfter = 1
-    const jump = t.scheduler.requestUntil(SID, 'm1')
-    await new Promise(r => setTimeout(r, 5))
-    expect(t.state.fetched).toHaveLength(0)
-    t.pollingStore.getLastBatchInfo = () => null
+  it('works in slow-link (manual) mode and needs no backfill loop', async () => {
+    const t = setup({ pages: 6, slow: () => true })
+    const calls = withIsland(t)
+    const jump = t.scheduler.jumpAround(SID, { cursor: 'b:5' })
+    calls.resolve()
     await jump.promise
-    expect(t.state.fetched).toHaveLength(1)
+    expect(t.state.fetched).toHaveLength(0)
+    expect(t.scheduler.isRunning(SID)).toBe(false)
+  })
+
+  it('requestIslandOlder / requestIslandNewer fetch and apply one page each on demand', async () => {
+    const t = setup({ pages: 3, slow: () => true })
+    const calls = withIsland(t)
+    expect(await t.scheduler.requestIslandOlder(SID)).toBe(true)
+    expect(await t.scheduler.requestIslandNewer(SID)).toBe(true)
+    expect(calls.fetch).toEqual(['before', 'after'])
+    expect(calls.apply).toEqual(['before', 'after'])
+  })
+
+  it('does nothing for an edge that has nothing more, without an island, or while another island request runs', async () => {
+    const t = setup({ pages: 3, slow: () => true })
+    const calls = withIsland(t, { island: { hasMoreBefore: false, hasMoreAfter: true } })
+    expect(await t.scheduler.requestIslandOlder(SID)).toBe(false)
+    t.messageStore.getIsland = () => null
+    expect(await t.scheduler.requestIslandNewer(SID)).toBe(false)
+    t.messageStore.getIsland = () => ({ hasMoreBefore: true, hasMoreAfter: true })
+    const jump = t.scheduler.jumpAround(SID, { cursor: 'b:1' })
+    expect(await t.scheduler.requestIslandNewer(SID)).toBe(false) // an island request is already running
+    calls.resolve()
+    await jump.promise
+    expect(calls.fetch).toEqual([])
+  })
+
+  it('"Load newer" pressed while the scroll-up page loads waits for it and then loads its own page; the same edge is shared, never doubled', async () => {
+    const t = setup({ pages: 3, slow: () => true })
+    const calls = withIsland(t)
+    let release
+    t.messageStore.fetchIslandPage = vi.fn((sid, edge) => new Promise((resolve) => {
+      calls.fetch.push(edge)
+      if (edge === 'before') release = () => resolve({ edge, records: [] })
+      else resolve({ edge, records: [] })
+    }))
+    const older = t.scheduler.requestIslandOlder(SID)
+    const olderAgain = t.scheduler.requestIslandOlder(SID) // the scroll handler fires again: shares the running request
+    const newer = t.scheduler.requestIslandNewer(SID)       // the button: takes its turn after the running page
+    await new Promise(r => setTimeout(r, 20))
+    expect(calls.fetch).toEqual(['before']) // one request at a time
+    release()
+    expect(await older).toBe(true)
+    expect(await olderAgain).toBe(true)
+    expect(await newer).toBe(true)
+    expect(calls.fetch).toEqual(['before', 'after'])
+    expect(calls.apply).toEqual(['before', 'after'])
+  })
+
+  it('a failing island page publishes the error on the status and does not throw', async () => {
+    const t = setup({ pages: 3, slow: () => true })
+    withIsland(t)
+    t.messageStore.fetchIslandPage = vi.fn(async () => { throw Object.assign(new Error('boom'), { reason: 'failed' }) })
+    expect(await t.scheduler.requestIslandNewer(SID)).toBe(false)
+    expect(t.scheduler.statusBySession.value.get(SID).island).toMatchObject({ error: 'boom' })
+    // a retry that works clears it
+    t.messageStore.fetchIslandPage = vi.fn(async (sid, edge) => ({ edge, records: [] }))
+    expect(await t.scheduler.requestIslandNewer(SID)).toBe(true)
+    expect(t.scheduler.statusBySession.value.get(SID)?.island ?? null).toBeNull()
   })
 
   it('scheduleIndex fetches the index after the snapshots settle, but not on a slow link or when complete', async () => {

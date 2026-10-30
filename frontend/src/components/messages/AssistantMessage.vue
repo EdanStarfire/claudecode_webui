@@ -242,7 +242,7 @@ function isSubagentLaunchAnchor(tc) {
  */
 function segEnrichedToolCalls(seg, attachedTools, orphanedTools) {
   const sessionId = sessionStore.currentSessionId
-  const toolCalls = sessionId ? (messageStore.toolCallsBySession.get(sessionId) || []) : []
+  const toolCalls = sessionId ? messageStore.loadedToolCalls(sessionId) : []
 
   return segToolUses(seg, attachedTools, orphanedTools).map(toolUse => {
     const liveToolCall = toolCalls.find(tc => tc.id === toolUse.id)
