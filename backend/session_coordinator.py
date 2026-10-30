@@ -34,6 +34,7 @@ from .data_storage import DataStorageManager
 from .delivery_gate import DeliveryGate
 from .hooks.pretooluse_handler import InternalPermissionHandler
 from .litellm_proxy_manager import make_model_alias
+from .message_history_reader import WINDOW_MODES
 from .message_pipeline import MessagePipeline, MessagePipelineCallbacks
 from .models.legion_models import Comm, CommType, DeliveryPolicy, SenderType
 from .models.messages import (
@@ -2001,7 +2002,7 @@ class SessionCoordinator:
         plus #2109's AC1/AC2 closing the restart/pending-emission gaps), so
         no read-time synthesis is needed or performed.
         """
-        if window_params.get("window") or window_params.get("before"):
+        if any(map(window_params.get, WINDOW_MODES)):
             return await self._session_query.get_window_messages(session_id, **window_params)
         try:
             storage = self._storage_managers.get(session_id)

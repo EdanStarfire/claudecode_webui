@@ -117,6 +117,10 @@ def build(args):
 
         message_history_reader._PACE_THROTTLE = float(os.environ["LOAD_SEARCH_THROTTLE"])
         message_history_reader._PACE_AFTER_S = float(os.environ.get("LOAD_SEARCH_PACE_AFTER", "0.003"))
+    if os.environ.get("LOAD_RESOLVE_THROTTLE") is not None:  # experiment knob (id lookup pacing)
+        from backend import message_history_reader as _mhr
+
+        _mhr.RESOLVE_THROTTLE = float(os.environ["LOAD_RESOLVE_THROTTLE"])
     from backend.tenant_context import TenantContext
     from backend.web_server import BackendApp
 

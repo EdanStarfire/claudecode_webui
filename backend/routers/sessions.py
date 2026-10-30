@@ -11,7 +11,6 @@ from shared.exception_handlers import handle_exceptions
 
 from ..fixture_export import FixtureExportError
 from ..history_index import HistoryIndexBuildingError
-from ..message_history_reader import CursorInvalidError
 from ..session_lifecycle import is_deliverable
 from ._models import (
     FixtureExportRequest,
@@ -22,6 +21,7 @@ from ._models import (
     _validate_additional_directories,
 )
 from ._search import run_search
+from ._windows import map_window_errors, validate_window_params
 
 logger = logging.getLogger(__name__)
 
@@ -499,28 +499,41 @@ def build_router(webui) -> APIRouter:
         min_turns: int | None = None,
         max_records: int | None = None,
         max_bytes: int | None = None,
+        around: str | None = None,
+        around_id: str | None = None,
+        before_bytes: int | None = None,
+        after_bytes: int | None = None,
+        after: str | None = None,
+        until: str | None = None,
     ):
         """Get messages from a session with pagination metadata.
 
         Issue #2030: ``window=tail`` returns the newest turn-snapped window (+ ``latest_init``,
         ``event_cursor``/``epoch``); ``before=<opaque cursor>`` returns an older page (no
         event cursor). Without either, legacy ``limit``/``offset`` paging is unchanged.
+
+        Stage 3: ``around=<cursor>`` / ``around_id=<message_id or tool_use_id>`` (+
+        ``before_bytes``/``after_bytes``) return a window around a record and ``after=<cursor>``
+        (+ ``until=<cursor>``, ``max_bytes``) a forward page; like ``before`` they carry
+        ``end_cursor``/``has_more_after`` and no event cursor. 404 ``message_not_found``,
+        409 ``cursor_invalid``, 503 ``resolve_busy``.
         """
-        if window is not None and window != "tail":
-            raise HTTPException(status_code=422, detail="window must be 'tail'")
-        if window is not None and before is not None:
-            raise HTTPException(status_code=422, detail="window and before are mutually exclusive")
+        validate_window_params(
+            window=window, before=before, around=around, around_id=around_id, after=after,
+            until=until, before_bytes=before_bytes, after_bytes=after_bytes,
+        )
         if not await webui.service.get_session_exists(session_id):
             raise HTTPException(status_code=404, detail="Session not found")
-        try:
-            result = await webui.service.get_session_messages(
+        result = await map_window_errors(
+            webui.service.get_session_messages(
                 session_id, limit=limit, offset=offset, window=window, before=before,
                 min_turns=min_turns, max_records=max_records, max_bytes=max_bytes,
+                around=around, around_id=around_id, before_bytes=before_bytes,
+                after_bytes=after_bytes, after=after, until=until,
             )
-        except CursorInvalidError as e:
-            raise HTTPException(status_code=409, detail="cursor_invalid") from e
-        if before is not None:
-            # Older pages carry no event cursor: it only has meaning at the tail.
+        )
+        if before is not None or around is not None or around_id is not None or after is not None:
+            # Older/around/after pages carry no event cursor: it only has meaning at the tail.
             return result
         # Issue #1000: Include event queue cursor so frontend poll starts
         # exactly where REST left off, preventing duplicate message replay.

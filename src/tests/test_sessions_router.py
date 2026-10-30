@@ -273,3 +273,66 @@ async def test_window_contract_errors_pass_through(status, detail):
     resp = await _get(webui, "/api/sessions/sess-x/messages?before=b:3")
     assert resp.status_code == status
     assert resp.json()["detail"] == detail
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "query",
+    [
+        "around=b:100&before_bytes=1000&after_bytes=500",
+        "around_id=m7",
+        "after=b:100&until=b:900&max_bytes=4096",
+    ],
+)
+async def test_issue_2030_around_after_pages_forward_params_and_skip_cursor_resolution(query):
+    """Stage 3 PR 3A: around/around_id/after pages are forwarded verbatim and carry no event
+    cursor, so the relay never waits for a cursor checkpoint (same as ``before=``)."""
+    session_id = "sess-win"
+    seen = {}
+
+    async def side_effect(path, params=None, timeout=None):
+        seen["params"] = params
+        return {"messages": [], "start_cursor": "b:0", "end_cursor": "b:1", "has_more_after": False}
+
+    webui = _make_webui(side_effect)
+    webui.poll_relay = MagicMock()
+    resp = await _get(webui, f"/api/sessions/{session_id}/messages?{query}")
+    assert resp.status_code == 200 and "event_cursor" not in resp.json()
+    expected = dict(pair.split("=") for pair in query.split("&"))
+    for key, value in expected.items():
+        assert seen["params"][key] == (int(value) if value.isdigit() else value)
+    webui.poll_relay.touch_session.assert_not_called()
+    webui.poll_relay.wait_until_relayed.assert_not_called()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("status,detail", [(404, "message_not_found"), (409, "cursor_invalid"),
+                                           (422, "until requires after"), (503, "resolve_busy")])
+async def test_issue_2030_window_contract_errors_pass_through(status, detail):
+    request = httpx.Request("GET", "http://b/api/sessions/s/messages")
+
+    async def side_effect(path, params=None, timeout=None):
+        raise httpx.HTTPStatusError(
+            "err", request=request,
+            response=httpx.Response(status, json={"detail": detail}, headers={"Retry-After": "2"},
+                                    request=request),
+        )
+
+    webui = _make_webui(side_effect)
+    resp = await _get(webui, "/api/sessions/s/messages?around_id=zz")
+    assert resp.status_code == status and resp.json() == {"detail": detail}
+    if status == 503:
+        assert resp.headers["retry-after"] == "2"
+
+
+@pytest.mark.asyncio
+async def test_issue_2030_plain_404_is_still_session_not_found():
+    request = httpx.Request("GET", "http://b/x")
+
+    async def side_effect(path, params=None, timeout=None):
+        raise httpx.HTTPStatusError(
+            "nf", request=request, response=httpx.Response(404, json={"detail": "other"}, request=request)
+        )
+
+    resp = await _get(_make_webui(side_effect), "/api/sessions/s/messages?around=b:0")
+    assert resp.status_code == 404 and resp.json() == {"detail": "Session not found"}

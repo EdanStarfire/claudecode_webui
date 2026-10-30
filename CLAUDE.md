@@ -770,6 +770,7 @@ manually-run or genuinely remote Backend instead.
 - **`file_upload.py`**: Multipart file upload handling and session attachment storage
 - **`history_distiller.py`**: Session history summarization for archival context continuity
 - **`history_search.py`** / **`search_scan.py`**: Whole-history substring search (issue #2030 stage 3): `history_search.py` holds the query matcher / `findMatches`-parity matching / search cursors, `FileMessageHistoryReader.search` the backward scan (behind the reader seam), `search_scan.py` the separate search pool with single-flight, per-(session, client_id) supersede, a per-session flight cap, disconnect cancel and waiter cap (routes `GET .../search`)
+- **`message_history_reader.py`**: the `MessageHistoryReader` seam over `messages.jsonl` — `read_tail`/`read_before` (stage 1) plus stage 3 PR 3A `read_around`/`read_after`/`resolve_message_id` (`GET .../messages?around=|around_id=|after=`; `resolve_message_id` is the one O(file) step and runs on the cold-scan pool under kind `resolve:*`, see `SessionQuery.resolve_message_id`; the reader docstring has the DB implementation sketch)
 - **`legion_system.py`**: Top-level Legion system wiring (coordinator + overseer + comm router)
 - **`mcp_config_manager.py`**: Per-session MCP server configuration persistence (STDIO/SSE/HTTP, OAuth)
 - **`mock_sdk.py`**: `MockClaudeSDK` — fixture replay for testing without live SDK calls

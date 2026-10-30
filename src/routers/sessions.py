@@ -26,6 +26,9 @@ _polling_logger = get_logger('polling', category='POLL')
 # relay's own 30s upstream long-poll ceiling.
 _HISTORY_CURSOR_WAIT_TIMEOUT_SECONDS = 10.0
 
+# Issue #2030: modes whose pages carry no event_cursor/epoch (nothing to resolve at the tail).
+_NO_EVENT_CURSOR_MODES = ("before", "around", "around_id", "after")
+
 
 def _error_detail(response: httpx.Response) -> str:
     try:
@@ -52,7 +55,17 @@ def build_router(webui) -> APIRouter:
             )
         except httpx.HTTPStatusError as e:
             if e.response.status_code == 404:
-                raise HTTPException(status_code=404, detail="Session not found") from e
+                # Issue #2030 stage 3: an id lookup that finds nothing is a contract answer too.
+                detail = (
+                    "message_not_found" if _error_detail(e.response) == "message_not_found"
+                    else "Session not found"
+                )
+                raise HTTPException(status_code=404, detail=detail) from e
+            if e.response.status_code == 503 and _error_detail(e.response) == "resolve_busy":
+                raise HTTPException(
+                    status_code=503, detail="resolve_busy",
+                    headers={"Retry-After": e.response.headers.get("Retry-After", "2")},
+                ) from e
             if e.response.status_code in (409, 422):
                 # Issue #2030: cursor_invalid (409) / bad window params (422) are
                 # contract errors the browser handles — pass them through verbatim.
@@ -63,9 +76,9 @@ def build_router(webui) -> APIRouter:
         except httpx.RequestError as e:
             raise to_http_exception(e, degraded=is_backend_degraded(webui)) from e
 
-        if window_params and "before" in window_params:
-            # Issue #2030: older pages carry no event_cursor/epoch — nothing to resolve,
-            # and waiting on the relay checkpoint would stall every backfill page.
+        if window_params and any(k in window_params for k in _NO_EVENT_CURSOR_MODES):
+            # Issue #2030: older/around/after pages carry no event_cursor/epoch — nothing to
+            # resolve, and waiting on the relay checkpoint would stall every backfill page.
             return result
 
         backend_cursor = result.get("event_cursor")
@@ -116,18 +129,27 @@ def build_router(webui) -> APIRouter:
         min_turns: int | None = None,
         max_records: int | None = None,
         max_bytes: int | None = None,
+        around: str | None = None,
+        around_id: str | None = None,
+        before_bytes: int | None = None,
+        after_bytes: int | None = None,
+        after: str | None = None,
+        until: str | None = None,
     ):
         """Get messages from a session with pagination metadata — mirrors
         Backend's own route (limit/offset/404 handling unchanged), substituting
         the Frontend-local event_cursor the browser's next poll must use.
 
-        Issue #2030: ``window=tail`` / ``before=<cursor>`` are forwarded verbatim; only
-        ``window=tail`` carries an event cursor to resolve."""
+        Issue #2030: ``window=tail`` / ``before=<cursor>`` (stage 3: ``around``/``around_id``/
+        ``after`` + their modifiers) are forwarded verbatim; only ``window=tail`` carries an event
+        cursor to resolve."""
         window_params = {
             key: value
             for key, value in (
                 ("window", window), ("before", before), ("min_turns", min_turns),
                 ("max_records", max_records), ("max_bytes", max_bytes),
+                ("around", around), ("around_id", around_id), ("before_bytes", before_bytes),
+                ("after_bytes", after_bytes), ("after", after), ("until", until),
             )
             if value is not None
         }
