@@ -681,12 +681,39 @@ async function jumpToLaunch(lane) {
     const jump = historyBackfill.jumpAround(sessionId, { toolUseId }, { label: 'the launching message', expectParent: true })
     await jump.promise
     const index = await launchRowAfterJump(lane)
-    if (index != null) await scrollToItemIndexTrusted(index, { align: 'start', behavior: 'auto' })
+    if (index != null && await scrollToItemIndexTrusted(index, { align: 'start', behavior: 'auto' })) {
+      await bringLaunchCardIntoView(lane)
+    }
   } catch {
     // failed (the banner says why), cancelled or superseded: the loaded intervals are left as is
   } finally {
     endTurnJump()
   }
+}
+
+// The row start is aligned to the top; a long launching message puts the launch card (the Task/agent
+// tool card, `subagent-anchor-primary-*`) below the fold, which is what the user jumped for. When the
+// card is not fully visible, scroll it to just below the top edge (below the floating search bar when
+// it is open); when it is already visible, or not measurable, the message top stays aligned.
+async function bringLaunchCardIntoView(lane) {
+  const area = messagesArea.value
+  if (!area) return
+  // The virtualizer keeps correcting the jump's scroll offset while the rows around the target are
+  // measured: wait until the position has been stable for a few frames before adjusting it.
+  let last = null
+  let stable = 0
+  for (let frame = 0; frame < 40 && stable < 5; frame++) {
+    await new Promise(resolve => requestAnimationFrame(resolve))
+    stable = area.scrollTop === last ? stable + 1 : 0
+    last = area.scrollTop
+  }
+  const card = document.getElementById(`subagent-anchor-primary-${lane.taskId}-${lane.legIndex}`)
+  if (!card) return
+  const areaRect = area.getBoundingClientRect()
+  const cardRect = card.getBoundingClientRect()
+  if (cardRect.bottom <= areaRect.bottom - 8) return // already visible: keep the message top aligned
+  const margin = messageSearch.isOpen.value ? 56 : 16
+  setScrollOffset(area.scrollTop + (cardRect.top - areaRect.top) - margin)
 }
 
 // The launch row of a lane once the jump loaded it (after the list and virtualizer caught up).
@@ -713,6 +740,10 @@ const laneOffsets = computed(() => {
   // loaded is clamped to the top of the first loaded interval its activity overlaps (see clampedLegRow).
   const partial = !messageStore.isHistoryComplete(viewSessionId.value)
   let spans = null
+  // The gap row between an island and the suffix: a lane spanning it is drawn as a visible line.
+  const gapAt = currentIsland.value ? displayableItems.value.findIndex(item => item.type === 'gap') : -1
+  const gapRow = gapAt >= 0 ? measurements[gapAt] : null
+  const crossesGap = (top, bottom) => !!gapRow && top < gapRow.start && bottom > gapRow.end
 
   for (const entry of messageStore.allTaskLegEntriesForSession(viewSessionId.value)) {
     entry.legs.forEach((leg, legIndex) => {
@@ -736,7 +767,7 @@ const laneOffsets = computed(() => {
           const endItem = terminalIndex != null ? measurements[terminalIndex] : null
           bottom = endItem ? Math.max(endItem.end, top + 26) : top + 26 // no terminal row loaded: a short stub
         }
-        offsets.set(`${entry.task_id}:${legIndex}`, { top, bottom, height: Math.max(0, bottom - top), launchedEarlier: true })
+        offsets.set(`${entry.task_id}:${legIndex}`, { top, bottom, height: Math.max(0, bottom - top), launchedEarlier: true, crossesGap: crossesGap(top, bottom) })
         return
       }
       const primaryDomId = `subagent-anchor-primary-${entry.task_id}-${legIndex}`
@@ -758,7 +789,7 @@ const laneOffsets = computed(() => {
             : top + 26 // defensive fallback (terminal row not found)
       }
 
-      offsets.set(`${entry.task_id}:${legIndex}`, { top, bottom, height: Math.max(0, bottom - top) })
+      offsets.set(`${entry.task_id}:${legIndex}`, { top, bottom, height: Math.max(0, bottom - top), crossesGap: crossesGap(top, bottom) })
     })
   }
 

@@ -4,7 +4,8 @@
       v-for="lane in lanes"
       :key="lane.key"
       class="gutter-lane"
-      :style="{ top: `${lane.top}px`, height: `${lane.height}px` }"
+      :class="{ 'lane-line': lane.launchedEarlier || lane.crossesGap }"
+      :style="{ top: `${lane.top}px`, height: `${lane.height}px`, '--lane-color': lane.chipStyle.color }"
     >
       <button
         type="button"
@@ -18,6 +19,7 @@
       >
         <span class="chip-glyph">{{ '\u{1F916}' }}</span>
         <span v-if="lane.launchedEarlier" class="chip-earlier" aria-hidden="true">&uarr;</span>
+        <span v-if="lane.moreCount" class="chip-more" :title="`${lane.moreCount} more agents launched earlier`">+{{ lane.moreCount }}</span>
       </button>
     </div>
   </div>
@@ -66,6 +68,12 @@ const messageStore = useMessageStore()
 const CHIP_SIZE = 22
 const CHIP_GAP = 6
 const BASE_TOP = 8
+// Issue #2030 (stage 3 PR 3C-2): "launched earlier" chips have a 44x44 touch target. Chips that
+// stack on one spot (clamped legs share their interval's top) must not have hit areas that cover
+// each other, so while two or more are shown the whole stack uses a 44 + 2 px pitch; at most
+// MAX_EARLIER_CHIPS are drawn, the rest is counted in a "+k" label on the last one.
+const EARLIER_PITCH = 46
+const MAX_EARLIER_CHIPS = 5
 
 // One entry per (task_id, legIndex) — EVERY known leg, running or retired.
 const allLanes = computed(() => {
@@ -91,18 +99,28 @@ const lanes = computed(() => {
     withBounds.map(l => ({ id: `${l.taskId}:${l.legIndex}`, top: l.top, bottom: l.bottom }))
   )
 
-  return withBounds.map(l => {
+  // Clamped lanes in stack order; the ones past the cap are not drawn (counted on the last drawn).
+  const earlier = withBounds
+    .filter(l => l.launchedEarlier)
+    .sort((a, b) => (slotAssignment.get(`${a.taskId}:${a.legIndex}`) ?? 0) - (slotAssignment.get(`${b.taskId}:${b.legIndex}`) ?? 0))
+  const hidden = new Set(earlier.slice(MAX_EARLIER_CHIPS).map(l => `${l.taskId}:${l.legIndex}`))
+  const lastShown = earlier[Math.min(earlier.length, MAX_EARLIER_CHIPS) - 1]
+  const pitch = earlier.length >= 2 ? EARLIER_PITCH : CHIP_SIZE + CHIP_GAP
+
+  return withBounds.filter(l => !hidden.has(`${l.taskId}:${l.legIndex}`)).map(l => {
     const key = `${l.taskId}:${l.legIndex}`
     const slotIndex = slotAssignment.get(key) ?? 0
     const agentColor = getAgentColor(slugifyAgentName(l.taskId))
-    const offsetPx = BASE_TOP + slotIndex * (CHIP_SIZE + CHIP_GAP)
+    const offsetPx = BASE_TOP + slotIndex * pitch
     return {
+      moreCount: l === lastShown ? hidden.size : 0,
       key,
       taskId: l.taskId,
       legIndex: l.legIndex,
       top: l.top,
       height: l.height,
       launchedEarlier: !!l.launchedEarlier,
+      crossesGap: !!l.crossesGap,
       needsAttention: messageStore.hasOpenPermissionForTask(props.sessionId, l.taskId),
       tooltipLabel: l.leg.description || 'Subagent',
       chipStyle: {
@@ -110,6 +128,8 @@ const lanes = computed(() => {
         // (native CSS, no scroll-direction detection) gives the bidirectional pin behavior.
         top: `${offsetPx}px`,
         bottom: `${offsetPx}px`,
+        // A retired clamped lane's chip slides out under the running ones at the viewport edge, never over them.
+        ...(l.launchedEarlier ? { zIndex: l.leg.status === 'running' ? 6 : 4 } : {}),
         background: agentColor.bg,
         borderColor: agentColor.border,
         color: agentColor.accent,
@@ -155,6 +175,21 @@ function onChipClick(lane) {
   pointer-events: none;
 }
 
+/* Issue #2030 (stage 3 PR 3C-2): a lane that is clamped to the loaded history, or spans the gap row
+   between an island and the live end, is drawn as a thin line so its continuity is visible. Ordinary
+   lanes stay chip-only, as before. */
+.gutter-lane.lane-line::before {
+  content: '';
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: 50%;
+  width: 0;
+  border-left: 2px dashed var(--lane-color);
+  opacity: 0.55;
+  transform: translateX(-50%);
+}
+
 .lane-chip {
   position: sticky;
   width: 22px;
@@ -198,6 +233,19 @@ function onChipClick(lane) {
   color: var(--bs-body-color);
   background: var(--bs-body-bg);
   border-radius: 50%;
+  pointer-events: none;
+}
+
+.chip-more {
+  position: absolute;
+  top: 100%;
+  left: 50%;
+  transform: translateX(-50%);
+  margin-top: 3px;
+  font-size: 10px;
+  line-height: 1;
+  white-space: nowrap;
+  color: var(--bs-body-color);
   pointer-events: none;
 }
 
