@@ -2650,6 +2650,62 @@ describe('tail-first history (issue #2030, stage 1b)', () => {
       expect(chip()).toBeNull()
     })
 
+    describe('launch-card outline after the chip jump', () => {
+      const addCard = () => {
+        const card = document.createElement('div')
+        card.id = 'subagent-anchor-primary-task-launch-1-0'
+        document.body.appendChild(card)
+        restore.push(() => card.remove())
+        return card
+      }
+      let restore = []
+      afterEach(() => { restore.forEach(fn => fn()); restore = [] })
+      const mockReducedMotion = () => {
+        const original = window.matchMedia
+        window.matchMedia = vi.fn(() => ({ matches: true }))
+        restore.push(() => { window.matchMedia = original })
+      }
+      const jumpAndLand = async () => {
+        chip().click()
+        await new Promise(r => setTimeout(r, 400)) // jump + the scroll-stability wait
+      }
+
+      it('plays a one-shot pulse (Web Animations)', async () => {
+        await mountLegs([[3, 'launch-1']])
+        const card = addCard()
+        card.animate = vi.fn(() => ({ cancel: vi.fn() }))
+        await jumpAndLand()
+        expect(card.animate).toHaveBeenCalledTimes(1)
+        expect(card.style.outline).toBe('')
+        card.remove()
+      })
+
+      it('prefers-reduced-motion: no animation, a static 2px outline instead, removed again on unmount', async () => {
+        const { wrapper } = await mountLegs([[3, 'launch-1']])
+        mockReducedMotion()
+        const card = addCard()
+        card.animate = vi.fn()
+        await jumpAndLand()
+        expect(card.animate).not.toHaveBeenCalled()
+        expect(card.style.outline).toContain('2px solid')
+        wrapper.unmount()
+        expect(card.style.outline).toBe('')
+      })
+
+      it('a user scroll ends the outline', async () => {
+        const { container } = await mountLegs([[3, 'launch-1']])
+        mockReducedMotion()
+        const card = addCard()
+        await jumpAndLand()
+        expect(card.style.outline).toContain('2px solid')
+        const area = container.querySelector('.messages-area')
+        area.dispatchEvent(new Event('wheel')) // opens a user gesture window
+        area.scrollTop = 123
+        area.dispatchEvent(new Event('scroll'))
+        expect(card.style.outline).toBe('')
+      })
+    })
+
     it('slow link: the chip asks first, naming the window size; declining starts no jump', async () => {
       const { historyBackfill } = await import('@/composables/useHistoryBackfill')
       await mountLegs([[3, 'launch-1']])

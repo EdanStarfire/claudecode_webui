@@ -717,11 +717,37 @@ async function bringLaunchCardIntoView(lane) {
     const margin = messageSearch.isOpen.value ? 56 : 16
     setScrollOffset(area.scrollTop + (cardRect.top - areaRect.top) - margin)
   }
-  // A short outline pulse on the launch card (no CSS state to clean up; absent in test DOMs).
-  card.animate?.(
-    [{ outline: '2px solid var(--bs-primary, #0d6efd)', outlineOffset: '2px' }, { outline: '2px solid transparent', outlineOffset: '2px' }],
-    { duration: 1800, easing: 'ease-out' },
+  pulseLaunchCard(card)
+}
+
+// A short outline on the launch card after a chip jump: a fading pulse, or (prefers-reduced-motion) a
+// static outline for the same 1.8 s. One at a time; stopped by a user scroll, a session switch and unmount.
+const LAUNCH_PULSE_MS = 1800
+const LAUNCH_PULSE_OUTLINE = '2px solid var(--bs-primary, #0d6efd)'
+let launchPulse = null // { card, animation, timer }
+
+function stopLaunchPulse() {
+  if (!launchPulse) return
+  clearTimeout(launchPulse.timer)
+  launchPulse.animation?.cancel()
+  if (launchPulse.static) { launchPulse.card.style.outline = ''; launchPulse.card.style.outlineOffset = '' }
+  launchPulse = null
+}
+
+function pulseLaunchCard(card) {
+  stopLaunchPulse()
+  const reduced = typeof window !== 'undefined' && window.matchMedia?.('(prefers-reduced-motion: reduce)').matches
+  if (reduced) {
+    card.style.outline = LAUNCH_PULSE_OUTLINE
+    card.style.outlineOffset = '2px'
+    launchPulse = { card, static: true, timer: setTimeout(stopLaunchPulse, LAUNCH_PULSE_MS) }
+    return
+  }
+  const animation = card.animate?.( // absent in test DOMs
+    [{ outline: LAUNCH_PULSE_OUTLINE, outlineOffset: '2px' }, { outline: '2px solid transparent', outlineOffset: '2px' }],
+    { duration: LAUNCH_PULSE_MS, easing: 'ease-out' },
   )
+  if (animation) launchPulse = { card, animation, timer: setTimeout(stopLaunchPulse, LAUNCH_PULSE_MS) }
 }
 
 // One animation frame, but never stuck in a hidden tab (rAF does not fire there).
@@ -916,7 +942,7 @@ function cancelSearchJump() {
 watch(() => messageSearch.isOpen.value, (open) => {
   if (!open) { navigationSeq++; cancelSearchJump(); stopKeeper() }
 })
-watch(viewSessionId, () => { navigationSeq++; cancelSearchJump(); stopKeeper() })
+watch(viewSessionId, () => { navigationSeq++; cancelSearchJump(); stopKeeper(); stopLaunchPulse() })
 watch(() => messageSearch.query.value, () => { stopKeeper(); clearActiveHighlight() })
 
 function isUnloadedHit(match) {
@@ -1353,6 +1379,7 @@ function onScroll() {
   // target near the live end is clamped to the bottom while the rows below are still being measured,
   // and that transient position must not re-pin the list to the bottom when they grow.
   if (turnJumpsOpen > 0) return
+  stopLaunchPulse() // the user took over the scroll
   const el = messagesArea.value
   if (!el) return
   recomputeStickyFromScroll(el)
@@ -1429,6 +1456,7 @@ onMounted(() => {
 })
 
 onUnmounted(() => {
+  stopLaunchPulse()
   const el = messagesArea.value
   if (el) {
     el.removeEventListener('wheel', renewGestureWindow)
@@ -1493,6 +1521,7 @@ onDeactivated(() => {
   navigationSeq++
   cancelSearchJump()
   stopKeeper()
+  stopLaunchPulse()
   clearActiveHighlight()
 })
 
