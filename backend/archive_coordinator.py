@@ -116,15 +116,24 @@ class ArchiveCoordinator:
     async def get_archive_messages(
         self, session_id: str, archive_id: str, offset: int = 0, limit: int | None = 50,
         window: str | None = None, before: str | None = None, min_turns: int | None = None,
-        max_records: int | None = None, max_bytes: int | None = None,
+        max_records: int | None = None, max_bytes: int | None = None, **windowed: Any,
     ) -> dict:
         """Read paginated messages from an archive, converted to websocket format.
+
+        Issue #2030 stage 3 PR 3A: ``around`` / ``around_id`` / ``after`` (+ ``before_bytes`` /
+        ``after_bytes`` / ``until``) arrive in ``windowed`` and go to the same windowed reader as
+        live sessions (the id lookup on the cold-scan pool, keyed ``<sid>/archive/<aid>``).
 
         Issue #2030: ``window="tail"`` / ``before=<cursor>`` use the same byte-cursor
         reader as live sessions (archives return no event_cursor/epoch).
         """
         if not self.legion_system:
             return {"messages": [], "total_count": 0, "offset": offset, "has_more": False}
+        if any(map(windowed.get, ("around", "around_id", "after"))):
+            return await self._coordinator._session_query.get_archive_window_messages(
+                session_id, archive_id, self.legion_system.archive_manager, max_bytes=max_bytes,
+                **windowed
+            )
         if window is not None or before is not None:
             return await self.legion_system.archive_manager.get_archive_window(
                 session_id, archive_id, before=before,

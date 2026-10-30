@@ -10,6 +10,17 @@ The file implementation reads backward from EOF (``read_tail``) or from a cursor
 window rather than the size of the file. Lines are split on ``\\n`` only — never
 ``str.splitlines()``, which also breaks on U+2028/U+2029/U+0085 and would fragment a
 record written with ``ensure_ascii=False`` (see ``DataStorageManager.read_messages``).
+
+Windowed navigation (issue #2030 stage 3 PR 3A) adds three seam methods beyond tail/before:
+``read_around(cursor, budget)`` (a window around a record: start snapped back to a turn boundary,
+end at a record boundary), ``read_after(cursor, budget, until)`` (a forward page) and
+``resolve_message_id(id)`` (message_id or tool_use_id -> cursor; the only O(file) step, so the
+caller runs it on the cold-scan pool). A database implementation maps them to keyed queries:
+records keyed by a monotonically increasing sequence (the opaque cursor), ``around`` =
+``seq < c ORDER BY seq DESC`` bounded by bytes and snapped to the nearest preceding turn-boundary
+row (an indexed ``is_turn_start`` flag) plus ``seq >= c ORDER BY seq`` bounded by bytes; ``after`` =
+``seq >= c AND seq < until`` bounded by bytes; ``resolve_message_id`` = a point lookup on a unique
+index over ``message_id`` and a secondary index over ``tool_use_id`` -> parent row (no pool needed).
 """
 
 import asyncio
@@ -35,6 +46,10 @@ logger = logging.getLogger(__name__)
 CHUNK_SIZE = 64 * 1024
 _PROBE_SIZE = 4096
 _CURSOR_PREFIX = "b:"
+# Duty-cycle throttle of the id lookup (the O(file) step): sleep this multiple of each 1 MiB batch's
+# busy time (25 % duty), so concurrent lookups of a huge file leave the GIL to the event loop and the
+# critical-path reads of other sessions (the index scan and the search do the same).
+RESOLVE_THROTTLE = 3.0
 
 # Turn boundary (documented twice, keep in sync with the browser):
 #   type == "user" and not metadata.has_tool_results and not a compaction continuation record
@@ -54,6 +69,18 @@ class CursorInvalidError(Exception):
     """The cursor does not point at the start of a line (file rewritten, or garbage)."""
 
 
+class MessageNotFoundError(Exception):
+    """No record carries the requested message_id / tool_use_id (route answers 404)."""
+
+
+class ArchiveNotFoundError(Exception):
+    """The archive of a windowed read does not exist / its path is unsafe (route answers 404)."""
+
+
+class ResolveBusyError(Exception):
+    """An id lookup could not get a pool slot within its waiter cap (route answers 503)."""
+
+
 @dataclass(frozen=True)
 class WindowBudget:
     """Bounds for one window. ``min_turns`` user turns are included unless a cap hits first
@@ -69,6 +96,22 @@ class WindowBudget:
     last_turn_guarantee: bool = True
 
 
+@dataclass(frozen=True)
+class AroundBudget:
+    """Byte budgets of an ``around`` window: up to ``before_bytes`` before the anchor (the start is
+    snapped back to a turn boundary, which may exceed the budget up to ``hard_ceiling_bytes`` so the
+    anchor's turn is whole) and ``after_bytes`` from the anchor on (cut at a record boundary)."""
+
+    before_bytes: int = 384 * 1024
+    after_bytes: int = 128 * 1024
+    hard_ceiling_bytes: int = 2 * 1024 * 1024
+
+
+@dataclass(frozen=True)
+class AfterBudget:
+    max_bytes: int = 256 * 1024
+
+
 @dataclass
 class HistoryWindow:
     records: list[dict[str, Any]]
@@ -79,9 +122,13 @@ class HistoryWindow:
     total_bytes: int
     # Instrumentation only (not serialized to the API): bytes actually read from disk.
     bytes_read: int = field(default=0, compare=False)
+    # ``around`` / ``after`` windows only (None for tail / before pages, whose payload is unchanged).
+    end_cursor: str | None = None
+    has_more_after: bool | None = None
+    anchor_cursor: str | None = None
 
     def to_payload(self) -> dict[str, Any]:
-        return {
+        payload: dict[str, Any] = {
             "messages": self.records,
             "start_cursor": self.start_cursor,
             "has_more_before": self.has_more_before,
@@ -89,12 +136,26 @@ class HistoryWindow:
             "snapped": self.snapped,
             "total_bytes": self.total_bytes,
         }
+        if self.end_cursor is not None:
+            payload["end_cursor"] = self.end_cursor
+            payload["has_more_after"] = bool(self.has_more_after)
+        if self.anchor_cursor is not None:
+            payload["anchor_cursor"] = self.anchor_cursor
+        return payload
 
 
 class MessageHistoryReader(Protocol):
     async def read_tail(self, budget: WindowBudget) -> HistoryWindow: ...
 
     async def read_before(self, cursor: str, budget: WindowBudget) -> HistoryWindow: ...
+
+    async def read_around(self, cursor: str, budget: "AroundBudget") -> HistoryWindow: ...
+
+    async def read_after(
+        self, cursor: str, budget: "AfterBudget", until: str | None = None
+    ) -> HistoryWindow: ...
+
+    def resolve_message_id(self, message_id: str, cancel: Any = None) -> str | None: ...
 
     async def scan_backward(
         self, prefilter: str, max_bytes: int, predicate: Callable[[dict], bool] | None = None
@@ -145,6 +206,34 @@ def _is_turn_boundary(record: dict) -> bool:
     return not (isinstance(metadata, dict) and metadata.get("has_tool_results"))
 
 
+def _is_plain_id(value: Any) -> bool:
+    """An id the raw find can look for: non-empty, bounded ASCII (ids are uuids / ``toolu_*``), no
+    characters JSON would escape, so the quoted token is byte-identical in the stored line."""
+    return (
+        isinstance(value, str)
+        and value.isascii()
+        and 0 < len(value) <= 256
+        and '"' not in value
+        and "\\" not in value
+        and all(ord(c) >= 0x20 for c in value)
+    )
+
+
+def _record_has_id(record: dict, ident: str) -> bool:
+    """Confirmation of a resolve candidate: the record's own ``message_id``/``id`` (the browser's
+    ``resolveMessageId``), its ``tool_use_id`` (a tool_call record), or a ``tool_uses`` entry id of
+    the message that launched the tool."""
+    if record.get("id") == ident or record.get("message_id") == ident:
+        return True
+    if record.get("tool_use_id") == ident:
+        return True
+    metadata = record.get("metadata")
+    uses = metadata.get("tool_uses") if isinstance(metadata, dict) else None
+    return isinstance(uses, list) and any(
+        isinstance(u, dict) and u.get("id") == ident for u in uses
+    )
+
+
 def _is_thinking_tokens(record: dict) -> bool:
     metadata = record.get("metadata")
     subtype = (metadata.get("subtype") if isinstance(metadata, dict) else None) or record.get(
@@ -172,10 +261,67 @@ class FileMessageHistoryReader:
         offset = decode_cursor(cursor)
         return await asyncio.to_thread(self._read_window, offset, budget)
 
+    async def read_around(self, cursor: str, budget: AroundBudget) -> HistoryWindow:
+        offset = decode_cursor(cursor)
+        return await asyncio.to_thread(self._read_around, offset, budget)
+
+    async def read_after(
+        self, cursor: str, budget: AfterBudget, until: str | None = None
+    ) -> HistoryWindow:
+        offset = decode_cursor(cursor)
+        until_offset = decode_cursor(until) if until is not None else None
+        return await asyncio.to_thread(self._read_after, offset, budget, until_offset)
+
     async def scan_backward(
         self, prefilter: str, max_bytes: int, predicate: Callable[[dict], bool] | None = None
     ) -> dict | None:
         return await asyncio.to_thread(self._scan_backward, prefilter.encode(), max_bytes, predicate)
+
+    def resolve_message_id(self, message_id: str, cancel: Any = None) -> str | None:
+        """Cursor of the record identified by ``message_id`` (a record's own ``message_id``/``id``,
+        or a ``tool_use_id``: then the message that lists the tool in ``metadata.tool_uses``, else
+        the ``tool_call`` record), or None. Synchronous O(file) worker-thread code (the cold-scan
+        pool): a raw bytes find of the quoted id in 1 MiB batches, each candidate line confirmed by
+        parsing it (an id quoted inside message content is not a match). Earliest record wins;
+        ``cancel`` is checked between batches (a cancelled scan returns None)."""
+        if not _is_plain_id(message_id):
+            return None
+        token = json.dumps(message_id, ensure_ascii=False).encode()
+        try:
+            f = open(self.path, "rb")
+        except FileNotFoundError:
+            return None
+        with f:
+            carry = b""
+            consumed = 0  # file offset of the first byte of `carry`
+            while True:
+                if cancel is not None and cancel.is_set():
+                    return None
+                batch_start = time.perf_counter()
+                chunk = f.read(1024 * 1024)
+                if not chunk:
+                    break
+                data = carry + chunk
+                complete = data.rfind(b"\n") + 1  # bytes [0, complete) are whole lines
+                if complete == 0:
+                    carry = data
+                    continue
+                pos = 0
+                while (hit := data.find(token, pos, complete)) != -1:
+                    line_start = data.rfind(b"\n", 0, hit) + 1
+                    line_end = data.find(b"\n", hit, complete)
+                    record = self._try_json(data[line_start:line_end])  # (a legacy-format line
+                    if record is not None and _record_has_id(record, message_id):  # is no reason
+                        return encode_cursor(consumed + line_start)  # to fail the lookup)
+                    pos = line_end + 1
+                carry = data[complete:]
+                consumed += complete
+                time.sleep((time.perf_counter() - batch_start) * RESOLVE_THROTTLE)
+            if carry and token in carry:  # last line without a final newline (complete JSON only)
+                record = self._try_json(carry)
+                if record is not None and _record_has_id(record, message_id):
+                    return encode_cursor(consumed)
+        return None
 
     def iter_matching(
         self, prefilters: tuple[str, ...], *, cancel: Any = None
@@ -450,51 +596,7 @@ class FileMessageHistoryReader:
                         raise CursorInvalidError(encode_cursor(before_offset))
                 end = before_offset
 
-            selected: list[tuple[int, bytes]] = []  # newest-first
-            bytes_used = 0
-            counted = 0
-            turns = 0
-            boundary_idx = -1
-            snapped = True
-            reached_start = True
-            ceiling_hit = False
-
-            for line_start, line in self._lines_backward(f, end, stats):
-                if not line.strip():
-                    continue
-                cost = len(line) + 1
-                uncounted = False
-                if _THINKING_TOKENS_PREFILTER in line:
-                    rec = self._try_json(line)
-                    uncounted = rec is not None and _is_thinking_tokens(rec)
-                if not uncounted:
-                    over = counted >= budget.max_records or bytes_used + cost > budget.max_bytes
-                    if turns >= 1 and over:
-                        reached_start = False
-                        break
-                    if turns == 0 and selected and (
-                        bytes_used + cost > budget.hard_ceiling_bytes
-                        or (over and not budget.last_turn_guarantee)
-                    ):
-                        reached_start = False
-                        ceiling_hit = True
-                        break
-                    counted += 1
-                    bytes_used += cost
-                selected.append((line_start, line))
-                if _USER_PREFILTER in line:
-                    rec = self._try_json(line)
-                    if rec is not None and _is_turn_boundary(rec):
-                        turns += 1
-                        boundary_idx = len(selected) - 1
-                        if turns >= budget.min_turns:
-                            reached_start = False
-                            break
-
-            if ceiling_hit:
-                snapped = False
-            elif not reached_start and boundary_idx >= 0:
-                selected = selected[: boundary_idx + 1]
+            selected, snapped = self._select_backward(f, end, budget, stats)
 
             start_offset = selected[-1][0] if selected else end
             has_more_before = start_offset > 0 and self._has_content_before(f, start_offset, stats)
@@ -514,6 +616,202 @@ class FileMessageHistoryReader:
                 total_bytes=total_end,
                 bytes_read=stats[0],
             )
+
+    def _open_checked(self, f, offset: int, size_end: int, stats: list[int]) -> None:
+        """Validate that ``offset`` is a line start within the complete part of the file."""
+        if offset > size_end:
+            raise CursorInvalidError(encode_cursor(offset))
+        if offset > 0:
+            f.seek(offset - 1)
+            stats[0] += 1
+            if f.read(1) != b"\n":
+                raise CursorInvalidError(encode_cursor(offset))
+
+    def _lines_forward(
+        self, f, start: int, end: int, stats: list[int]
+    ) -> Iterator[tuple[int, bytes]]:
+        """Yield ``(line_start, line)`` for the complete lines in ``[start, end)``; ``end`` is a
+        line boundary. Blank lines are yielded too (callers skip them)."""
+        pos = start
+        carry = b""
+        f.seek(start)
+        while pos + len(carry) < end:
+            chunk = f.read(min(CHUNK_SIZE, end - pos - len(carry)))
+            if not chunk:
+                return
+            stats[0] += len(chunk)
+            data = carry + chunk
+            lines = data.split(b"\n")
+            carry = lines.pop()
+            for line in lines:
+                yield pos, line
+                pos += len(line) + 1
+        if carry:  # last line of a file without a final newline (complete JSON only)
+            yield pos, carry
+
+    def _select_forward(
+        self, f, start: int, end: int, max_bytes: int, stats: list[int]
+    ) -> tuple[list[tuple[int, bytes]], int]:
+        """Lines from ``start`` until ``max_bytes`` would be exceeded (always at least one line when
+        any exists) and the offset just past the last selected line (a record boundary)."""
+        selected: list[tuple[int, bytes]] = []
+        used = 0
+        stop = start
+        for line_start, line in self._lines_forward(f, start, end, stats):
+            cost = len(line) + 1
+            if selected and used + cost > max_bytes:
+                break
+            used += cost
+            stop = min(line_start + cost, end)
+            if line.strip():
+                selected.append((line_start, line))
+        return selected, stop
+
+    def _read_around(self, anchor: int, budget: AroundBudget) -> HistoryWindow:
+        stats = [0]
+        try:
+            f = open(self.path, "rb")
+        except FileNotFoundError:
+            if anchor:
+                raise CursorInvalidError(encode_cursor(anchor)) from None
+            return HistoryWindow(
+                [], encode_cursor(0), False, self._empty_history_id(), True, 0,
+                end_cursor=encode_cursor(0), has_more_after=False, anchor_cursor=encode_cursor(0),
+            )
+        with f:
+            st = os.fstat(f.fileno())
+            total_end, read = self._complete_end(f, st.st_size)
+            stats[0] += read
+            history_id = self._history_id(st)
+            self._open_checked(f, anchor, total_end, stats)
+
+            forward, stop = self._select_forward(
+                f, anchor, total_end, max(1, budget.after_bytes), stats
+            )
+
+            # Backward half: whole turns up to ``before_bytes``. At least one turn start is always
+            # reached (last-turn guarantee, up to the hard ceiling), so the window never starts
+            # mid-turn or inside a compaction group just because the budget ran out first.
+            back_budget = WindowBudget(
+                min_turns=_UNBOUNDED_TURNS, max_records=_UNBOUNDED_TURNS,
+                max_bytes=max(1, budget.before_bytes),
+                hard_ceiling_bytes=max(budget.hard_ceiling_bytes, budget.before_bytes),
+                last_turn_guarantee=True,
+            )
+            backward, snapped = self._select_backward(f, anchor, back_budget, stats)
+            start_offset = backward[-1][0] if backward else anchor
+            has_more_before = start_offset > 0 and self._has_content_before(f, start_offset, stats)
+
+            records: list[dict] = []
+            for _, line in [*reversed(backward), *forward]:
+                rec = self._parse(line)
+                if rec is not None:
+                    records.append(rec)
+            return HistoryWindow(
+                records=records,
+                start_cursor=encode_cursor(start_offset),
+                has_more_before=has_more_before,
+                history_id=history_id,
+                snapped=snapped,
+                total_bytes=total_end,
+                bytes_read=stats[0],
+                end_cursor=encode_cursor(stop),
+                has_more_after=stop < total_end,
+                anchor_cursor=encode_cursor(anchor),
+            )
+
+    def _read_after(
+        self, offset: int, budget: AfterBudget, until: int | None
+    ) -> HistoryWindow:
+        stats = [0]
+        try:
+            f = open(self.path, "rb")
+        except FileNotFoundError:
+            if offset:
+                raise CursorInvalidError(encode_cursor(offset)) from None
+            return HistoryWindow(
+                [], encode_cursor(0), False, self._empty_history_id(), True, 0,
+                end_cursor=encode_cursor(0), has_more_after=False,
+            )
+        with f:
+            st = os.fstat(f.fileno())
+            total_end, read = self._complete_end(f, st.st_size)
+            stats[0] += read
+            history_id = self._history_id(st)
+            self._open_checked(f, offset, total_end, stats)
+            limit = total_end
+            if until is not None:
+                if until < offset:
+                    raise CursorInvalidError(encode_cursor(until))
+                self._open_checked(f, until, total_end, stats)
+                limit = until
+            selected, stop = self._select_forward(
+                f, offset, limit, max(1, budget.max_bytes), stats
+            )
+            records = [r for _, line in selected if (r := self._parse(line)) is not None]
+            return HistoryWindow(
+                records=records,
+                start_cursor=encode_cursor(offset),
+                has_more_before=offset > 0 and self._has_content_before(f, offset, stats),
+                history_id=history_id,
+                snapped=True,
+                total_bytes=total_end,
+                bytes_read=stats[0],
+                end_cursor=encode_cursor(stop),
+                has_more_after=stop < limit,  # (with ``until``: more records before ``until``)
+            )
+
+    def _select_backward(
+        self, f, end: int, budget: WindowBudget, stats: list[int]
+    ) -> tuple[list[tuple[int, bytes]], bool]:
+        """Newest-first ``(line_start, line)`` selection of the lines before ``end`` under
+        ``budget`` (turn-snapped when a cap stops it), and whether it is turn-snapped."""
+        selected: list[tuple[int, bytes]] = []  # newest-first
+        bytes_used = 0
+        counted = 0
+        turns = 0
+        boundary_idx = -1
+        snapped = True
+        reached_start = True
+        ceiling_hit = False
+
+        for line_start, line in self._lines_backward(f, end, stats):
+            if not line.strip():
+                continue
+            cost = len(line) + 1
+            uncounted = False
+            if _THINKING_TOKENS_PREFILTER in line:
+                rec = self._try_json(line)
+                uncounted = rec is not None and _is_thinking_tokens(rec)
+            if not uncounted:
+                over = counted >= budget.max_records or bytes_used + cost > budget.max_bytes
+                if turns >= 1 and over:
+                    reached_start = False
+                    break
+                if turns == 0 and selected and (
+                    bytes_used + cost > budget.hard_ceiling_bytes
+                    or (over and not budget.last_turn_guarantee)
+                ):
+                    reached_start = False
+                    ceiling_hit = True
+                    break
+                counted += 1
+                bytes_used += cost
+            selected.append((line_start, line))
+            if _USER_PREFILTER in line:
+                rec = self._try_json(line)
+                if rec is not None and _is_turn_boundary(rec):
+                    turns += 1
+                    boundary_idx = len(selected) - 1
+                    if turns >= budget.min_turns:
+                        reached_start = False
+                        break
+
+        if ceiling_hit:
+            snapped = False
+        elif not reached_start and boundary_idx >= 0:
+            selected = selected[: boundary_idx + 1]
+        return selected, snapped
 
     def _has_content_before(self, f, offset: int, stats: list[int]) -> bool:
         """True if any non-whitespace byte precedes ``offset`` (blank-line-only prefixes
@@ -600,6 +898,23 @@ async def read_history_payload(
     return payload
 
 
+async def read_around_payload(
+    reader: MessageHistoryReader, cursor: str, budget: "AroundBudget"
+) -> dict[str, Any]:
+    """API payload of ``around=<cursor>``. Raises ``CursorInvalidError`` for an unusable cursor."""
+    return (await reader.read_around(cursor, budget)).to_payload()
+
+
+async def read_after_payload(
+    reader: MessageHistoryReader, cursor: str, budget: "AfterBudget", until: str | None
+) -> dict[str, Any]:
+    """API payload of ``after=<cursor>[&until=<cursor>]`` (a forward page)."""
+    return (await reader.read_after(cursor, budget, until)).to_payload()
+
+
+# Request modes of the windowed history read (exactly one at a time; see routers/_windows.py).
+WINDOW_MODES = ("window", "before", "around", "around_id", "after")
+
 MAX_RECORDS_CAP = 5000
 MAX_BYTES_CAP = 4 * 1024 * 1024
 _UNBOUNDED_TURNS = 10**9
@@ -628,6 +943,32 @@ def build_budget(
         hard_ceiling_bytes=defaults.hard_ceiling_bytes,
         last_turn_guarantee=not before,
     )
+
+
+MAX_AROUND_BYTES_CAP = 1024 * 1024
+
+
+def build_around_budget(before_bytes: int | None, after_bytes: int | None) -> AroundBudget:
+    """Budget of an ``around`` request: defaults 384 KiB before / 128 KiB after (512 KiB total);
+    each side clamped to [0, 1 MiB]. A side may be 0 (the window then holds only the anchor's turn
+    and/or a single record)."""
+    defaults = AroundBudget()
+
+    def clamp(value: int | None, default: int) -> int:
+        return default if value is None else min(max(0, value), MAX_AROUND_BYTES_CAP)
+
+    return AroundBudget(
+        before_bytes=clamp(before_bytes, defaults.before_bytes),
+        after_bytes=clamp(after_bytes, defaults.after_bytes),
+        hard_ceiling_bytes=defaults.hard_ceiling_bytes,
+    )
+
+
+def build_after_budget(max_bytes: int | None) -> AfterBudget:
+    """Forward page budget: default 256 KiB (like ``before`` pages), clamped to [1 KiB, 4 MiB]."""
+    if max_bytes is None:
+        return AfterBudget()
+    return AfterBudget(max_bytes=min(max(1024, max_bytes), MAX_BYTES_CAP))
 
 
 # ---------------------------------------------------------------------- whole-history search

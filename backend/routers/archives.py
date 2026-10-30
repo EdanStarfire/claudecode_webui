@@ -7,8 +7,8 @@ from shared.exception_handlers import handle_exceptions
 
 from ..history_index import HistoryIndexBuildingError
 from ..http_range import build_resource_response
-from ..message_history_reader import CursorInvalidError
 from ._search import run_search
+from ._windows import map_window_errors, validate_window_params
 
 
 def build_router(webui) -> APIRouter:
@@ -32,24 +32,33 @@ def build_router(webui) -> APIRouter:
         window: str | None = None, before: str | None = None,
         min_turns: int | None = None, max_records: int | None = None,
         max_bytes: int | None = None,
+        around: str | None = None, around_id: str | None = None,
+        before_bytes: int | None = None, after_bytes: int | None = None,
+        after: str | None = None, until: str | None = None,
     ):
         """Get paginated messages from an archive (issue #2030: ``window=tail`` /
-        ``before=<cursor>`` use the same byte-cursor reader as live sessions)."""
-        if window is not None and window != "tail":
-            raise HTTPException(status_code=422, detail="window must be 'tail'")
-        if window is not None and before is not None:
-            raise HTTPException(status_code=422, detail="window and before are mutually exclusive")
+        ``before=<cursor>`` use the same byte-cursor reader as live sessions; stage 3:
+        ``around=`` / ``around_id=`` / ``after=`` with the live-session contract)."""
+        validate_window_params(
+            window=window, before=before, around=around, around_id=around_id, after=after,
+            until=until, before_bytes=before_bytes, after_bytes=after_bytes,
+        )
         if not await webui.service.validate_project_exists(project_id):
             raise HTTPException(status_code=404, detail="Project not found")
-        try:
-            result = await webui.service.get_archive_messages(
+        # (the stage-3 params are passed only when present: the legacy call shape is unchanged)
+        stage3 = {
+            k: v for k, v in (
+                ("around", around), ("around_id", around_id), ("before_bytes", before_bytes),
+                ("after_bytes", after_bytes), ("after", after), ("until", until),
+            ) if v is not None
+        }
+        return await map_window_errors(
+            webui.service.get_archive_messages(
                 session_id, archive_id, offset=offset, limit=limit, window=window,
                 before=before, min_turns=min_turns, max_records=max_records,
-                max_bytes=max_bytes,
+                max_bytes=max_bytes, **stage3,
             )
-        except CursorInvalidError as e:
-            raise HTTPException(status_code=409, detail="cursor_invalid") from e
-        return result
+        )
 
     @router.get("/api/projects/{project_id}/archives/{session_id}/{archive_id}/history_index")
     @handle_exceptions("get archive history index")

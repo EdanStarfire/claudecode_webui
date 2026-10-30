@@ -15,6 +15,7 @@ dataclass is needed here — same reasoning as PR 4/5.
 """
 
 import asyncio
+import hashlib
 import logging
 import os
 import threading
@@ -31,13 +32,30 @@ from .config_manager import PerformanceConfig
 from .config_resolution import resolve_effective_config
 from .history_index import HistoryIndexBuildingError, HistoryIndexState, scan_file_into
 from .history_search import DEFAULT_MAX_RESULTS, SearchCaps
-from .message_history_reader import FileMessageHistoryReader, build_budget, read_history_payload
+from .message_history_reader import (
+    ArchiveNotFoundError,
+    FileMessageHistoryReader,
+    MessageNotFoundError,
+    ResolveBusyError,
+    build_after_budget,
+    build_around_budget,
+    build_budget,
+    read_after_payload,
+    read_around_payload,
+    read_history_payload,
+)
 from .search_scan import SearchScanManager
 from .session_lifecycle import is_live, is_paused
 from .task_list import TASK_TOOL_NAMES, TaskListState
 from .task_registry import TASK_LIFECYCLE_SUBTYPES, TaskLegRegistry
 
 logger = logging.getLogger(__name__)
+
+# Issue #2030 stage 3 PR 3A: id lookups (``around_id=``). The only O(file) step of the windowed
+# reads; runs on the cold-scan pool (never the default executor), single-flight per (session, id).
+RESOLVE_WAIT_S = 5.0
+RESOLVE_MAX_FLIGHTS_PER_KEY = 4
+_RESOLVE_KIND = "resolve:"
 
 # Issue #2030 (§3.4): substring prefilters for the streamed snapshot hydrators.
 _TASK_LEG_PREFILTERS = tuple(f'"{s}"' for s in sorted(TASK_LIFECYCLE_SUBTYPES))
@@ -356,15 +374,37 @@ class SessionQuery:
             return {"session_id": session_id, "tasks": []}
         return {"session_id": session_id, "tasks": await self._get_background_tasks(session_id)}
 
+    async def _live_reader(self, session_id: str) -> FileMessageHistoryReader | None:
+        storage = self._storage_managers.get(session_id)
+        if storage:
+            return storage.reader
+        session_dir = await self.session_manager.get_session_directory(session_id)
+        if session_dir is None:
+            return None
+        return FileMessageHistoryReader(session_dir / "messages.jsonl", label=session_id)
+
     async def get_window_messages(
         self, session_id: str, *, window: str | None = None, before: str | None = None,
         min_turns: int | None = None, max_records: int | None = None,
-        max_bytes: int | None = None, **_unused: Any,
+        max_bytes: int | None = None, around: str | None = None, around_id: str | None = None,
+        before_bytes: int | None = None, after_bytes: int | None = None,
+        after: str | None = None, until: str | None = None, **_unused: Any,
     ) -> dict[str, Any]:
-        """Issue #2030: ``window=tail`` / ``before=<cursor>`` history read (byte-cursor reader).
+        """Issue #2030: ``window=tail`` / ``before=<cursor>`` history read (byte-cursor reader);
+        stage 3: ``around=<cursor>`` / ``around_id=<id>`` windows and ``after=<cursor>`` forward
+        pages.
 
-        Raises ``CursorInvalidError`` for an unusable cursor (route maps it to 409).
+        Raises ``CursorInvalidError`` for an unusable cursor (route maps it to 409),
+        ``MessageNotFoundError`` (404), ``ResolveBusyError`` (503).
         """
+        if around is not None or around_id is not None or after is not None:
+            reader = await self._live_reader(session_id)
+            if reader is None:
+                raise MessageNotFoundError(around_id or "")
+            return await self._windowed_read(
+                session_id, reader, around, around_id, before_bytes, after_bytes, after, until,
+                max_bytes,
+            )
         storage = self._storage_managers.get(session_id)
         if not storage:
             logger.error(f"No storage manager found for session {session_id}")
@@ -379,6 +419,66 @@ class SessionQuery:
                 max_records=max_records, max_bytes=max_bytes,
             ),
         )
+
+    async def get_archive_window_messages(
+        self, session_id: str, archive_id: str, archive_manager: Any, **params: Any
+    ) -> dict[str, Any]:
+        """``around`` / ``around_id`` / ``after`` of an archive. Raises ``ArchiveNotFoundError``
+        for an unsafe path component or a missing archive (never a cursor error)."""
+        try:
+            messages_file = archive_manager.archive_messages_path(session_id, archive_id)
+        except ValueError as e:
+            raise ArchiveNotFoundError(archive_id) from e
+        if not await asyncio.to_thread(os.path.exists, messages_file):
+            raise ArchiveNotFoundError(archive_id)
+        key = f"{session_id}/archive/{archive_id}"
+        reader = FileMessageHistoryReader(messages_file, label=key, strict_legacy=False)
+        return await self._windowed_read(
+            key, reader, params.get("around"), params.get("around_id"),
+            params.get("before_bytes"), params.get("after_bytes"), params.get("after"),
+            params.get("until"), params.get("max_bytes"),
+        )
+
+    async def _windowed_read(
+        self, key: str, reader: Any, around: str | None, around_id: str | None,
+        before_bytes: int | None, after_bytes: int | None, after: str | None,
+        until: str | None, max_bytes: int | None,
+    ) -> dict[str, Any]:
+        """``around`` / ``around_id`` / ``after`` read of one history file. The reads themselves are
+        cheap (bounded by the window) and stay on the default executor; only an id lookup, which is
+        O(file), goes through the cold-scan pool."""
+        if after is not None:
+            return await read_after_payload(reader, after, build_after_budget(max_bytes), until)
+        if around is None:
+            around = await self.resolve_message_id(key, reader, around_id or "")
+        return await read_around_payload(
+            reader, around, build_around_budget(before_bytes, after_bytes)
+        )
+
+    async def resolve_message_id(self, key: str, reader: Any, ident: str) -> str:
+        """Cursor of ``ident`` (message_id or tool_use_id) in ``reader``'s file, via the cold-scan
+        pool: single-flight per (key, id), at most ``RESOLVE_MAX_FLIGHTS_PER_KEY`` distinct lookups
+        per key, waiter cap ``RESOLVE_WAIT_S``. Raises ``MessageNotFoundError`` (also when the
+        session was deleted/reset mid-lookup) and ``ResolveBusyError``."""
+        kind = _RESOLVE_KIND + hashlib.sha1(ident.encode()).hexdigest()[:12]
+        active = self._cold_scans.inflight_kinds(key)
+        if kind not in active and sum(k.startswith(_RESOLVE_KIND) for k in active) >= (
+            RESOLVE_MAX_FLIGHTS_PER_KEY
+        ):
+            raise ResolveBusyError(key)
+
+        async def _flight(handle) -> str | None:
+            return await handle.run(lambda cancel: reader.resolve_message_id(ident, cancel))
+
+        try:
+            cursor = await self._cold_scans.single_flight(
+                key, kind, _flight, empty=lambda: None, timeout=RESOLVE_WAIT_S
+            )
+        except TimeoutError as e:
+            raise ResolveBusyError(key) from e
+        if cursor is None:
+            raise MessageNotFoundError(ident)
+        return cursor
 
     # ==================== SDK TASK LIST SNAPSHOT (Issue #2030) ====================
 
