@@ -6,7 +6,7 @@
     <div
       v-if="historyBanner"
       class="history-banner d-flex align-items-center gap-2 px-3 py-1 small"
-      :class="{ 'history-banner-error': historyBanner.kind === 'error' }"
+      :class="{ 'history-banner-error': historyBanner.kind === 'error' || historyBanner.kind === 'jump-error' }"
       role="status"
       data-testid="history-banner"
       ref="historyBannerEl"
@@ -102,6 +102,18 @@
               <span class="date-separator-label">{{ row.item.label }}</span>
             </div>
 
+            <!-- Issue #2030 (stage 3 PR 3C-1): the not-loaded stretch between a jumped-to island and the
+                 live end of the history. -->
+            <HistoryGapRow
+              v-else-if="row.item.type === 'gap'"
+              :approx-bytes="row.item.approxBytes"
+              :loading="islandLoading === 'after'"
+              :error="islandError"
+              :full="islandIsFull(currentIsland)"
+              @load-newer="loadNewerHistory"
+              @jump-latest="jumpToLatest"
+            />
+
             <!-- Issue #1746 (stage: subagents) follow-up / spec §4.2: subagent signals that
                  interact with the main session (pushed a message to main, or a leg ended) render
                  inline in the MAIN timeline itself, not only inside the subagent's own nested
@@ -176,16 +188,19 @@ import DeferredToolBanner from './DeferredToolBanner.vue'
 import SubagentAnchorRow from './SubagentAnchorRow.vue'
 import SubagentGlobalGutter from './SubagentGlobalGutter.vue'
 import MessageSearchBar from './MessageSearchBar.vue'
+import HistoryGapRow from './HistoryGapRow.vue'
 import { useTTSReadAloud } from '@/composables/useTTSReadAloud'
 import { useMessageSearch } from '@/composables/useMessageSearch'
 import { resolveMessageId } from '@/search/messageSearch'
 import { applyHighlight, clearHighlight } from '@/search/highlightMatch'
 import { useVirtualNavigation, forceFreshMeasurements } from '@/composables/useVirtualNavigation'
-import { buildDisplayableItems, computeItemKeys } from '@/utils/displayableItems'
+import { computeItemKeys } from '@/utils/displayableItems'
+import { buildLoadedRows } from '@/utils/loadedRows'
 import { historyBackfill } from '@/composables/useHistoryBackfill'
 import { useHydrationStage } from '@/composables/useHydrationStage'
 import { HYDRATION_STAGE_LABELS } from '@/utils/hydrationStage'
-import { cursorOffset, estimateJumpWireBytes, findTurnBefore, formatJumpSize, jumpNeedsConfirm, jumpProgress } from '@/utils/turnNavigation'
+import { cursorOffset, formatJumpSize, jumpNeedsConfirm, planTurnStep } from '@/utils/turnNavigation'
+import { AROUND_WINDOW_FILE_BYTES, islandIsFull } from '@/utils/historyIntervals'
 
 const messageStore = useMessageStore()
 const sessionStore = useSessionStore()
@@ -230,8 +245,10 @@ let touchMoved = false // whether a touchmove occurred since the current touchst
 let touchMomentumDeadline = null // timestamp (ms); set at touchend, cleared at touchstart/expiry
 
 // Per-instance message and tool-call sources derived from the injected session id.
-const sessionMessages = computed(() => messageStore.messagesBySession.get(viewSessionId.value) || [])
-const sessionToolCalls = computed(() => messageStore.toolCallsBySession.get(viewSessionId.value) || [])
+// (Stage 3 PR 3C-1: the loaded* getters return the live suffix's own arrays unless a jumped-to island is loaded.)
+const sessionMessages = computed(() => messageStore.loadedMessages(viewSessionId.value))
+const sessionToolCalls = computed(() => messageStore.loadedToolCalls(viewSessionId.value))
+const currentIsland = computed(() => messageStore.getIsland(viewSessionId.value))
 
 // TTS Read Aloud (issue #735)
 const tts = useTTSReadAloud()
@@ -250,15 +267,7 @@ provide('allMessages', sessionMessages)
 
 // Pure pipeline lives in utils/displayableItems.js (issue #2030 stage 1b). The ctx is built
 // inside the computed so every reactive read stays tracked by it.
-const displayableItems = computed(() => buildDisplayableItems({
-  sessionId: viewSessionId.value,
-  messages: sessionMessages.value,
-  toolCalls: sessionToolCalls.value,
-  legEntries: messageStore.allTaskLegEntriesForSession(viewSessionId.value),
-  getTaskIdForLaunchToolUse: messageStore.getTaskIdForLaunchToolUse,
-  isHookMessageAttached: (messageId) => messageStore.isHookMessageAttached(viewSessionId.value, messageId),
-  historyComplete: messageStore.isHistoryComplete(viewSessionId.value),
-}))
+const displayableItems = computed(() => buildLoadedRows(messageStore, viewSessionId.value))
 
 // Unique, identity-based key per row (see computeItemKeys).
 const itemKeys = computed(() => computeItemKeys(displayableItems.value))
@@ -409,10 +418,9 @@ const historyBanner = computed(() => {
   const fraction = messageStore.historyProgress(sessionId)?.fraction
   const percent = fraction != null ? ` ${Math.round(fraction * 100)} %` : ''
   if (status?.error) return { kind: 'error', text: `Couldn't load older history: ${status.error}` }
+  if (status?.jumpError) return { kind: 'jump-error', text: status.jumpError }
   if (status?.jump) {
-    const progress = jumpProgress(messageStore.getHistoryState(sessionId)?.startCursor, status.jump)
-    const jumpPercent = progress != null ? ` ${Math.round(progress * 100)} %` : ''
-    return { kind: 'jump', text: `Loading older history to reach ${status.jump.label || `turn ${status.jump.ordinal}`}…${jumpPercent}${status.paused ? ' (paused)' : ''}` }
+    return { kind: 'jump', text: `Loading ${status.jump.label || `turn ${status.jump.ordinal}`}…` }
   }
   if (status?.mode === 'manual') {
     return { kind: 'manual', text: `Showing newest messages — older history isn't loaded automatically on this connection.${percent && ` (${percent.trim()} loaded)`}` }
@@ -437,6 +445,21 @@ watch(historyBannerEl, (el) => {
   }
 }, { flush: 'post' })
 onUnmounted(() => bannerObserver?.disconnect())
+
+// Island state for the gap row (issue #2030 stage 3 PR 3C-1)
+const islandLoading = computed(() => historyStatus.value?.island?.loading || null)
+const islandError = computed(() => historyStatus.value?.island?.error || null)
+
+function loadNewerHistory() {
+  historyBackfill.requestIslandNewer(viewSessionId.value)
+}
+
+// "Jump to latest": scroll to the live end; the island stays loaded until the next jump.
+function jumpToLatest() {
+  stickyToBottom.value = true
+  uiStore.setStickyToBottom(viewSessionId.value, true)
+  scrollToBottomViaVirtualizer()
+}
 
 function loadOlderHistory() {
   historyBackfill.requestOlder(viewSessionId.value)
@@ -469,7 +492,11 @@ function reportHistoryScrollState() {
   // asks for the (single) next page — a short list must not keep re-requesting by itself.
   const manual = historyStatus.value?.mode === 'manual'
   if (nearTop && (!manual || userGestureActive.value) && !isInitialLoad.value && !messageStore.isHistoryComplete(sessionId)) {
-    historyBackfill.requestOlder(sessionId)
+    // The topmost interval pages upward: the island when one is loaded (the suffix keeps its own
+    // background backfill), the suffix otherwise.
+    const island = currentIsland.value
+    if (!island) historyBackfill.requestOlder(sessionId)
+    else if (island.hasMoreBefore) historyBackfill.requestIslandOlder(sessionId)
   }
 }
 watch(visibleIndexRange, reportHistoryScrollState)
@@ -485,28 +512,67 @@ function findPrevTurnIndex() {
   return null
 }
 
-// Issue #2030 (stage 2 PR B): previous turn over the WHOLE history. The nearest loaded turn row
-// above the viewport wins; with none, the newest index turn older than the loaded suffix is the
-// target (not loaded yet — the status bar extends the suffix to it). Result:
-//   { kind: 'loaded', index }                       a displayable row to scroll to
-//   { kind: 'unloaded', messageId, ordinal, sizeHint }  needs older history first
-//   { kind: 'pending', reason: 'idle'|'loading'|'unavailable' }  no usable index (yet)
-//   null                                            no earlier turn
-function findPrevTurn() {
-  const index = findPrevTurnIndex()
-  if (index != null) return { kind: 'loaded', index }
-  if (!visibleIndexRange.value) return null
-  const sessionId = viewSessionId.value
-  if (!sessionId || messageStore.isHistoryComplete(sessionId)) return null
-  const entry = messageStore.getHistoryIndex(sessionId)
-  if (!entry) return { kind: 'pending', reason: 'idle' }
-  if (entry.status !== 'ready') return { kind: 'pending', reason: entry.status }
-  const startOffset = cursorOffset(messageStore.getHistoryState(sessionId)?.startCursor)
-  if (startOffset == null) return { kind: 'pending', reason: 'unavailable' }
-  const turn = findTurnBefore(entry.turns, startOffset)
-  if (!turn) return null
-  return { kind: 'unloaded', messageId: turn.messageId, ordinal: turn.position + 1, sizeHint: turn.sizeHint }
+// Row index of a LOADED turn by message id (a user row), or null.
+function rowOfTurn(messageId) {
+  const index = indexMaps.value.messageIdIndex.get(messageId)
+  const item = index != null ? displayableItems.value[index] : null
+  return item?.type === 'message' && item.message?.type === 'user' ? index : null
 }
+
+// Issue #2030 (stage 2 PR B, stage 3 PR 3C-1): previous / next turn over the WHOLE history. A turn
+// in the same loaded interval as the viewport edge is a displayable row; otherwise the neighbour
+// comes from the server history index — it may be unloaded (a jump opens a window around it) or
+// the adjacent interval's edge turn. Result:
+//   { kind: 'loaded', index }                                    a displayable row to scroll to
+//   { kind: 'unloaded', cursor, messageId, ordinal, sizeHint }   needs a window around it first
+//   { kind: 'pending', reason: 'idle'|'loading'|'unavailable' }  no usable index (yet)
+//   null                                                         no such turn
+function planTurn(direction) {
+  const range = visibleIndexRange.value
+  if (!range) return null
+  const sessionId = viewSessionId.value
+  const history = messageStore.getHistoryState(sessionId)
+  const island = currentIsland.value
+  const entry = history && !messageStore.isHistoryComplete(sessionId) ? messageStore.getHistoryIndex(sessionId) : null
+  const ready = entry?.status === 'ready'
+  // Across a gap the rows actually on screen decide which interval the viewport is in.
+  let viewTop = range.top
+  let viewBottom = range.bottom
+  if (island) {
+    const virtualizer = rowVirtualizer.value
+    const offset = virtualizer.scrollOffset ?? 0
+    viewTop = virtualizer.getVirtualItemForOffset(offset)?.index ?? range.top
+    viewBottom = virtualizer.getVirtualItemForOffset(offset + (messagesArea.value?.clientHeight || 0))?.index ?? range.bottom
+  }
+  return planTurnStep(direction, {
+    boundaries: turnBoundaryIndices.value,
+    gapIndex: island ? displayableItems.value.findIndex(item => item.type === 'gap') : -1,
+    top: range.top,
+    bottom: range.bottom,
+    viewTop,
+    viewBottom,
+    turns: ready ? entry.turns : null,
+    indexStatus: entry?.status || null,
+    complete: messageStore.isHistoryComplete(sessionId),
+    suffixStartOffset: cursorOffset(history?.startCursor),
+    islandStartOffset: island ? cursorOffset(island.startCursor) : null,
+    islandEndOffset: island ? cursorOffset(island.endCursor) : null,
+    rowOfTurn,
+  })
+}
+
+function findNextTurnIndex() {
+  const range = visibleIndexRange.value
+  if (!range) return null
+  const arr = turnBoundaryIndices.value
+  for (let i = 0; i < arr.length; i++) {
+    if (arr[i] > range.bottom) return arr[i]
+  }
+  return null
+}
+
+const findPrevTurn = () => planTurn('prev')
+const findNextTurn = () => planTurn('next')
 
 // A turn jump to unloaded history is a deliberate navigation away from the bottom: drop the
 // sticky-to-bottom pin up front (otherwise the prepended page's relayout snaps the list back to
@@ -537,16 +603,6 @@ async function scrollToTurnMessage(messageId) {
   )
   if (index < 0) return false
   return scrollToItemIndexTrusted(index, { align: 'start', behavior: 'auto' })
-}
-
-function findNextTurnIndex() {
-  const range = visibleIndexRange.value
-  if (!range) return null
-  const arr = turnBoundaryIndices.value
-  for (let i = 0; i < arr.length; i++) {
-    if (arr[i] > range.bottom) return arr[i]
-  }
-  return null
 }
 
 // Issue #1748 (stage: windowing) follow-up (user feedback): a row is the virtualization
@@ -680,13 +736,10 @@ function clearActiveHighlight() {
 function resolveMainTimelineScopeKey(messageId) {
   const msg = sessionMessages.value.find(m => resolveMessageId(m) === messageId)
   const toolUses = msg?.metadata?.tool_uses || []
-  const toolCalls = messageStore.toolCallsBySession.get(viewSessionId.value)
-  const toolIndex = messageStore.toolIndexBySession.get(viewSessionId.value)
   for (const t of toolUses) {
     if (messageStore.getTaskIdForLaunchToolUse(t.id)) continue
     if (t.name === 'mcp__legion__send_comm') continue
-    const idx = toolIndex?.get(t.id)
-    const fullToolCall = idx !== undefined ? toolCalls?.[idx] : undefined
+    const fullToolCall = messageStore.findLoadedToolCall(viewSessionId.value, t.id)
     if (fullToolCall?.parent_tool_use_id) continue
     return t.id
   }
@@ -704,10 +757,10 @@ function matchRowIndex({ messageId, toolId }) {
     : indexMaps.value.messageIdIndex.get(messageId)
 }
 
-// Issue #2030 (stage 3): a server search hit that lies before the loaded suffix opens through the
-// stage-2 jump (`requestUntil`: older pages until the message is loaded), with the same confirm
-// guard (slow link always, otherwise above the wire-size cap), progress banner and cancel as turn
-// navigation. Resolves 'loaded' | 'declined' | 'cancelled' | 'not-found'.
+// Issue #2030 (stage 3 PR 3C-1): a server search hit that is not loaded opens through the same
+// jump as turn navigation: ONE bounded `around=<hit cursor>` window (about 0.5 MB of history) that
+// becomes the island, with progress banner and cancel; only a slow link asks first (the window
+// size is in the question). Resolves 'loaded' | 'declined' | 'cancelled' | 'not-found'.
 let activeSearchJump = null
 
 function cancelSearchJump() {
@@ -724,30 +777,30 @@ watch(() => messageSearch.query.value, () => { stopKeeper(); clearActiveHighligh
 
 function isUnloadedHit(match) {
   const sessionId = viewSessionId.value
-  return match.sizeHint != null && !!messageStore.getHistoryState(sessionId)?.hasMoreBefore &&
+  return (match.cursor != null || match.messageId != null) &&
+    !!messageStore.getHistoryState(sessionId)?.hasMoreBefore &&
     !messageStore.isMessageLoaded(sessionId, match.messageId)
 }
 
 // `began` (set once the jump really started, i.e. after the confirm) tells the caller whether it owes an endTurnJump().
 async function jumpToUnloadedHit(match, began) {
   const sessionId = viewSessionId.value
-  const fromOffset = cursorOffset(messageStore.getHistoryState(sessionId)?.startCursor)
-  if (fromOffset == null) return 'not-found'
-  const estimatedWireBytes = estimateJumpWireBytes(fromOffset, match.sizeHint, messageStore.getWireRatio(sessionId))
-  if (jumpNeedsConfirm({ slowLink: historyBackfill.getMode(sessionId) === 'manual', estimatedWireBytes }) &&
+  if (jumpNeedsConfirm({ slowLink: historyBackfill.getMode(sessionId) === 'manual' }) &&
       typeof window !== 'undefined' && typeof window.confirm === 'function' &&
-      !window.confirm(`Jump to search result? Loads about ${formatJumpSize(estimatedWireBytes)} of older history`)) {
+      !window.confirm(`Jump to search result? Loads about ${formatJumpSize(AROUND_WINDOW_FILE_BYTES)} of history`)) {
     return 'declined'
   }
   beginTurnJump()
   began.value = true
-  const jump = historyBackfill.requestUntil(sessionId, match.messageId, {
-    label: 'search result', fromOffset, toOffset: match.sizeHint,
-  })
+  const jump = historyBackfill.jumpAround(
+    sessionId,
+    match.cursor != null ? { cursor: match.cursor } : { messageId: match.messageId },
+    { label: 'search result' },
+  )
   activeSearchJump = jump
   try {
     await jump.promise
-    return 'loaded'
+    return messageStore.isMessageLoaded(sessionId, match.messageId) ? 'loaded' : 'not-found'
   } catch (err) {
     return err?.reason === 'not-found' ? 'not-found' : 'cancelled'
   } finally {
@@ -943,6 +996,7 @@ defineExpose({
   resolveSubagentPrimaryIndex,
   findPrevTurnIndex,
   findPrevTurn,
+  findNextTurn,
   findNextTurnIndex,
   scrollToTurnMessage,
   beginTurnJump,

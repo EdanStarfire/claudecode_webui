@@ -22,18 +22,17 @@ import { pushDebugEvent } from '@/composables/useDebugBuffer'
 //     last poll batch was a catch-up burst, while a live batch landed within QUIET_MS, while the
 //     tab is hidden, and while a user REST action (send / permission / interrupt / ...) runs;
 //   - page fetches use low fetch priority and are aborted on session switch / reset;
-//   - requestUntil(sessionId, messageId) (issue #2030 stage 2: turn navigation) is a priority
-//     request: `before=` pages of JUMP_PAGE_BUDGET_BYTES, no inter-page gap, until the message is
-//     loaded (checked by id; cursors stay opaque). It keeps the pause rules (live catch-up,
-//     connection state, hidden tab, user requests), works in manual mode too, and can be cancelled;
+//   - jumps (issue #2030 stage 3 PR 3C-1: turn navigation, search hits) do not extend the suffix:
+//     jumpAround() fetches ONE bounded `around=` window as the pinned island (message store
+//     loadAround), requestIslandOlder() / requestIslandNewer() grow that island by one page on
+//     user demand (scrolling near its top, the gap row's "Load newer"). They are user-driven, so
+//     they bypass the pacing pauses, work in manual mode and can be cancelled;
 //   - slow-link mode (saveData, 2g, or measured first-window throughput < SLOW_LINK_BPS when the
 //     Network Information API is absent): NO automatic backfill — older history loads on demand
 //     (scrolling near the top, the banner's button) only.
 // There is no ceiling: on a good link backfill runs until `has_more_before` is false.
 
 export const PAGE_BUDGET_BYTES = 256 * 1024
-// Pages fetched on behalf of a turn jump (overshoot past the target is at most one page).
-export const JUMP_PAGE_BUDGET_BYTES = 512 * 1024
 export const MIN_PAGE_BUDGET_BYTES = 64 * 1024
 // The server caps a `before` page at 4 MiB / 5000 records (backend MAX_BYTES_CAP / MAX_RECORDS_CAP).
 export const MAX_PAGE_BUDGET_BYTES = 4 * 1024 * 1024
@@ -150,9 +149,9 @@ export function createHistoryBackfill(deps = {}) {
     return isSlowLink(history) ? 'manual' : 'auto'
   }
 
-  /** A user-driven request is pending (an on-demand page or a turn jump): no gap, no live-activity pause. */
+  /** A user-driven request is pending (an on-demand page): no gap, no live-activity pause. */
   function isPriority(loop) {
-    return loop.demand > 0 || !!loop.until
+    return loop.demand > 0
   }
 
   /** Why the loop must not fetch right now (null == free to go). `demand` = user-driven page. */
@@ -226,7 +225,7 @@ export function createHistoryBackfill(deps = {}) {
           const page = await store.fetchOlderPage(sessionId, {
             // An explicit user request (scroll near the top, the banner button) never uses a grown
             // budget: the user is waiting for exactly that page.
-            signal: controller.signal, maxBytes: loop.until ? JUMP_PAGE_BUDGET_BYTES : wasDemand ? PAGE_BUDGET_BYTES : loop.budget, maxRecords: MAX_PAGE_RECORDS, inactivityMs: PAGE_INACTIVITY_MS,
+            signal: controller.signal, maxBytes: wasDemand ? PAGE_BUDGET_BYTES : loop.budget, maxRecords: MAX_PAGE_RECORDS, inactivityMs: PAGE_INACTIVITY_MS,
           })
           if (controller.signal.aborted || loops.get(sessionId) !== loop) break
           loop.lastPageMs = now() - startedAt
@@ -254,7 +253,6 @@ export function createHistoryBackfill(deps = {}) {
           loop.lastPageMs += applyMs // the gap covers the main-thread cost of the page too
           consecutiveErrors = 0
           if (loop.demand > 0) loop.demand = Math.max(0, loop.demand - 1)
-          if (loop.until && messageStore().isMessageLoaded(sessionId, loop.until.messageId)) finishUntil(sessionId, loop)
         } catch (caught) {
           let err = caught
           if (controller.signal.aborted || loops.get(sessionId) !== loop) break
@@ -293,12 +291,6 @@ export function createHistoryBackfill(deps = {}) {
       }
     } finally {
       if (loops.get(sessionId) === loop) loops.delete(sessionId)
-      // The loop ended (history complete, session switched, stopped, gave up) before the target
-      // was loaded: the jump can't be satisfied here.
-      if (loop.until) {
-        const reached = messageStore().isMessageLoaded(sessionId, loop.until.messageId)
-        finishUntil(sessionId, loop, reached ? null : (messageStore().isHistoryComplete(sessionId) ? 'not-found' : 'aborted'))
-      }
       const history = messageStore().getHistoryState(sessionId)
       if (!history || !history.hasMoreBefore) clearStatus(sessionId)
       else setStatus(sessionId, { loading: false, paused: null })
@@ -325,21 +317,6 @@ export function createHistoryBackfill(deps = {}) {
     })
   }
 
-  /** Settles the loop's pending turn jump (`reason` null == the target is loaded). */
-  function finishUntil(sessionId, loop, reason = null) {
-    const until = loop.until
-    if (!until) return
-    loop.until = null
-    if (statusBySession.value.get(sessionId)?.jump?.messageId === until.messageId) setStatus(sessionId, { jump: null })
-    if (reason) {
-      const err = new Error(reason === 'cancelled' ? 'Jump cancelled' : `Turn jump failed: ${reason}`)
-      err.reason = reason
-      until.reject(err)
-    } else {
-      until.resolve()
-    }
-  }
-
   /** Begins (or continues) backfilling `sessionId`. At most one loop per session. */
   function start(sessionId) {
     const history = messageStore().getHistoryState(sessionId)
@@ -354,6 +331,9 @@ export function createHistoryBackfill(deps = {}) {
   function stop(sessionId) {
     loops.delete(sessionId)
     messageStore().abortBackfill(sessionId)
+    islandOps.get(sessionId)?.controller.abort()
+    clearTimeout(jumpErrorTimers.get(sessionId))
+    jumpErrorTimers.delete(sessionId)
   }
 
   function stopAll() {
@@ -369,39 +349,130 @@ export function createHistoryBackfill(deps = {}) {
     if (loop && loop.demand === 0) loop.demand = 1
   }
 
-  /**
-   * Turn-navigation jump: loads older history with priority `before=` pages until the message
-   * `messageId` is part of the loaded suffix. Returns `{ promise, cancel }`; `promise` rejects
-   * with `err.reason` 'cancelled' | 'aborted' | 'not-found' | 'superseded'. `meta`
-   * (`{ ordinal, fromOffset, toOffset }`) is published on the status as `jump` for progress UI.
-   * The loaded suffix stays valid whatever happens (pages are applied as usual).
-   */
-  function requestUntil(sessionId, messageId, meta = {}) {
-    const store = messageStore()
-    if (store.isMessageLoaded(sessionId, messageId)) return { promise: Promise.resolve(), cancel() {} }
-    const history = store.getHistoryState(sessionId)
-    if (!history || !history.hasMoreBefore) {
-      const err = new Error('Turn jump failed: not-found')
-      err.reason = 'not-found'
-      return { promise: Promise.reject(err), cancel() {} }
-    }
-    if (!loops.has(sessionId)) start(sessionId)
-    const loop = loops.get(sessionId)
-    finishUntil(sessionId, loop, 'superseded')
-    let resolve, reject
-    const promise = new Promise((res, rej) => { resolve = res; reject = rej })
-    promise.catch(() => {}) // callers handle it; never an unhandled rejection
-    const until = { messageId, resolve, reject }
-    loop.until = until
-    setStatus(sessionId, { jump: { messageId, ...meta }, error: null })
-    return { promise, cancel: () => { if (loop.until === until) finishUntil(sessionId, loop, 'cancelled') } }
+  // ---- island (issue #2030 stage 3 PR 3C-1) ----
+  // sessionId -> { controller, kind: 'around' | 'before' | 'after' }: at most one island request.
+  const islandOps = new Map()
+
+  function endIslandOp(sessionId, op) {
+    if (islandOps.get(sessionId) !== op) return
+    islandOps.delete(sessionId)
+    setStatus(sessionId, { jump: null, island: null })
   }
 
-  /** Cancels the session's pending turn jump (the loaded suffix stays valid). */
-  function cancelJump(sessionId) {
-    const loop = loops.get(sessionId)
-    if (loop) finishUntil(sessionId, loop, 'cancelled')
+  const JUMP_ERROR_MS = 8000
+  const jumpErrorTimers = new Map()
+
+  function publishJumpError(sessionId, err, meta) {
+    const what = meta?.label || 'that place'
+    const text = err.reason === 'busy' ? `The server is busy — couldn't open ${what}, try again`
+      : err.reason === 'not-found' ? `Couldn't find ${what} in the history`
+      : err.reason === 'reset' ? 'The history changed — try again'
+      : `Couldn't open ${what}: ${err.message || 'request failed'}`
+    setStatus(sessionId, { jumpError: text })
+    clearTimeout(jumpErrorTimers.get(sessionId))
+    jumpErrorTimers.set(sessionId, setTimeout(() => {
+      jumpErrorTimers.delete(sessionId)
+      if (statusBySession.value.has(sessionId)) setStatus(sessionId, { jumpError: null }) // never re-create a cleared status
+    }, JUMP_ERROR_MS))
   }
+
+  /**
+   * Jump: ONE bounded window around `target` (`{ cursor }` | `{ messageId }` | `{ toolUseId }`)
+   * becomes the island (replacing a previous one). Returns `{ promise, cancel }`; `promise`
+   * resolves to the store's `{ status, anchorCursor, parentUnresolved }` and rejects with
+   * `err.reason` 'not-found' | 'busy' | 'reset' | 'aborted' (cancelled) | 'superseded' | 'failed'.
+   * `meta.label` is published on the status as `jump` for the banner. A target already loaded
+   * resolves at once ({ status: 'loaded' }). The suffix stays valid whatever happens.
+   */
+  function jumpAround(sessionId, target, meta = {}) {
+    const store = messageStore()
+    islandOps.get(sessionId)?.controller.abort()
+    const op = { controller: new AbortController(), kind: 'around' }
+    islandOps.set(sessionId, op)
+    clearTimeout(jumpErrorTimers.get(sessionId))
+    jumpErrorTimers.delete(sessionId)
+    setStatus(sessionId, { jump: { ...meta }, island: null, error: null, jumpError: null })
+    const promise = store.loadAround(sessionId, target, { signal: op.controller.signal })
+    const settled = promise.then(
+      (result) => { endIslandOp(sessionId, op); return result },
+      (err) => {
+        endIslandOp(sessionId, op)
+        // A failed jump is not silent (a cancel / supersede is the user's own doing, not a failure).
+        if (err?.reason && !['aborted', 'superseded'].includes(err.reason)) publishJumpError(sessionId, err, meta)
+        throw err
+      },
+    )
+    settled.catch(() => {}) // callers handle it; never an unhandled rejection
+    return { promise: settled, cancel: () => op.controller.abort() }
+  }
+
+  /** Cancels the session's pending jump / island page (the loaded intervals stay valid). */
+  function cancelJump(sessionId) {
+    islandOps.get(sessionId)?.controller.abort()
+  }
+
+  /**
+   * One island page on user demand: `before` (scrolling up past the island's top) or `after`
+   * ("Load newer"; reaching the suffix merges the island into it). Applied once the scroll
+   * gesture is idle (a prepend never lands mid-gesture unless the viewport is near the top).
+   * Resolves true when a page was applied; false when there was nothing to load or the island
+   * moved on. A failure is published as `island: { error }` on the status.
+   */
+  async function requestIslandPage(sessionId, edge) {
+    const island = messageStore().getIsland(sessionId)
+    if (!island || (edge === 'before' ? !island.hasMoreBefore : !island.hasMoreAfter)) return false
+    const running = islandOps.get(sessionId)
+    if (running) {
+      // A jump is replacing the island: nothing to page. The same edge is already loading: share it.
+      if (running.kind === 'around') return false
+      if (running.kind === edge) return running.done
+      // The other edge is loading (e.g. the scroll-up page when "Load newer" is pressed): take the turn after it.
+      await running.done
+      if (islandOps.has(sessionId)) return false
+      return requestIslandPage(sessionId, edge)
+    }
+    const op = { controller: new AbortController(), kind: edge, done: null }
+    islandOps.set(sessionId, op)
+    op.done = runIslandPage(sessionId, edge, op)
+    return op.done
+  }
+
+  async function runIslandPage(sessionId, edge, op) {
+    const store = messageStore()
+    setStatus(sessionId, { island: { loading: edge, error: null } })
+    const startedAt = now()
+    try {
+      const page = await store.fetchIslandPage(sessionId, edge, { signal: op.controller.signal })
+      if (!page || op.controller.signal.aborted) return false
+      markPerf(`history-island-${edge}-fetch`, startedAt, now() - startedAt)
+      if (edge === 'before') {
+        for (;;) {
+          const interaction = scrollInteraction.get(sessionId)
+          if (!interaction?.gestureActive || interaction.nearTop) break
+          if (op.controller.signal.aborted) return false
+          await sleep(WAIT_POLL_MS)
+        }
+      }
+      await idleSlot()
+      if (op.controller.signal.aborted) return false
+      return store.applyIslandPage(sessionId, page)
+    } catch (err) {
+      if (op.controller.signal.aborted || err?.reason === 'superseded' || err?.reason === 'aborted') return false
+      pushDebugEvent('message', 'island-page-error', { sessionId, edge, message: err?.message })
+      setStatus(sessionId, { island: { loading: null, error: err?.reason === 'reset' ? 'History changed' : (err?.message || 'Failed to load history') } })
+      return false
+    } finally {
+      if (islandOps.get(sessionId) === op) {
+        islandOps.delete(sessionId)
+        const status = statusBySession.value.get(sessionId)
+        if (status?.island && !status.island.error) setStatus(sessionId, { island: null })
+        else if (status?.island?.loading) setStatus(sessionId, { island: { ...status.island, loading: null } })
+      }
+    }
+  }
+
+  const requestIslandOlder = (sessionId) => requestIslandPage(sessionId, 'before')
+  const requestIslandNewer = (sessionId) => requestIslandPage(sessionId, 'after')
 
   /** 'auto' | 'manual' (slow link, nothing loads unrequested) for this session right now. */
   function getMode(sessionId) {
@@ -439,8 +510,10 @@ export function createHistoryBackfill(deps = {}) {
     stopAll,
     requestOlder,
     scheduleIndex,
-    requestUntil,
+    jumpAround,
     cancelJump,
+    requestIslandOlder,
+    requestIslandNewer,
     getMode,
     loadAll,
     retry,

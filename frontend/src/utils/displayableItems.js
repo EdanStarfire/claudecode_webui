@@ -13,8 +13,12 @@
 //     legEntries,                      // messageStore.allTaskLegEntriesForSession(sessionId)
 //     getTaskIdForLaunchToolUse(id),   // messageStore.getTaskIdForLaunchToolUse
 //     isHookMessageAttached(messageId),
-//     historyComplete,                 // false while only a suffix of history is loaded
+//     openBefore,                      // the interval has older history that is not loaded
+//     openAfter,                       // the interval has newer history that is not loaded (an island)
 //   }
+// (Issue #2030 stage 3 PR 3C-1: the pipeline runs once PER loaded interval; buildIntervalItems()
+// below joins the per-interval rows with a `gap` row. Leg signals are scoped to the interval's own
+// time span instead of depending on a session-wide "history complete" flag.)
 import { parseTimestamp, formatDateSeparatorLabel } from '@/utils/time'
 import { getEffectiveStatusForTool } from '@/composables/useToolStatus'
 import { getAgentColor, slugifyAgentName } from '@/composables/useAgentColor'
@@ -82,6 +86,30 @@ export function buildDisplayableItems(ctx) {
       ctx,
     )
   )
+}
+
+/**
+ * Rows of the whole loaded history: the pipeline per interval, a `gap` row between an island and
+ * the suffix. `ctx` is the usual pipeline ctx WITHOUT messages/toolCalls; `intervals` is
+ * `[{ key, messages, toolCalls, hasMoreBefore, hasMoreAfter }]` oldest first, `gap` the stretch
+ * between the first two (or null). With a single interval this is exactly buildDisplayableItems().
+ */
+export function buildIntervalItems(ctx) {
+  const rows = []
+  ctx.intervals.forEach((interval, i) => {
+    const part = buildDisplayableItems({
+      ...ctx,
+      messages: interval.messages,
+      toolCalls: interval.toolCalls,
+      openBefore: !!interval.hasMoreBefore,
+      openAfter: !!interval.hasMoreAfter,
+    })
+    for (const item of part) rows.push(item)
+    if (i < ctx.intervals.length - 1 && ctx.gap) {
+      rows.push({ type: 'gap', ...ctx.gap, key: `gap:${ctx.gap.fromCursor}` })
+    }
+  })
+  return rows
 }
 
 function timestampForItem(item) {
@@ -182,12 +210,20 @@ function injectSubagentSignals(items, ctx) {
 
   // Issue #2030: leg-terminal signals are built from the FULL background-agents snapshot, but
   // are placed at "the first item at or after the signal's timestamp" — for a leg that ended
-  // before the loaded window began that is index 0, so every such signal would stack at the top
-  // of a partially loaded list. While only a suffix is loaded, drop signals that precede the
-  // first loaded item; they reappear naturally once backfill reaches their position.
-  if (ctx.historyComplete === false) {
-    const firstLoadedTs = itemTimestamps.find(ts => ts != null)
-    if (firstLoadedTs != null) signals = signals.filter(signal => signal._sortTs >= firstLoadedTs)
+  // before the interval began that is index 0, so every such signal would stack at the top of a
+  // partially loaded list (and one that ended after an island's last item at its bottom). Signals
+  // are therefore scoped to the interval's own time span: those preceding its first item are
+  // dropped while it has older history not loaded (`openBefore`), those following its last item
+  // while it has newer history not loaded (`openAfter`); they reappear once the neighbouring
+  // history is loaded into the same interval.
+  if (ctx.openBefore || ctx.openAfter) {
+    const loaded = itemTimestamps.filter(ts => ts != null)
+    if (loaded.length) {
+      const first = loaded[0]
+      const last = loaded[loaded.length - 1]
+      signals = signals.filter(signal =>
+        (!ctx.openBefore || signal._sortTs >= first) && (!ctx.openAfter || signal._sortTs <= last))
+    }
     if (signals.length === 0) return items
   }
 
@@ -567,6 +603,9 @@ function isCompactionStart(msg, messages, index) {
  */
 function attachOrphanedPermissionTools(items, ctx) {
   if (!ctx.sessionId) return items
+  // An island (newer history not loaded) holds history only: open permission prompts are live
+  // state of the suffix and are anchored there.
+  if (ctx.openAfter) return items
   const liveTools = ctx.toolCalls
   if (liveTools.length === 0) return items
 
@@ -816,6 +855,8 @@ export function getItemKey(item, index) {
       return item.dateKey != null ? `date:${item.dateKey}` : `i:${index}`
     case 'subagent_signal':
       return item.key ? `signal:${item.key}` : `i:${index}`
+    case 'gap':
+      return item.key || `i:${index}`
     default:
       return `i:${index}`
   }

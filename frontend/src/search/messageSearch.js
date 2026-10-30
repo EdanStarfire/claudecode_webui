@@ -77,7 +77,11 @@ export function findMatches(sessionId, query, { messageStore } = {}) {
     }
   }
 
-  const messages = messageStore.messagesBySession?.get(sessionId) || []
+  // Issue #2030 stage 3 PR 3C-1: the loaded history is the live suffix plus a jumped-to island
+  // (the store's union getters; plain stores/tests fall back to the suffix maps).
+  const messages = messageStore.loadedMessages
+    ? messageStore.loadedMessages(sessionId)
+    : (messageStore.messagesBySession?.get(sessionId) || [])
   const toolCalls = messageStore.toolCallsBySession?.get(sessionId)
   const toolIndex = messageStore.toolIndexBySession?.get(sessionId)
 
@@ -94,7 +98,9 @@ export function findMatches(sessionId, query, { messageStore } = {}) {
     const toolUses = message.metadata?.tool_uses || []
     for (const toolUse of toolUses) {
       const toolId = toolUse.id
-      const toolCall = resolveToolCall(toolCalls, toolIndex, toolId)
+      const toolCall = messageStore.findLoadedToolCall
+        ? messageStore.findLoadedToolCall(sessionId, toolId)
+        : resolveToolCall(toolCalls, toolIndex, toolId)
       if (!toolCall) continue
 
       pushFieldMatches(messageId, toolId, 'tool_name', toSearchableString(toolCall.name))

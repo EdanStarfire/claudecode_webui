@@ -1,11 +1,12 @@
 import { defineStore } from 'pinia'
-import { ref, computed, readonly, watch, markRaw } from 'vue'
+import { ref, computed, readonly, watch, markRaw, toRaw } from 'vue'
 import { api } from '../utils/api'
 import { useSessionStore } from './session'
 import { useTaskStore } from './task'
 import { useBackgroundTasksStore } from './backgroundTasks'
 import { correlateHooks } from '../utils/hookCorrelation'
-import { mergeOlderPage } from '../utils/historyMerge'
+import { mergeOlderPage, mergeToolCallFields } from '../utils/historyMerge'
+import { ISLAND_PAGE_BYTES, intervalsTouch, islandIsFull, windowBytes } from '../utils/historyIntervals'
 import { cursorOffset } from '../utils/turnNavigation'
 import { getAgentColor, getAssistantRowColor, slugifyAgentName } from '../composables/useAgentColor'
 import { pushDebugEvent, flushDebugBuffer } from '../composables/useDebugBuffer'
@@ -74,7 +75,25 @@ export const useMessageStore = defineStore('message', () => {
   const historyIndexBySession = ref(new Map())
   // Non-reactive: Map<sessionId, { controller, promise, retryTimer }> for the in-flight request.
   const _historyIndexRequests = new Map()
-  const _wireRatioBySession = new Map()
+  // Issue #2030 (stage 3 PR 3C-1): the pinned ISLAND — at most one window of history fetched by
+  // `around=` for a jump (and grown by `before=` / `after=` pages) that is NOT contiguous with the
+  // live suffix above. The suffix stays exactly what it was (messagesBySession & friends, the hot
+  // path); the island lives in its own record target and is read through the loaded* union getters.
+  // Map<sessionId, { id, baseUrl, source, historyId, startCursor, endCursor, anchorCursor,
+  //   hasMoreBefore, hasMoreAfter, snapped, parentUnresolved, bytes, rev,
+  //   messages, toolCalls }> — `messages`/`toolCalls` are snapshots of the raw target below
+  // (re-sliced on every change so Vue sees a new array). Dropped on a history_id change, a
+  // reset/clear, a new jump (replaced), or when it touches the suffix (merged into it).
+  const islandBySession = ref(new Map())
+  // Non-reactive truth behind each island: { messages, messageIndex, toolCalls, toolIndex, retryIndex }.
+  const _islandTargets = new Map()
+  // One in-flight island request (around / before / after) per session; a new one aborts the old.
+  const _islandControllers = new Map()
+  // Latest-wins values the island's records determined (see _replayHistoryRecords): Map<sessionId, { stop, deferred, launch }>.
+  const _islandLatest = new Map()
+  // Island hook correlation, cached per island revision: Map<sessionId, { rev, result }>.
+  const _islandHookCache = new Map()
+  let _islandSeq = 0
   const HISTORY_INDEX_TIMEOUT_MS = 30000  // server waiter cap is 20 s, then 503
   const HISTORY_INDEX_RETRY_MS = 5000
   // A transient failure (503 index_building / timeout, twice) is retried later, a few times: it must
@@ -287,8 +306,8 @@ export const useMessageStore = defineStore('message', () => {
   }
 
   function _deleteHistory(sessionId) {
+    _dropIsland(sessionId)
     _dropHistoryIndex(sessionId)
-    _wireRatioBySession.delete(sessionId)
     if (!historyBySession.value.has(sessionId)) return
     const next = new Map(historyBySession.value)
     next.delete(sessionId)
@@ -349,7 +368,8 @@ export const useMessageStore = defineStore('message', () => {
 
   /** True when a message with this id is part of the loaded suffix. */
   function isMessageLoaded(sessionId, messageId) {
-    return !!messageIndexBySession.get(sessionId)?.has(messageId)
+    return !!messageIndexBySession.get(sessionId)?.has(messageId) ||
+      !!_islandTargets.get(sessionId)?.messageIndex.has(messageId)
   }
 
   function _scheduleIndexRetry(sessionId, historyId, generation) {
@@ -511,18 +531,6 @@ export const useMessageStore = defineStore('message', () => {
     return null
   }
 
-  /**
-   * Observed decoded/wire byte ratio of backfill pages (Resource Timing), kept per session
-   * (non-reactive): the turn-jump guard converts a byte distance into an expected download size with it.
-   * Unavailable timing leaves the previous value (callers default to 5x).
-   */
-  function _noteWireRatio(sessionId, url) {
-    const entry = _findResourceEntry(url)
-    if (entry && entry.encodedBodySize > 4096 && entry.decodedBodySize) {
-      _wireRatioBySession.set(sessionId, entry.decodedBodySize / entry.encodedBodySize)
-    }
-  }
-
   /** Records that overlap what is already loaded prove the new window is contiguous with it. */
   function _overlapsLoaded(sessionId, records) {
     const index = messageIndexBySession.get(sessionId)
@@ -599,6 +607,13 @@ export const useMessageStore = defineStore('message', () => {
         windowBps: _measureTransferBps(windowUrl, requestedAt),
       })
     }
+    // Stage 3 PR 3C-1: the island survives a resync while the history file is unchanged (stream_reset
+    // / evicted never touch its content); a changed history_id drops it. A replaced suffix may now
+    // reach the island, in which case they merge.
+    if (islandBySession.value.has(sessionId)) {
+      if (islandBySession.value.get(sessionId).historyId !== data.history_id) _dropIsland(sessionId)
+      else if (!canMerge) _mergeIslandIfTouching(sessionId)
+    }
     if (data.event_cursor !== undefined) loadedEventCursors.set(sessionId, data.event_cursor)
     // Only release the shared tracker if it is OURS (an archive view passes its own signal and
     // never claims it — it must not clear a live session's pending load for the same id).
@@ -644,7 +659,6 @@ export const useMessageStore = defineStore('message', () => {
       }
       throw err
     }
-    _noteWireRatio(sessionId, `${history.baseUrl}?${params.join('&')}`)
     if (data.history_id !== history.historyId) {
       const resetErr = new Error('History file changed during backfill')
       resetErr.isHistoryReset = true
@@ -671,12 +685,400 @@ export const useMessageStore = defineStore('message', () => {
     applyOlderPage(sessionId, page.records, { source })
     _setHistory(sessionId, { startCursor: page.startCursor, hasMoreBefore: page.hasMoreBefore })
     if (!page.hasMoreBefore) _hookCorrelationCache.delete(sessionId)
+    // Stage 3 PR 3C-1: backfill growing the suffix upward may reach the island: they merge.
+    if (islandBySession.value.has(sessionId)) _mergeIslandIfTouching(sessionId)
     return true
+  }
+
+  // ---- island: a pinned window of history away from the suffix (Issue #2030, stage 3 PR 3C-1) ----
+
+  const ISLAND_REQUEST_INACTIVITY_MS = 30000
+
+  function getIsland(sessionId) {
+    return islandBySession.value.get(sessionId) || null
+  }
+
+  function _islandError(reason, message, extra = {}) {
+    const err = new Error(message)
+    err.reason = reason
+    return Object.assign(err, extra)
+  }
+
+  /** Maps a failed island request to `err.reason`: not-found | busy | reset | superseded | aborted | failed. */
+  function _mapIslandError(err, controller, outerSignal) {
+    if (outerSignal?.aborted) return _islandError('aborted', 'Jump cancelled', { name: 'AbortError' })
+    if (controller?.signal.aborted) return _islandError('superseded', 'Jump superseded')
+    if (err?.status === 404) return _islandError('not-found', 'Message not found')
+    if (err?.status === 503) return _islandError('busy', 'The server is busy, try again', { status: 503 })
+    if (err?.status === 409 || err?.isHistoryReset) return _islandError('reset', 'History changed', { isHistoryReset: true })
+    return err?.reason ? err : _islandError('failed', err?.message || 'Failed to load history', { cause: err })
+  }
+
+  /** Aborts the session's in-flight island request (around / before / after), if any. */
+  function abortIsland(sessionId) {
+    _islandControllers.get(sessionId)?.abort()
+    _islandControllers.delete(sessionId)
+  }
+
+  function _claimIsland(sessionId) {
+    _islandControllers.get(sessionId)?.abort()
+    const controller = new AbortController()
+    _islandControllers.set(sessionId, controller)
+    return controller
+  }
+
+  function _releaseIsland(sessionId, controller) {
+    if (_islandControllers.get(sessionId) === controller) _islandControllers.delete(sessionId)
+  }
+
+  /** Forgets the island's content only (a request in flight is left alone). */
+  function _clearIslandState(sessionId) {
+    _islandTargets.delete(sessionId)
+    _islandLatest.delete(sessionId)
+    _islandHookCache.delete(sessionId)
+    if (!islandBySession.value.has(sessionId)) return
+    const next = new Map(islandBySession.value)
+    next.delete(sessionId)
+    islandBySession.value = next
+  }
+
+  /** Drops the island and aborts whatever request is still working on it. */
+  function _dropIsland(sessionId) {
+    abortIsland(sessionId)
+    if (islandBySession.value.has(sessionId)) pushDebugEvent('message', 'island-dropped', { sessionId })
+    _clearIslandState(sessionId)
+  }
+
+  /** Publishes the island's current content/meta (re-sliced arrays: Vue sees a new value). */
+  function _commitIsland(sessionId, patch) {
+    const target = _islandTargets.get(sessionId)
+    const prev = toRaw(islandBySession.value.get(sessionId)) || {}
+    const next = new Map(islandBySession.value)
+    next.set(sessionId, {
+      ...prev, ...patch, rev: (prev.rev || 0) + 1,
+      messages: target.messages.slice(), toolCalls: target.toolCalls.slice(),
+    })
+    islandBySession.value = next
+  }
+
+  /**
+   * Tools that already exist in the suffix are owned by the suffix (global by tool_use_id, the
+   * suffix wins): the island's record only fills what the suffix entry lacks, then goes.
+   */
+  function _shareIslandTools(sessionId, target) {
+    const suffixIndex = toolIndexBySession.get(sessionId)
+    const suffixTools = toolCallsBySession.value.get(sessionId)
+    if (!suffixIndex || !suffixIndex.size || !suffixTools) return
+    let shared = false
+    for (const tool of target.toolCalls) {
+      const idx = suffixIndex.get(tool.id)
+      if (idx === undefined) continue
+      mergeToolCallFields(suffixTools[idx], tool)
+      shared = true
+    }
+    if (!shared) return
+    target.toolCalls = target.toolCalls.filter(tool => !suffixIndex.has(tool.id))
+    target.toolIndex = new Map(target.toolCalls.map((tool, i) => [tool.id, i]))
+  }
+
+  function _islandOverlapsSuffix(sessionId, target) {
+    const index = messageIndexBySession.get(sessionId)
+    return !!index && target.messages.some(m => m.message_id && index.has(m.message_id))
+  }
+
+  /** Merges the island into the suffix when the two touch/overlap. Returns true when merged. */
+  function _mergeIslandIfTouching(sessionId) {
+    const island = islandBySession.value.get(sessionId)
+    const history = historyBySession.value.get(sessionId)
+    const target = _islandTargets.get(sessionId)
+    if (!island || !history || !target) return false
+    const needOverlap = cursorOffset(island.endCursor) == null || cursorOffset(history.startCursor) == null
+    if (!intervalsTouch(island, history, needOverlap && _islandOverlapsSuffix(sessionId, target))) return false
+    mergeIslandIntoSuffix(sessionId)
+    return true
+  }
+
+  /**
+   * The island joins the suffix as if it had been an older backfill page (mergeOlderPage: records
+   * already in the suffix are dropped, the suffix's tool entries win field by field).
+   */
+  function mergeIslandIntoSuffix(sessionId) {
+    const island = islandBySession.value.get(sessionId)
+    const target = _islandTargets.get(sessionId)
+    const history = historyBySession.value.get(sessionId)
+    if (!island || !target || !history) return false
+    const current = {
+      messages: messagesBySession.value.get(sessionId) || [],
+      messageIndex: messageIndexBySession.get(sessionId) || new Map(),
+      toolCalls: toolCallsBySession.value.get(sessionId) || [],
+      toolIndex: toolIndexBySession.get(sessionId) || new Map(),
+      retryIndex: retryIndexBySession.get(sessionId) || new Map(),
+    }
+    const merged = mergeOlderPage(current, target)
+    _installRecordTarget(sessionId, merged)
+    // What the island's records determined counts only where nothing newer did.
+    const latest = _islandLatest.get(sessionId) || {}
+    if (latest.stop && !lastStopReasonBySession.value.has(sessionId)) lastStopReasonBySession.value.set(sessionId, latest.stop[0])
+    if (latest.deferred && !deferredToolUseBySession.value.has(sessionId)) deferredToolUseBySession.value.set(sessionId, latest.deferred[0])
+    if (latest.launch && !launchTimestampBySession.value.has(sessionId)) launchTimestampBySession.value.set(sessionId, latest.launch[0])
+    lastStopReasonBySession.value = new Map(lastStopReasonBySession.value)
+    deferredToolUseBySession.value = new Map(deferredToolUseBySession.value)
+    messagesBySession.value = new Map(messagesBySession.value)
+    toolCallsBySession.value = new Map(toolCallsBySession.value)
+    narrationByTaskIdAndLeg.value = new Map(narrationByTaskIdAndLeg.value)
+    // The suffix now reaches back to the island's start — unless the window lay entirely inside the
+    // suffix (it then reaches no further back than it already did).
+    const islandStart = cursorOffset(island.startCursor)
+    const suffixStart = cursorOffset(history.startCursor)
+    const reachesFurther = islandStart != null && suffixStart != null ? islandStart < suffixStart : merged.prependedMessageCount > 0
+    if (reachesFurther) _setHistory(sessionId, { startCursor: island.startCursor, hasMoreBefore: island.hasMoreBefore })
+    _hookCorrelationCache.delete(sessionId)
+    // (A page request still working on the island is stale and is dropped when it lands; an in-flight
+    // jump is NOT this island's and must keep running.)
+    _clearIslandState(sessionId)
+    pushDebugEvent('message', 'island-merged', { sessionId, prepended: merged.prependedMessageCount, hasMoreBefore: island.hasMoreBefore })
+    return true
+  }
+
+  /**
+   * THE jump path (issue #2030 stage 3 PR 3C-1): fetches ONE bounded window around `target` —
+   * `{ cursor }` (`around=`, no lookup) or `{ messageId }` / `{ toolUseId }` (`around_id=`) — and
+   * installs it as the island, replacing any previous one (aborting its request first). A window
+   * that reaches the suffix merges into it at once. Resolves to `{ status: 'loaded' | 'complete' |
+   * 'island' | 'merged', anchorCursor, parentUnresolved }`; rejects with `err.reason` 'not-found'
+   * (404 message_not_found) | 'busy' (503 resolve_busy) | 'reset' (409 / history_id changed, the
+   * island is dropped) | 'superseded' | 'aborted' | 'failed'. Whatever happens the suffix is untouched.
+   */
+  async function loadAround(sessionId, target, { signal: outerSignal, inactivityMs = ISLAND_REQUEST_INACTIVITY_MS } = {}) {
+    const history = historyBySession.value.get(sessionId)
+    if (!history || !history.hasMoreBefore) return { status: 'complete' } // fully loaded: nothing to fetch
+    if (target.messageId && isMessageLoaded(sessionId, target.messageId)) return { status: 'loaded' }
+    // A cursor at or after the suffix start is already loaded (the suffix reaches the end of the file).
+    const targetOffset = cursorOffset(target.cursor)
+    const suffixOffset = cursorOffset(history.startCursor)
+    if (targetOffset != null && suffixOffset != null && targetOffset >= suffixOffset) return { status: 'loaded' }
+    const enc = encodeURIComponent
+    const params = target.cursor ? `around=${enc(target.cursor)}`
+      : (target.messageId || target.toolUseId) ? `around_id=${enc(target.messageId || target.toolUseId)}` : null
+    if (!params) throw _islandError('not-found', 'No jump target')
+
+    const controller = _claimIsland(sessionId)
+    const signal = outerSignal ? AbortSignal.any([outerSignal, controller.signal]) : controller.signal
+    const url = `${history.baseUrl}?${params}`
+    const startedAt = typeof performance !== 'undefined' ? performance.now() : 0
+    try {
+      let data
+      try {
+        data = await _fetchHistoryJson(url, { signal, inactivityMs, label: `history window for session ${sessionId}` })
+      } catch (err) {
+        throw _mapIslandError(err, controller, outerSignal)
+      }
+      if (controller.signal.aborted || _islandControllers.get(sessionId) !== controller) throw _islandError('superseded', 'Jump superseded')
+      const now = historyBySession.value.get(sessionId)
+      if (!now || now.generation !== history.generation) throw _islandError('superseded', 'Jump superseded')
+      if (data.history_id !== now.historyId) {
+        _dropIsland(sessionId)
+        throw _islandError('reset', 'History changed', { isHistoryReset: true })
+      }
+
+      const records = data.messages || []
+      const latest = {}
+      const islandTarget = _replayHistoryRecords(sessionId, records, history.source || 'load', _createRecordTarget(), latest)
+      _shareIslandTools(sessionId, islandTarget)
+      _clearIslandState(sessionId) // replace: the previous island's records are exclusively its own
+      _islandTargets.set(sessionId, islandTarget)
+      _islandLatest.set(sessionId, latest)
+      _commitIsland(sessionId, {
+        id: ++_islandSeq,
+        baseUrl: history.baseUrl,
+        source: history.source || 'load',
+        historyId: data.history_id,
+        startCursor: data.start_cursor,
+        endCursor: data.end_cursor,
+        anchorCursor: data.anchor_cursor ?? null,
+        hasMoreBefore: !!data.has_more_before,
+        hasMoreAfter: !!data.has_more_after,
+        snapped: data.snapped !== false,
+        parentUnresolved: !!data.parent_unresolved,
+        bytes: windowBytes(data.start_cursor, data.end_cursor) ?? records.length * 2048,
+      })
+      const merged = _mergeIslandIfTouching(sessionId)
+      pushDebugEvent('message', 'island-window', {
+        sessionId, records: records.length, merged, bytes: windowBytes(data.start_cursor, data.end_cursor), ms: typeof performance !== 'undefined' ? Math.round(performance.now() - startedAt) : null,
+      })
+      return { status: merged ? 'merged' : 'island', anchorCursor: data.anchor_cursor ?? null, parentUnresolved: !!data.parent_unresolved }
+    } finally {
+      _releaseIsland(sessionId, controller)
+    }
+  }
+
+  /**
+   * Fetches (does not apply) the island's next page on one edge: `before` (older, the topmost
+   * interval's scroll-up page) or `after` ("Load newer": a forward page that stops at the suffix
+   * start). Resolves to the page, or null when that edge has nothing more / the island is full
+   * (interim cap: paging stops, the edge indicators stay). Same error reasons as loadAround.
+   */
+  async function fetchIslandPage(sessionId, edge, { signal: outerSignal, maxBytes = ISLAND_PAGE_BYTES, inactivityMs = ISLAND_REQUEST_INACTIVITY_MS } = {}) {
+    const island = islandBySession.value.get(sessionId)
+    const history = historyBySession.value.get(sessionId)
+    if (!island || !history) return null
+    if (edge === 'before' ? !island.hasMoreBefore : !island.hasMoreAfter) return null
+    if (islandIsFull(island)) return null
+    const enc = encodeURIComponent
+    const from = edge === 'before' ? island.startCursor : island.endCursor
+    const query = edge === 'before'
+      ? `before=${enc(from)}&max_bytes=${maxBytes}`
+      : `after=${enc(from)}&until=${enc(history.startCursor)}&max_bytes=${maxBytes}`
+    const url = `${island.baseUrl}?${query}`
+    const controller = _claimIsland(sessionId)
+    const signal = outerSignal ? AbortSignal.any([outerSignal, controller.signal]) : controller.signal
+    try {
+      let data
+      try {
+        data = await _fetchHistoryJson(url, { signal, inactivityMs, label: `${edge} history for session ${sessionId}` })
+      } catch (err) {
+        throw _mapIslandError(err, controller, outerSignal)
+      }
+      if (controller.signal.aborted || _islandControllers.get(sessionId) !== controller) throw _islandError('superseded', 'Request superseded')
+      if (data.history_id !== island.historyId) {
+        _dropIsland(sessionId)
+        throw _islandError('reset', 'History changed', { isHistoryReset: true })
+      }
+      return {
+        edge,
+        records: data.messages || [],
+        startCursor: data.start_cursor,
+        endCursor: data.end_cursor,
+        hasMoreBefore: !!data.has_more_before,
+        hasMoreAfter: !!data.has_more_after,
+        islandId: island.id,
+        requestedFrom: from,
+      }
+    } finally {
+      _releaseIsland(sessionId, controller)
+    }
+  }
+
+  /**
+   * Applies a page returned by fetchIslandPage() unless the island moved on while it was in flight
+   * (replaced / grown from the other edge / merged), in which case it is stale and dropped.
+   * An `after` page that reaches the suffix merges the island into it. Returns true when applied.
+   */
+  function applyIslandPage(sessionId, page) {
+    const island = islandBySession.value.get(sessionId)
+    const target = _islandTargets.get(sessionId)
+    if (!island || !target || island.id !== page.islandId) return false
+    if ((page.edge === 'before' ? island.startCursor : island.endCursor) !== page.requestedFrom) return false
+
+    let patch
+    const latest = {}
+    const known = _islandLatest.get(sessionId) || {}
+    if (page.edge === 'before') {
+      const older = _replayHistoryRecords(sessionId, page.records, island.source, _createRecordTarget(), latest)
+      _islandTargets.set(sessionId, mergeOlderPage(target, older))
+      _islandLatest.set(sessionId, { ...latest, ...known }) // older records never beat what the island already determined
+      patch = { startCursor: page.startCursor, hasMoreBefore: page.hasMoreBefore }
+    } else {
+      // Newer records grow the island's own target (the live-update semantics: newer wins).
+      _replayHistoryRecords(sessionId, page.records, island.source, target, latest, true)
+      _islandLatest.set(sessionId, { ...known, ...latest })
+      patch = { endCursor: page.endCursor, hasMoreAfter: page.hasMoreAfter }
+    }
+    _shareIslandTools(sessionId, _islandTargets.get(sessionId))
+    const startCursor = patch.startCursor ?? island.startCursor
+    const endCursor = patch.endCursor ?? island.endCursor
+    const bytes = windowBytes(startCursor, endCursor) ?? island.bytes + page.records.length * 2048
+    _commitIsland(sessionId, { ...patch, bytes })
+    if (page.records.some(_touchesCompactionHooks)) _islandHookCache.delete(sessionId)
+    pushDebugEvent('message', 'island-page', { sessionId, edge: page.edge, records: page.records.length, bytes })
+    if (page.edge === 'after') _mergeIslandIfTouching(sessionId)
+    return true
+  }
+
+  /** The suffix's messages, or island ++ suffix while an island exists (suffix array itself otherwise). */
+  function loadedMessages(sessionId) {
+    const suffix = messagesBySession.value.get(sessionId) || []
+    const island = islandBySession.value.get(sessionId)
+    return island ? island.messages.concat(suffix) : suffix
+  }
+
+  /** The suffix's tool calls, or island's ++ suffix's while an island exists (suffix wins on a shared id). */
+  function loadedToolCalls(sessionId) {
+    const suffix = toolCallsBySession.value.get(sessionId) || []
+    const island = islandBySession.value.get(sessionId)
+    if (!island) return suffix
+    const suffixIndex = toolIndexBySession.get(sessionId)
+    return island.toolCalls.filter(tool => !suffixIndex?.has(tool.id)).concat(suffix)
+  }
+
+  /** One tool call by id from the loaded intervals (the reactive entry, so UI state written to it renders). */
+  function findLoadedToolCall(sessionId, toolUseId) {
+    const toolIndex = toolIndexBySession.get(sessionId)
+    const idx = toolIndex?.get(toolUseId)
+    if (idx !== undefined) return toolCallsBySession.value.get(sessionId)?.[idx]
+    const island = islandBySession.value.get(sessionId)
+    const islandIdx = _islandTargets.get(sessionId)?.toolIndex.get(toolUseId)
+    return island && islandIdx !== undefined ? island.toolCalls[islandIdx] : undefined
   }
 
   function _touchesCompactionHooks(record) {
     const initData = record.type === 'system' ? record.metadata?.init_data : null
     return !!initData && (initData.status === 'compacting' || initData.hook_event === 'PreCompact')
+  }
+
+  /**
+   * Replays a window of HISTORY records (an older backfill page, or an island window) into a fresh
+   * record target, leaving the "latest wins" session state exactly as the newer records set it:
+   * lastStopReason / deferredToolUse / launch timestamp keep any value already set (restored
+   * after the replay), init data is not captured, the Task store is never touched, subagent
+   * narration appended while replaying is moved in front of what is already held, and the page's
+   * tool calls are marked as backfilled (history, not news). Returns the filled target (`older`
+   * is a fresh one unless the caller grows an existing target with newer records).
+   */
+  function _replayHistoryRecords(sessionId, records, source, older = _createRecordTarget(), capture = null, newer = false) {
+    const savedStop = lastStopReasonBySession.value.has(sessionId) ? [lastStopReasonBySession.value.get(sessionId)] : null
+    const savedDeferred = deferredToolUseBySession.value.has(sessionId) ? [deferredToolUseBySession.value.get(sessionId)] : null
+    const savedLaunch = launchTimestampBySession.value.has(sessionId) ? [launchTimestampBySession.value.get(sessionId)] : null
+    const narrationLengths = new Map()
+    for (const [taskId, perLeg] of narrationByTaskIdAndLeg.value) {
+      for (const [legIndex, list] of perLeg) narrationLengths.set(`${taskId}:${legIndex}`, list.length)
+    }
+
+    if (source === 'archive') {
+      _applyArchiveRecords(sessionId, records, older, { captureInit: false })
+    } else {
+      for (const record of records) applyRecord(sessionId, record, 'load', { notify: false, target: older })
+    }
+
+    // Latest wins: a value the newer records already determined must survive the older replay.
+    // If nothing newer determined one yet (the tail held no result / user message / launch), the
+    // older page's value is the latest there is and is kept.
+    // An island window (`capture` given) never leaves a value behind: it is older than the suffix
+    // and the gap pages between them must still be able to beat it, so what it set is handed back
+    // to the caller (applied only if nothing else set one by the time it merges).
+    const restore = (key, map, saved) => {
+      if (capture) {
+        const now = map.value.has(sessionId) ? [map.value.get(sessionId)] : null
+        if (now && (!saved || now[0] !== saved[0])) capture[key] = now
+        if (!saved) map.value.delete(sessionId)
+      }
+      if (saved) map.value.set(sessionId, saved[0])
+    }
+    restore('stop', lastStopReasonBySession, savedStop)
+    restore('deferred', deferredToolUseBySession, savedDeferred)
+    restore('launch', launchTimestampBySession, savedLaunch)
+    for (const [taskId, perLeg] of narrationByTaskIdAndLeg.value) {
+      for (const [legIndex, list] of perLeg) {
+        const added = list.length - (narrationLengths.get(`${taskId}:${legIndex}`) || 0)
+        // older records go in front of what is held; records NEWER than the held ones (island growth) stay at the end
+        if (added > 0 && !newer) perLeg.set(legIndex, list.splice(list.length - added, added).concat(list))
+      }
+    }
+
+    let backfilled = _backfilledToolIds.get(sessionId)
+    if (!backfilled) _backfilledToolIds.set(sessionId, (backfilled = new Set()))
+    for (const tool of older.toolCalls) backfilled.add(tool.id)
+    return older
   }
 
   /**
@@ -703,40 +1105,7 @@ export const useMessageStore = defineStore('message', () => {
       retryIndex: retryIndexBySession.get(sessionId) || new Map(),
     }
 
-    const savedStop = lastStopReasonBySession.value.has(sessionId) ? [lastStopReasonBySession.value.get(sessionId)] : null
-    const savedDeferred = deferredToolUseBySession.value.has(sessionId) ? [deferredToolUseBySession.value.get(sessionId)] : null
-    const savedLaunch = launchTimestampBySession.value.has(sessionId) ? [launchTimestampBySession.value.get(sessionId)] : null
-    const narrationLengths = new Map()
-    for (const [taskId, perLeg] of narrationByTaskIdAndLeg.value) {
-      for (const [legIndex, list] of perLeg) narrationLengths.set(`${taskId}:${legIndex}`, list.length)
-    }
-
-    const older = _createRecordTarget()
-    if (source === 'archive') {
-      _applyArchiveRecords(sessionId, records, older, { captureInit: false })
-    } else {
-      for (const record of records) applyRecord(sessionId, record, 'load', { notify: false, target: older })
-    }
-
-    // Latest wins: a value the newer records already determined must survive the older replay.
-    // If nothing newer determined one yet (the tail held no result / user message / launch), the
-    // older page's value is the latest there is and is kept.
-    const restore = (map, saved) => {
-      if (saved) map.value.set(sessionId, saved[0])
-    }
-    restore(lastStopReasonBySession, savedStop)
-    restore(deferredToolUseBySession, savedDeferred)
-    restore(launchTimestampBySession, savedLaunch)
-    for (const [taskId, perLeg] of narrationByTaskIdAndLeg.value) {
-      for (const [legIndex, list] of perLeg) {
-        const added = list.length - (narrationLengths.get(`${taskId}:${legIndex}`) || 0)
-        if (added > 0) perLeg.set(legIndex, list.splice(list.length - added, added).concat(list))
-      }
-    }
-
-    let backfilled = _backfilledToolIds.get(sessionId)
-    if (!backfilled) _backfilledToolIds.set(sessionId, (backfilled = new Set()))
-    for (const tool of older.toolCalls) backfilled.add(tool.id)
+    const older = _replayHistoryRecords(sessionId, records, source)
 
     const merged = mergeOlderPage(current, older)
     _installRecordTarget(sessionId, merged)
@@ -1145,7 +1514,10 @@ export const useMessageStore = defineStore('message', () => {
     }
     const perLeg = narrationByTaskIdAndLeg.value.get(taskId)
     if (!perLeg.has(legIndex)) perLeg.set(legIndex, [])
-    perLeg.get(legIndex).push(message)
+    const list = perLeg.get(legIndex)
+    // (an island replacing another one replays records already routed)
+    if (message.message_id && list.some(m => m.message_id === message.message_id)) return true
+    list.push(message)
     narrationByTaskIdAndLeg.value = new Map(narrationByTaskIdAndLeg.value)
     return true
   }
@@ -1166,7 +1538,7 @@ export const useMessageStore = defineStore('message', () => {
     const windowStart = entry.legs[legIndex]?.started_at ?? -Infinity
     const windowEnd = entry.legs[legIndex + 1]?.started_at ?? Infinity
 
-    const toolCalls = toolCallsBySession.value.get(sessionId) || []
+    const toolCalls = loadedToolCalls(sessionId)
     return toolCalls.filter(tc => {
       if (tc.parent_tool_use_id !== rootToolUseId) return false
       const ts = typeof tc.timestamp === 'number' ? tc.timestamp : new Date(tc.timestamp).getTime() / 1000
@@ -1994,7 +2366,14 @@ export const useMessageStore = defineStore('message', () => {
 
         // Trigger reactivity
         toolCallsBySession.value = new Map(toolCallsBySession.value)
+        return
       }
+    }
+    // A tool of the island (stage 3 PR 3C-1)
+    const islandTool = islandBySession.value.has(sessionId) ? findLoadedToolCall(sessionId, toolUseId) : undefined
+    if (islandTool) {
+      islandTool.isExpanded = !islandTool.isExpanded
+      islandBySession.value = new Map(islandBySession.value)
     }
   }
 
@@ -2419,6 +2798,35 @@ export const useMessageStore = defineStore('message', () => {
    * the message stream has actually advanced (different count or last message ID).
    */
   function getHookCorrelation(sessionId) {
+    const suffixResult = _suffixHookCorrelation(sessionId)
+    const island = islandBySession.value.get(sessionId)
+    if (!island) return suffixResult
+    // Stage 3 PR 3C-1: each interval is correlated on its own (an island never pairs with the
+    // suffix across the gap); the result is the union of the two.
+    let entry = _islandHookCache.get(sessionId)
+    if (!entry || entry.rev !== island.rev) {
+      entry = { rev: island.rev, result: correlateHooks(island.messages, island.toolCalls), combined: null }
+      _islandHookCache.set(sessionId, entry)
+    }
+    if (entry.combined?.base !== suffixResult) {
+      const merge = (a, b) => { const out = new Map(a); for (const [k, v] of b) out.set(k, v); return out }
+      const union = (a, b) => new Set([...a, ...b])
+      entry.combined = {
+        base: suffixResult,
+        result: {
+          hooksByToolId: merge(entry.result.hooksByToolId, suffixResult.hooksByToolId),
+          hooksByMessageId: merge(entry.result.hooksByMessageId, suffixResult.hooksByMessageId),
+          hooksByCompactionKey: merge(entry.result.hooksByCompactionKey, suffixResult.hooksByCompactionKey),
+          hooksOnClientLaunched: suffixResult.hooksOnClientLaunched,
+          attachedHookMessageIds: union(entry.result.attachedHookMessageIds, suffixResult.attachedHookMessageIds),
+          unattachedHookMessageIds: union(entry.result.unattachedHookMessageIds, suffixResult.unattachedHookMessageIds),
+        },
+      }
+    }
+    return entry.combined.result
+  }
+
+  function _suffixHookCorrelation(sessionId) {
     const messages = messagesBySession.value.get(sessionId) || []
     const count = messages.length
     const lastId = count > 0 ? (messages[count - 1].message_id || messages[count - 1].id || null) : null
@@ -2547,9 +2955,17 @@ export const useMessageStore = defineStore('message', () => {
     historyIndexBySession: readonly(historyIndexBySession),
     getHistoryIndex,
     ensureHistoryIndex,
-    getWireRatio: (sessionId) => _wireRatioBySession.get(sessionId) || null,
     isMessageLoaded,
     getHistoryState,
+    // Issue #2030 stage 3 PR 3C-1: the pinned island + the jump path
+    islandBySession: readonly(islandBySession),
+    getIsland,
+    loadAround,
+    fetchIslandPage,
+    applyIslandPage,
+    loadedMessages,
+    loadedToolCalls,
+    findLoadedToolCall,
     isHistoryComplete,
     historyProgress,
     // Issue #2140: shared per-session in-progress history-load tracker — the single source

@@ -9,6 +9,10 @@ import { nextTick } from 'vue'
 //
 // `virtualizerRef` is the Ref<Virtualizer> returned by @tanstack/vue-virtual's useVirtualizer().
 const MAX_MOUNT_POLL_ATTEMPTS = 20
+// A saturated main thread (a 90k-record session backfilling 4 MiB pages while the user jumps) can need
+// longer than one poll budget for measured row sizes to settle: the jump is re-issued against the fresh
+// measurements and polled again before it is given up (issue #2030 stage 3 PR 3C-1).
+const MOUNT_ROUNDS = 3
 
 /**
  * `measurementsCache`/`scrollToIndex`/`getOffsetForIndex` all resolve against
@@ -31,16 +35,21 @@ export function useVirtualNavigation(virtualizerRef) {
   async function scrollToItemIndex(index, { align = 'auto', behavior = 'auto' } = {}) {
     const virtualizer = virtualizerRef.value
     if (!virtualizer || index == null || index < 0) return false
-    forceFreshMeasurements(virtualizer)
-    virtualizer.scrollToIndex(index, { align, behavior })
-    return waitForIndexMounted(index)
+    for (let round = 0; round < MOUNT_ROUNDS; round++) {
+      const current = virtualizerRef.value
+      if (!current) return false
+      forceFreshMeasurements(current)
+      current.scrollToIndex(index, { align, behavior })
+      if (await waitForIndexMounted(index, MAX_MOUNT_POLL_ATTEMPTS, round === MOUNT_ROUNDS - 1 ? MOUNT_ROUNDS : 0)) return true
+    }
+    return false
   }
 
   /**
    * Bounded nextTick/rAF retry against the virtualizer's own rendered range — not a fixed
    * timeout — per §5.4's guidance for the one-shot jump-navigation tolerance profile.
    */
-  async function waitForIndexMounted(index, maxAttempts = MAX_MOUNT_POLL_ATTEMPTS) {
+  async function waitForIndexMounted(index, maxAttempts = MAX_MOUNT_POLL_ATTEMPTS, warnRounds = 1) {
     const virtualizer = virtualizerRef.value
     if (!virtualizer) return false
     for (let attempt = 0; attempt < maxAttempts; attempt++) {
@@ -54,7 +63,7 @@ export function useVirtualNavigation(virtualizerRef) {
     // mount (scrollToIndex → measurement pass → possibly-corrected offset) — this warning is the
     // trail for when that bounded retry budget is actually exhausted, so a silent false return
     // doesn't just read as "the jump button silently doesn't work" with no diagnostic signal.
-    console.warn(`[useVirtualNavigation] index ${index} did not mount within ${maxAttempts} attempts`)
+    if (warnRounds > 0) console.warn(`[useVirtualNavigation] index ${index} did not mount within ${maxAttempts * warnRounds} attempts`)
     return false
   }
 
