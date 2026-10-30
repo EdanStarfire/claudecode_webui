@@ -15,6 +15,7 @@ import pytest
 from backend.message_history_reader import (
     MessageNotFoundError,
     ResolveBusyError,
+    ResolvedId,
 )
 from backend.tests.test_issue_2030_history_window_api import SID, _app, _coordinator, _get
 
@@ -131,7 +132,9 @@ async def test_around_id_resolves_a_parent_message_id_returned_by_server_search(
     [
         ("window=tail&around=b:0", 422), ("before=b:0&after=b:0", 422),
         ("around=b:0&around_id=x", 422), ("around=", 422), ("around_id=%20", 422), ("after=", 422),
-        ("until=b:0", 422), ("before_bytes=5", 422), ("after=b:0&after_bytes=5", 422),
+        ("until=b:0", 422), ("before_bytes=5", 422), ("around_id=a%22b", 422),
+        ("around_id=a%5Cb", 422), ("around_id=a%0Ab", 422), ("around_id=caf%C3%A9", 422),
+        ("around_id=" + "x" * 257, 422), ("after=b:0&after_bytes=5", 422),
         ("around=b:3", 409), ("around=junk", 409), ("after=b:3", 409), ("after=b:0&until=b:7", 409),
         ("around=b:999999999", 409), ("around_id=missing", 404),
     ],
@@ -234,7 +237,7 @@ class BlockingReader:
         self.cancel_seen = threading.Event()
         self.calls: list[str] = []
 
-    def resolve_message_id(self, ident, cancel=None):
+    def lookup_id(self, ident, cancel=None):
         self.calls.append(ident)
         self.started.set()
         deadline = time.monotonic() + 10
@@ -243,7 +246,7 @@ class BlockingReader:
                 self.cancel_seen.set()
                 return None
             time.sleep(0.005)
-        return self.cursor
+        return None if self.cursor is None else ResolvedId(self.cursor)
 
 
 async def _until(predicate, timeout=5.0):
@@ -268,7 +271,7 @@ async def test_resolve_is_single_flight_per_session_and_id(query):
     await _until(reader.started.is_set)
     assert query._cold_scans.inflight_count == 1
     reader.release.set()
-    assert await a == await b == "b:42"
+    assert (await a).cursor == (await b).cursor == "b:42"
     assert reader.calls == ["x"]
     assert query._cold_scans.inflight_count == 0  # no leaked flight
 
@@ -279,7 +282,7 @@ async def test_resolve_not_found_and_other_session_unaffected(query):
     fast.release.set()
     t = asyncio.ensure_future(query.resolve_message_id("big", slow, "x"))
     await _until(slow.started.is_set)
-    assert await query.resolve_message_id("small", fast, "y") == "b:2"  # session Y not behind X
+    assert (await query.resolve_message_id("small", fast, "y")).cursor == "b:2"  # session Y not behind X
     fast.cursor = None
     with pytest.raises(MessageNotFoundError):
         await query.resolve_message_id("small", fast, "z")
@@ -312,7 +315,7 @@ async def test_resolve_flight_cap_per_session(query, monkeypatch):
     await _until(lambda: query._cold_scans.inflight_count == 2)
     with pytest.raises(ResolveBusyError):
         await query.resolve_message_id("k", readers[2], "id2")
-    assert await query.resolve_message_id("other", _instant("b:9"), "id9") == "b:9"  # other key free
+    assert (await query.resolve_message_id("other", _instant("b:9"), "id9")).cursor == "b:9"  # other key free
     for r in readers:
         r.release.set()
     await asyncio.gather(*tasks)
@@ -387,4 +390,23 @@ async def test_saturated_cold_pool_does_not_delay_around_reads(tmp_path):
         await asyncio.gather(*hogs)
     finally:
         gate.set()
+        coordinator._session_query.shutdown()
+
+
+@pytest.mark.asyncio
+async def test_around_id_flags_an_unresolved_parent(tmp_path):
+    records = [
+        {"type": "user", "message_id": "u0", "content": "hi", "session_id": SID},
+        {"type": "tool_call", "message_id": "tc1", "tool_use_id": "toolu_orphan", "name": "Read",
+         "session_id": SID},
+        {"type": "assistant", "message_id": "a1", "content": "x", "session_id": SID},
+    ]
+    coordinator = await _coordinator(tmp_path, records)
+    try:
+        app = _app(coordinator)
+        body = (await _get(app, f"/api/sessions/{SID}/messages?around_id=toolu_orphan")).json()
+        assert body["parent_unresolved"] is True and "tc1" in _ids(body)
+        plain = (await _get(app, f"/api/sessions/{SID}/messages?around_id=a1")).json()
+        assert "parent_unresolved" not in plain
+    finally:
         coordinator._session_query.shutdown()

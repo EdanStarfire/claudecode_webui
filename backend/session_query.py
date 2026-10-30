@@ -37,6 +37,7 @@ from .message_history_reader import (
     FileMessageHistoryReader,
     MessageNotFoundError,
     ResolveBusyError,
+    ResolvedId,
     build_after_budget,
     build_around_budget,
     build_budget,
@@ -449,14 +450,19 @@ class SessionQuery:
         O(file), goes through the cold-scan pool."""
         if after is not None:
             return await read_after_payload(reader, after, build_after_budget(max_bytes), until)
+        unresolved = False
         if around is None:
-            around = await self.resolve_message_id(key, reader, around_id or "")
-        return await read_around_payload(
+            found = await self.resolve_message_id(key, reader, around_id or "")
+            around, unresolved = found.cursor, found.parent_unresolved
+        payload = await read_around_payload(
             reader, around, build_around_budget(before_bytes, after_bytes)
         )
+        if unresolved:  # a tool_use_id whose launching message was not found: anchored on its tool_call
+            payload["parent_unresolved"] = True
+        return payload
 
-    async def resolve_message_id(self, key: str, reader: Any, ident: str) -> str:
-        """Cursor of ``ident`` (message_id or tool_use_id) in ``reader``'s file, via the cold-scan
+    async def resolve_message_id(self, key: str, reader: Any, ident: str) -> ResolvedId:
+        """Location (``ResolvedId``) of ``ident`` (message_id or tool_use_id) in ``reader``'s file, via the cold-scan
         pool: single-flight per (key, id), at most ``RESOLVE_MAX_FLIGHTS_PER_KEY`` distinct lookups
         per key, waiter cap ``RESOLVE_WAIT_S``. Raises ``MessageNotFoundError`` (also when the
         session was deleted/reset mid-lookup) and ``ResolveBusyError``."""
@@ -467,18 +473,18 @@ class SessionQuery:
         ):
             raise ResolveBusyError(key)
 
-        async def _flight(handle) -> str | None:
-            return await handle.run(lambda cancel: reader.resolve_message_id(ident, cancel))
+        async def _flight(handle) -> ResolvedId | None:
+            return await handle.run(lambda cancel: reader.lookup_id(ident, cancel))
 
         try:
-            cursor = await self._cold_scans.single_flight(
+            found = await self._cold_scans.single_flight(
                 key, kind, _flight, empty=lambda: None, timeout=RESOLVE_WAIT_S
             )
         except TimeoutError as e:
             raise ResolveBusyError(key) from e
-        if cursor is None:
+        if found is None:
             raise MessageNotFoundError(ident)
-        return cursor
+        return found
 
     # ==================== SDK TASK LIST SNAPSHOT (Issue #2030) ====================
 

@@ -34,7 +34,7 @@ import time
 from collections.abc import Callable, Iterator
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Protocol
+from typing import Any, NamedTuple, Protocol
 
 from . import history_search as hs
 from .models.messages import LegacyMessageFormatError
@@ -50,6 +50,9 @@ _CURSOR_PREFIX = "b:"
 # busy time (25 % duty), so concurrent lookups of a huge file leave the GIL to the event loop and the
 # critical-path reads of other sessions (the index scan and the search do the same).
 RESOLVE_THROTTLE = 3.0
+# A tool_use_id found first on a tool_call record (normally the launching message comes first) keeps
+# scanning this many bytes for the parent before falling back to the tool_call record.
+PARENT_SCAN_BYTES = 8 * 1024 * 1024
 
 # Turn boundary (documented twice, keep in sync with the browser):
 #   type == "user" and not metadata.has_tool_results and not a compaction continuation record
@@ -67,6 +70,14 @@ def _needle_pattern(needles: tuple[bytes, ...], regex: bool = False) -> "re.Patt
 
 class CursorInvalidError(Exception):
     """The cursor does not point at the start of a line (file rewritten, or garbage)."""
+
+
+class ResolvedId(NamedTuple):
+    """Result of an id lookup. ``parent_unresolved``: a ``tool_use_id`` whose launching message was
+    not found within the bounded parent scan, so ``cursor`` is its first ``tool_call`` record."""
+
+    cursor: str
+    parent_unresolved: bool = False
 
 
 class MessageNotFoundError(Exception):
@@ -155,6 +166,8 @@ class MessageHistoryReader(Protocol):
         self, cursor: str, budget: "AfterBudget", until: str | None = None
     ) -> HistoryWindow: ...
 
+    def lookup_id(self, ident: str, cancel: Any = None) -> "ResolvedId | None": ...
+
     def resolve_message_id(self, message_id: str, cancel: Any = None) -> str | None: ...
 
     async def scan_backward(
@@ -206,7 +219,7 @@ def _is_turn_boundary(record: dict) -> bool:
     return not (isinstance(metadata, dict) and metadata.get("has_tool_results"))
 
 
-def _is_plain_id(value: Any) -> bool:
+def is_plain_id(value: Any) -> bool:
     """An id the raw find can look for: non-empty, bounded ASCII (ids are uuids / ``toolu_*``), no
     characters JSON would escape, so the quoted token is byte-identical in the stored line."""
     return (
@@ -219,19 +232,20 @@ def _is_plain_id(value: Any) -> bool:
     )
 
 
-def _record_has_id(record: dict, ident: str) -> bool:
-    """Confirmation of a resolve candidate: the record's own ``message_id``/``id`` (the browser's
-    ``resolveMessageId``), its ``tool_use_id`` (a tool_call record), or a ``tool_uses`` entry id of
-    the message that launched the tool."""
+def _id_match(record: dict | None, ident: str) -> str | None:
+    """Confirmation of a lookup candidate, on top-level fields only: ``"own"`` (the record's own
+    ``message_id``/``id``, the browser's ``resolveMessageId``), ``"parent"`` (a message listing the
+    tool in ``metadata.tool_uses``), ``"tool_call"`` (a ``tool_call`` record of that
+    ``tool_use_id``) or None."""
+    if record is None:
+        return None
     if record.get("id") == ident or record.get("message_id") == ident:
-        return True
-    if record.get("tool_use_id") == ident:
-        return True
+        return "own"
     metadata = record.get("metadata")
     uses = metadata.get("tool_uses") if isinstance(metadata, dict) else None
-    return isinstance(uses, list) and any(
-        isinstance(u, dict) and u.get("id") == ident for u in uses
-    )
+    if isinstance(uses, list) and any(isinstance(u, dict) and u.get("id") == ident for u in uses):
+        return "parent"
+    return "tool_call" if record.get("tool_use_id") == ident else None
 
 
 def _is_thinking_tokens(record: dict) -> bool:
@@ -278,25 +292,39 @@ class FileMessageHistoryReader:
         return await asyncio.to_thread(self._scan_backward, prefilter.encode(), max_bytes, predicate)
 
     def resolve_message_id(self, message_id: str, cancel: Any = None) -> str | None:
-        """Cursor of the record identified by ``message_id`` (a record's own ``message_id``/``id``,
-        or a ``tool_use_id``: then the message that lists the tool in ``metadata.tool_uses``, else
-        the ``tool_call`` record), or None. Synchronous O(file) worker-thread code (the cold-scan
-        pool): a raw bytes find of the quoted id in 1 MiB batches, each candidate line confirmed by
-        parsing it (an id quoted inside message content is not a match). Earliest record wins;
-        ``cancel`` is checked between batches (a cancelled scan returns None)."""
-        if not _is_plain_id(message_id):
+        """Cursor of the record identified by ``message_id`` (see :meth:`lookup_id`), or None."""
+        found = self.lookup_id(message_id, cancel)
+        return None if found is None else found.cursor
+
+    def lookup_id(self, ident: str, cancel: Any = None) -> ResolvedId | None:
+        """Locate the record identified by ``ident``: a record's own ``message_id``/``id``, or a
+        ``tool_use_id`` (then the message that lists the tool in ``metadata.tool_uses``).
+        Synchronous O(file) worker-thread code (the cold-scan pool): a raw bytes find of the quoted
+        id in 1 MiB batches, each candidate line confirmed by parsing it and checking only
+        TOP-LEVEL fields (an id quoted inside message content never matches). Earliest record wins;
+        ``cancel`` is checked between batches (a cancelled scan returns None).
+
+        A ``tool_call`` record carrying the ``tool_use_id`` before its launching message (not the
+        normal order) is remembered and the scan continues for up to ``PARENT_SCAN_BYTES`` looking
+        for the parent; if none turns up the ``tool_call`` cursor is returned with
+        ``parent_unresolved=True``.
+        """
+        if not is_plain_id(ident):
             return None
-        token = json.dumps(message_id, ensure_ascii=False).encode()
+        token = json.dumps(ident, ensure_ascii=False).encode()
         try:
             f = open(self.path, "rb")
         except FileNotFoundError:
             return None
+        fallback: int | None = None  # offset of the first tool_call record carrying the id
         with f:
             carry = b""
             consumed = 0  # file offset of the first byte of `carry`
             while True:
                 if cancel is not None and cancel.is_set():
                     return None
+                if fallback is not None and consumed >= fallback + PARENT_SCAN_BYTES:
+                    break
                 batch_start = time.perf_counter()
                 chunk = f.read(1024 * 1024)
                 if not chunk:
@@ -310,18 +338,23 @@ class FileMessageHistoryReader:
                 while (hit := data.find(token, pos, complete)) != -1:
                     line_start = data.rfind(b"\n", 0, hit) + 1
                     line_end = data.find(b"\n", hit, complete)
-                    record = self._try_json(data[line_start:line_end])  # (a legacy-format line
-                    if record is not None and _record_has_id(record, message_id):  # is no reason
-                        return encode_cursor(consumed + line_start)  # to fail the lookup)
+                    # (a legacy-format line is no reason to fail the lookup: no strict parse)
+                    kind = _id_match(self._try_json(data[line_start:line_end]), ident)
                     pos = line_end + 1
+                    if kind in ("own", "parent"):
+                        return ResolvedId(encode_cursor(consumed + line_start))
+                    if kind == "tool_call" and fallback is None:
+                        fallback = consumed + line_start
                 carry = data[complete:]
                 consumed += complete
                 time.sleep((time.perf_counter() - batch_start) * RESOLVE_THROTTLE)
             if carry and token in carry:  # last line without a final newline (complete JSON only)
-                record = self._try_json(carry)
-                if record is not None and _record_has_id(record, message_id):
-                    return encode_cursor(consumed)
-        return None
+                kind = _id_match(self._try_json(carry), ident)
+                if kind in ("own", "parent"):
+                    return ResolvedId(encode_cursor(consumed))
+                if kind == "tool_call" and fallback is None:
+                    fallback = consumed
+        return None if fallback is None else ResolvedId(encode_cursor(fallback), True)
 
     def iter_matching(
         self, prefilters: tuple[str, ...], *, cancel: Any = None

@@ -410,3 +410,53 @@ def test_resolve_skips_a_legacy_format_candidate_instead_of_failing(tmp_path):
     records = [_rec(0, "user", _type="legacy", content="mentions m5 as \"m5\""), _rec(5, "assistant")]
     path, offsets, reader = _setup(tmp_path, records)
     assert reader.resolve_message_id("m5") == encode_cursor(offsets[1])
+
+
+def test_resolve_ignores_lookalikes_in_content_with_escaped_quotes_and_line_separators(tmp_path):
+    lookalike = 'text \\"m7\\" and "m7" and \u2028"m7"\u2029 and {"message_id": "m7"}'
+    records = [
+        _rec(0, "user", content=lookalike),
+        _rec(1, "assistant", content=lookalike, metadata={"note": {"message_id": "m7"}}),
+        _rec(7, "assistant"),
+    ]
+    path, offsets, reader = _setup(tmp_path, records)
+    assert reader.resolve_message_id("m7") == encode_cursor(offsets[2])  # top-level fields only
+
+
+def test_tool_use_id_returns_the_parent_in_either_file_order(tmp_path):
+    parent = _rec(1, "assistant", metadata={"tool_uses": [{"id": "toolu_X", "name": "Read"}]})
+    call = _rec(2, "tool_call", tool_use_id="toolu_X", name="Read", content="")
+    # normal order: launching message first
+    path, offsets, reader = _setup(tmp_path, [_rec(0, "user"), parent, call])
+    assert reader.lookup_id("toolu_X") == (encode_cursor(offsets[1]), False)
+    # tool_call written before its parent (documented 3B limit): the bounded parent scan finds it
+    sub = tmp_path / "rev"
+    sub.mkdir()
+    path, offsets, reader = _setup(sub, [_rec(0, "user"), call, parent])
+    assert reader.lookup_id("toolu_X") == (encode_cursor(offsets[2]), False)
+    assert reader.resolve_message_id("toolu_X") == encode_cursor(offsets[2])
+
+
+def test_tool_use_id_without_a_parent_falls_back_flagged(tmp_path):
+    call = _rec(2, "tool_call", tool_use_id="toolu_Y", name="Read", content="")
+    path, offsets, reader = _setup(tmp_path, [_rec(0, "user"), call, _rec(3, "assistant")])
+    assert reader.lookup_id("toolu_Y") == (encode_cursor(offsets[1]), True)
+
+
+def test_parent_scan_is_bounded(tmp_path, monkeypatch):
+    import backend.message_history_reader as mhr
+
+    monkeypatch.setattr(mhr, "PARENT_SCAN_BYTES", 3 * 1024 * 1024)
+    call = _rec(2, "tool_call", tool_use_id="toolu_Z", name="Read", content="")
+    filler = [_rec(10 + i, "assistant", pad=3000) for i in range(2500)]  # ~7.5 MB
+    parent = _rec(1, "assistant", metadata={"tool_uses": [{"id": "toolu_Z", "name": "Read"}]})
+    path, offsets, reader = _setup(tmp_path, [call, *filler, parent])
+    found = reader.lookup_id("toolu_Z")
+    assert found == (encode_cursor(0), True)  # parent beyond the bound: tool_call, flagged
+
+
+def test_tool_call_on_an_unterminated_last_line_is_the_flagged_fallback(tmp_path):
+    path = tmp_path / "messages.jsonl"
+    call = _rec(2, "tool_call", tool_use_id="toolu_W", name="Read", content="")
+    offsets = _write(path, [_rec(0, "user"), call], trailing_newline=False)
+    assert _reader(path).lookup_id("toolu_W") == (encode_cursor(offsets[1]), True)

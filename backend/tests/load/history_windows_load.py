@@ -198,6 +198,71 @@ async def phase_isolation(be: Backend, fixtures: dict[str, Path], report: dict, 
     }
 
 
+# ============================================================================ saturated pool
+
+
+async def phase_saturation(be: Backend, fixtures: dict[str, Path], idx: dict[str, FileIndex],
+                           report: dict, *, seconds: float, scale: float) -> None:
+    """Id lookups (a user's deep link / jump to launch) while the cold-scan pool is saturated by
+    other sessions' scans: 6+ 113 MB sessions are repeatedly dropped from the caches and re-opened
+    (agents / tasks / background / index scans of every one of them), while 3 clients look up
+    found (early / mid / late), tool_use_id and missing ids on a 113 MB target. Reports the lookup
+    p50 / p95 / max, the 503 rate and the pool occupancy; the 5 s waiter cap must hold."""
+    target = await be.new_session(fixtures["huge"], "target")
+    savers = [await be.new_session(fixtures["huge"], f"sat-{i}") for i in range(max(6, int(8 * scale)))]
+    await be.metrics(reset=True)
+    stop_at = time.time() + seconds
+    cycles = {"n": 0}
+
+    async def saturate(sid: str) -> None:
+        while time.time() < stop_at:
+            await be.client.post(f"/api/__load/stop/{sid}")  # drop the caches: next open is cold
+            await be.client.post(f"/api/__load/attach/{sid}")
+            await open_session(be, sid, with_index=True)
+            cycles["n"] += 1
+
+    fi = idx["huge"]
+    lat: dict[str, list[float]] = {"found": [], "tool_use": [], "miss": []}
+    status = {"ok": 0, "busy_503": 0, "other": 0}
+
+    async def lookups(tag: int) -> None:
+        r = random.Random(100 + tag)
+        while time.time() < stop_at:
+            roll = r.random()
+            if roll < 0.5:
+                kind, q = "found", f"around_id={fi.message_id(r.randrange(len(fi.offsets)))}"
+            elif roll < 0.8:
+                kind, q = "tool_use", f"around_id=tu{r.randint(1, max(1, fi.tool_ids))}"
+            else:
+                kind, q = "miss", f"around_id=sat-miss-{r.getrandbits(40)}"
+            res = await get(be, target, q)
+            if res["status"] in (200, 404):
+                status["ok"] += 1
+                lat[kind].append(res["ms"])
+            elif res["status"] == 503:
+                status["busy_503"] += 1
+                lat[kind].append(res["ms"])
+            else:
+                status["other"] += 1
+            await asyncio.sleep(r.uniform(0.1, 0.4))
+
+    await asyncio.gather(*(saturate(s) for s in savers), *(lookups(t) for t in range(3)))
+    m = await be.metrics()
+    everything = [v for vals in lat.values() for v in vals]
+    total = sum(status.values())
+    report["saturation"] = {
+        "saturating_sessions": len(savers), "cold_cycles": cycles["n"], "lookups": status,
+        "busy_503_rate": round(status["busy_503"] / max(1, total), 3),
+        "lookup_ms": {k: _pcts(v) for k, v in lat.items() if v}, "all_ms": _pcts(everything),
+        "scans": m["scans"], "loop_lag": m["lag"],
+        "checks": {
+            "no_lookup_beyond_cap": max(everything or [0]) <= WINDOW_CAP_MS + 1_000,
+            "no_unexpected_status": status["other"] == 0,
+            "pool_was_saturated": m["scans"]["max_running"] >= m["scans"]["workers"],
+        },
+    }
+
+
 # ============================================================================ load
 
 
@@ -417,12 +482,15 @@ async def amain(args) -> int:
     rc = 0
     try:
         await be.start()
-        phases = {"single", "isolation", "load"} if args.phase == "all" else {args.phase}
+        phases = {"single", "isolation", "saturation", "load"} if args.phase == "all" else {args.phase}
         parts = args.parts.split(",")
         if "single" in phases:
             await phase_single(be, fixtures, idx, report)
         if "isolation" in phases:
             await phase_isolation(be, fixtures, report, seconds=max(8.0, args.duration / 3))
+        if "saturation" in phases:
+            await phase_saturation(be, fixtures, idx, report, seconds=max(20.0, args.duration),
+                                   scale=args.scale)
         if "load" in phases:
             if "control" in parts:
                 await phase_load(be, fixtures, idx, report, label="control_open_and_before",
@@ -452,7 +520,7 @@ async def amain(args) -> int:
 
 def main() -> None:
     ap = argparse.ArgumentParser()
-    ap.add_argument("--phase", default="all", choices=["all", "single", "isolation", "load"])
+    ap.add_argument("--phase", default="all", choices=["all", "single", "isolation", "saturation", "load"])
     ap.add_argument("--parts", default="control,windows",
                     help="load arms: control (open + before only; runs against main), windows,"
                          " windows_only (diagnostic)")

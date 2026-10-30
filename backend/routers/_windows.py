@@ -11,6 +11,7 @@ from ..message_history_reader import (
     CursorInvalidError,
     MessageNotFoundError,
     ResolveBusyError,
+    is_plain_id,
 )
 
 
@@ -36,6 +37,12 @@ def validate_window_params(
     ):
         if value is not None and not value.strip():
             raise HTTPException(status_code=422, detail=f"{name} must not be empty")
+    if around_id is not None and not is_plain_id(around_id):
+        raise HTTPException(
+            status_code=422,
+            detail="around_id must be 1-256 ASCII characters without quotes, backslashes or "
+            "control characters (a message_id or tool_use_id)",
+        )
     if until is not None and after is None:
         raise HTTPException(status_code=422, detail="until requires after")
     if (before_bytes is not None or after_bytes is not None) and around is None and (

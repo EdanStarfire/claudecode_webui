@@ -41,3 +41,6 @@ def test_windows_load_quick_mode_invariants(tmp_path):
     for row in single.values():
         assert row["around_warm"]["n"] and row["after_page"]["n"] and row["resolve_found_mid"]["n"]
         assert row["resolve_not_found_warm"]["n"]
+    sat = report["saturation"]
+    assert all(sat["checks"].values()), sat
+    assert sat["lookups"]["ok"] > 0
