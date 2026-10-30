@@ -2519,6 +2519,27 @@ describe('tail-first history (issue #2030, stage 1b)', () => {
     expect(document.querySelectorAll('[data-testid="signal-row"]')).toHaveLength(0)
   })
 
+  it('a jump in flight does not re-derive the sticky pin from a transient bottom position; endTurnJump re-derives once (stage 3 PR 3C-2)', async () => {
+    const { wrapper, messageStore, pinia, container } = await mountWithStore()
+    await installTail(messageStore, messagesAt(30, 60))
+    await new Promise(r => setTimeout(r, 50))
+    const el = container.querySelector('.messages-area')
+    stubScrollMechanics(el) // scrollHeight 100000, clientHeight 600
+    const { useUIStore } = await import('@/stores/ui')
+    const setSticky = vi.spyOn(useUIStore(pinia), 'setStickyToBottom')
+
+    wrapper.vm.beginTurnJump() // sticky off; opens a gesture window so the scroll event is trusted
+    setSticky.mockClear()
+    // The jump target near the live end is clamped to the very bottom while the rows below are unmeasured.
+    el.scrollTop = 100000 - 600
+    el.dispatchEvent(new Event('scroll'))
+    expect(setSticky).not.toHaveBeenCalledWith(expect.anything(), true)
+
+    wrapper.vm.endTurnJump() // the one re-derivation, from the real position
+    expect(setSticky).toHaveBeenCalledWith(expect.anything(), true)
+    vi.restoreAllMocks()
+  })
+
   it('a running leg whose launch is outside the window draws no lane (no error); the lane appears once the launch page is applied', async () => {
     const { messageStore } = await mountWithStore()
     const launch = makeMessage({

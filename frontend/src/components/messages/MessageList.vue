@@ -1205,6 +1205,10 @@ function onScroll() {
     }
   }
   if (!userGestureActive.value) return
+  // A jump in flight (turn / search hit / launch chip) re-derives the sticky pin once when it ends: a
+  // target near the live end is clamped to the bottom while the rows below are still being measured,
+  // and that transient position must not re-pin the list to the bottom when they grow.
+  if (turnJumpsOpen > 0) return
   const el = messagesArea.value
   if (!el) return
   recomputeStickyFromScroll(el)
