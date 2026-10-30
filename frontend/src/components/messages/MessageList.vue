@@ -713,9 +713,15 @@ async function bringLaunchCardIntoView(lane) {
   if (!card) return
   const areaRect = area.getBoundingClientRect()
   const cardRect = card.getBoundingClientRect()
-  if (cardRect.bottom <= areaRect.bottom - 8) return // already visible: keep the message top aligned
-  const margin = messageSearch.isOpen.value ? 56 : 16
-  setScrollOffset(area.scrollTop + (cardRect.top - areaRect.top) - margin)
+  if (cardRect.bottom > areaRect.bottom - 8) { // not fully visible: bring it in (else keep the message top aligned)
+    const margin = messageSearch.isOpen.value ? 56 : 16
+    setScrollOffset(area.scrollTop + (cardRect.top - areaRect.top) - margin)
+  }
+  // A short outline pulse on the launch card (no CSS state to clean up; absent in test DOMs).
+  card.animate?.(
+    [{ outline: '2px solid var(--bs-primary, #0d6efd)', outlineOffset: '2px' }, { outline: '2px solid transparent', outlineOffset: '2px' }],
+    { duration: 1800, easing: 'ease-out' },
+  )
 }
 
 // One animation frame, but never stuck in a hidden tab (rAF does not fire there).
