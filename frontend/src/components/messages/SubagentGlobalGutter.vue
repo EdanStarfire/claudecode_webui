@@ -9,13 +9,15 @@
       <button
         type="button"
         class="lane-chip"
-        :class="{ 'needs-attention': lane.needsAttention }"
+        :class="{ 'needs-attention': lane.needsAttention, 'launched-earlier': lane.launchedEarlier }"
         :style="lane.chipStyle"
-        :title="lane.tooltipLabel"
-        :aria-label="lane.tooltipLabel"
+        :title="lane.launchedEarlier ? `${lane.tooltipLabel} — launched earlier, jump to launch` : lane.tooltipLabel"
+        :aria-label="lane.launchedEarlier ? `${lane.tooltipLabel}: launched earlier — jump` : lane.tooltipLabel"
+        :data-testid="lane.launchedEarlier ? 'lane-launched-earlier' : undefined"
         @click="onChipClick(lane)"
       >
         <span class="chip-glyph">{{ '\u{1F916}' }}</span>
+        <span v-if="lane.launchedEarlier" class="chip-earlier" aria-hidden="true">&uarr;</span>
       </button>
     </div>
   </div>
@@ -57,7 +59,7 @@ const props = defineProps({
   }
 })
 
-const emit = defineEmits(['chip-click'])
+const emit = defineEmits(['chip-click', 'jump-launch'])
 
 const messageStore = useMessageStore()
 
@@ -100,6 +102,7 @@ const lanes = computed(() => {
       legIndex: l.legIndex,
       top: l.top,
       height: l.height,
+      launchedEarlier: !!l.launchedEarlier,
       needsAttention: messageStore.hasOpenPermissionForTask(props.sessionId, l.taskId),
       tooltipLabel: l.leg.description || 'Subagent',
       chipStyle: {
@@ -120,6 +123,12 @@ const lanes = computed(() => {
 // rather than done here via a direct document.getElementById/scrollIntoView call, per plan §5.5's
 // "unify the three navigation sites" goal.
 function onChipClick(lane) {
+  // Issue #2030 (stage 3 PR 3C-2): a lane clamped to the top of a loaded interval has no launch row to
+  // expand or scroll to; its chip jumps to the launching message instead.
+  if (lane.launchedEarlier) {
+    emit('jump-launch', lane)
+    return
+  }
   messageStore.toggleLegExpanded(lane.taskId, lane.legIndex)
   emit('chip-click', lane)
 }
@@ -163,6 +172,33 @@ function onChipClick(lane) {
   font-size: 11px;
   line-height: 1;
   box-shadow: 0 1px 2px rgba(0, 0, 0, 0.15);
+}
+
+/* Launched before the loaded history: dashed border + a small up-arrow. The hit area grows to 44x44
+   (a pseudo-element, so the 22 px glyph and the 26 px gutter are unchanged). */
+.lane-chip.launched-earlier {
+  border-style: dashed;
+  overflow: visible;
+}
+
+.lane-chip.launched-earlier::after {
+  content: '';
+  position: absolute;
+  /* extends right, not left: the gutter sits at the viewport edge */
+  inset: -13px -22px -13px -4px;
+}
+
+.chip-earlier {
+  position: absolute;
+  top: -7px;
+  right: -5px;
+  font-size: 10px;
+  font-weight: 700;
+  line-height: 1;
+  color: var(--bs-body-color);
+  background: var(--bs-body-bg);
+  border-radius: 50%;
+  pointer-events: none;
 }
 
 .lane-chip.needs-attention {

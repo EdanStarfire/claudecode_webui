@@ -2540,23 +2540,176 @@ describe('tail-first history (issue #2030, stage 1b)', () => {
     vi.restoreAllMocks()
   })
 
-  it('a running leg whose launch is outside the window draws no lane (no error); the lane appears once the launch page is applied', async () => {
-    const { messageStore } = await mountWithStore()
-    const launch = makeMessage({
-      id: 'msg-launch', message_id: 'msg-launch', type: 'assistant', content: 'Launching', timestamp: 1700000001,
-      metadata: { has_tool_uses: true, tool_uses: [{ id: 'launch-1', name: 'Task', input: {} }], turn_id: 'turn-launch' },
+  describe('lanes of legs launched before the loaded history (stage 3 PR 3C-2)', () => {
+    const chip = () => document.querySelector('[data-testid="lane-launched-earlier"]')
+    const launchMessage = (index, toolUseId) => makeMessage({
+      id: `msg-${index}`, message_id: `msg-${index}`, type: 'assistant', content: `Launching ${toolUseId}`, timestamp: 1700000000 + index,
+      metadata: { has_tool_uses: true, tool_uses: [{ id: toolUseId, name: 'Task', input: {} }] },
     })
-    const { createFakeHistoryServer } = await import('@/stores/__tests__/helpers/historyServer')
-    const all = [launch, ...messagesAt(30, 40)]
-    const server = createFakeHistoryServer(all, { tailStart: 1, pageSize: 5 })
-    apiMock.get.mockImplementation((url) => server.handle(url))
-    messageStore.applyTaskLifecycleFrame(SESSION, 'task_started', { task_id: 'task-1', tool_use_id: 'launch-1', description: 'Running' }, 1700000001)
-    await messageStore.loadMessages(SESSION, null, 0, { window: 'tail', signal: new AbortController().signal })
-    await new Promise(r => setTimeout(r, 50))
-    expect(document.querySelectorAll('.gutter-lane')).toHaveLength(0)
+    // 60 records; `launches` replace the plain user rows at their index. The tail starts at 45.
+    async function mountLegs(launches, serverOptions = {}) {
+      const { createFakeHistoryServer } = await import('@/stores/__tests__/helpers/historyServer')
+      const mounted = await mountWithStore()
+      const all = messagesAt(0, 60)
+      for (const [index, toolUseId] of launches) all[index] = launchMessage(index, toolUseId)
+      const server = createFakeHistoryServer(all, { tailStart: 45, pageSize: 30, aroundBefore: 6, aroundAfter: 6, afterPageSize: 4, ...serverOptions })
+      apiMock.get.mockImplementation((url) => server.handle(url))
+      for (const [index, toolUseId] of launches) {
+        mounted.messageStore.applyTaskLifecycleFrame(SESSION, 'task_started',
+          { task_id: `task-${toolUseId}`, tool_use_id: toolUseId, description: toolUseId }, 1700000000 + index)
+      }
+      await mounted.messageStore.loadMessages(SESSION, null, 0, { window: 'tail', signal: new AbortController().signal })
+      await new Promise(r => setTimeout(r, 50))
+      stubScrollMechanics(mounted.container.querySelector('.messages-area'))
+      return { ...mounted, server, all }
+    }
 
-    messageStore.applyFetchedOlderPage(SESSION, await messageStore.fetchOlderPage(SESSION, { signal: new AbortController().signal }))
-    await new Promise(r => setTimeout(r, 50))
-    expect(document.querySelectorAll('.gutter-lane')).toHaveLength(1)
+    it('a running leg whose launch is not loaded draws a lane clamped to the suffix top with a launched-earlier chip; once the launch page is applied it is the ordinary lane', async () => {
+      const { messageStore } = await mountLegs([[3, 'launch-1']])
+      expect(document.querySelectorAll('.gutter-lane')).toHaveLength(1)
+      expect(chip()).toBeTruthy()
+      expect(chip().getAttribute('aria-label')).toContain('launched earlier')
+      expect(document.querySelector('.gutter-lane').style.top).toBe('0px') // the first suffix row
+
+      for (let guard = 0; guard < 5 && !messageStore.isHistoryComplete(SESSION); guard++) {
+        messageStore.applyFetchedOlderPage(SESSION, await messageStore.fetchOlderPage(SESSION, { signal: new AbortController().signal }))
+      }
+      await new Promise(r => setTimeout(r, 50))
+      expect(document.querySelectorAll('.gutter-lane')).toHaveLength(1)
+      expect(chip()).toBeNull()
+    })
+
+    it('with the history complete a leg whose launch row is missing draws no lane and no chip (as before)', async () => {
+      const { createFakeHistoryServer } = await import('@/stores/__tests__/helpers/historyServer')
+      const { messageStore } = await mountWithStore()
+      const server = createFakeHistoryServer(messagesAt(0, 40), { tailStart: 0, pageSize: 30 })
+      apiMock.get.mockImplementation((url) => server.handle(url))
+      messageStore.applyTaskLifecycleFrame(SESSION, 'task_started', { task_id: 'task-x', tool_use_id: 'launch-gone', description: 'x' }, 1700000001)
+      await messageStore.loadMessages(SESSION, null, 0, { window: 'tail', signal: new AbortController().signal })
+      await new Promise(r => setTimeout(r, 50))
+      expect(messageStore.isHistoryComplete(SESSION)).toBe(true)
+      expect(document.querySelectorAll('.gutter-lane')).toHaveLength(0)
+    })
+
+    it('a retired leg that ended before the loaded history draws no lane', async () => {
+      const { messageStore } = await mountLegs([[3, 'launch-old']])
+      messageStore.applyTaskLifecycleFrame(SESSION, 'task_notification', { task_id: 'task-launch-old', status: 'completed', summary: 'done' }, 1700000010)
+      await new Promise(r => setTimeout(r, 50))
+      expect(document.querySelectorAll('.gutter-lane')).toHaveLength(0)
+    })
+
+    it('a leg launched where its launch row IS loaded keeps the ordinary lane while history is partial (no chip)', async () => {
+      await mountLegs([[50, 'launch-loaded']])
+      expect(document.querySelectorAll('.gutter-lane')).toHaveLength(1)
+      expect(chip()).toBeNull()
+    })
+
+    it('the chip jumps through around_id=<tool_use_id> into an island; the lane then becomes the ordinary lane (no chip, launch row loaded)', async () => {
+      const { historyBackfill } = await import('@/composables/useHistoryBackfill')
+      const { messageStore, server } = await mountLegs([[3, 'launch-1']])
+      const jumpAround = vi.spyOn(historyBackfill, 'jumpAround')
+      const confirm = vi.spyOn(window, 'confirm').mockReturnValue(true)
+      chip().click()
+      await new Promise(r => setTimeout(r, 150))
+      expect(jumpAround).toHaveBeenCalledWith(SESSION, { toolUseId: 'launch-1' }, expect.objectContaining({ label: 'the launching message' }))
+      expect(server.requests.some(url => url.includes('around_id=launch-1'))).toBe(true)
+      expect(confirm).not.toHaveBeenCalled() // fast link
+      expect(messageStore.getIsland(SESSION)).toBeTruthy()
+      expect(messageStore.isMessageLoaded(SESSION, 'msg-3')).toBe(true)
+      expect(document.querySelectorAll('.gutter-lane')).toHaveLength(1)
+      expect(chip()).toBeNull()
+      vi.restoreAllMocks()
+    })
+
+    it('an archive view jumps through the archive route (same chip, same island path)', async () => {
+      const { createFakeHistoryServer } = await import('@/stores/__tests__/helpers/historyServer')
+      const { messageStore } = await mountWithStore()
+      const all = messagesAt(0, 60)
+      all[3] = launchMessage(3, 'launch-1')
+      const server = createFakeHistoryServer(all, { tailStart: 45, pageSize: 30, aroundBefore: 6, aroundAfter: 6 })
+      apiMock.get.mockImplementation((url) => server.handle(url))
+      messageStore.applyTaskLifecycleFrame(SESSION, 'task_started', { task_id: 'task-launch-1', tool_use_id: 'launch-1', description: 'launch-1' }, 1700000003)
+      const base = '/api/projects/p1/archives/s1/a1/messages'
+      await messageStore.loadMessages(SESSION, null, 0, { window: 'tail', source: 'archive', baseUrl: base, signal: new AbortController().signal })
+      await new Promise(r => setTimeout(r, 50))
+      expect(chip()).toBeTruthy()
+      chip().click()
+      await new Promise(r => setTimeout(r, 150))
+      expect(server.requests.some(url => url.startsWith(`${base}?around_id=launch-1`))).toBe(true)
+      expect(messageStore.isMessageLoaded(SESSION, 'msg-3')).toBe(true)
+      expect(chip()).toBeNull()
+    })
+
+    it('slow link: the chip asks first, naming the window size; declining starts no jump', async () => {
+      const { historyBackfill } = await import('@/composables/useHistoryBackfill')
+      await mountLegs([[3, 'launch-1']])
+      vi.spyOn(historyBackfill, 'getMode').mockReturnValue('manual')
+      const jumpAround = vi.spyOn(historyBackfill, 'jumpAround')
+      const confirm = vi.spyOn(window, 'confirm').mockReturnValue(false)
+      chip().click()
+      await new Promise(r => setTimeout(r, 50))
+      expect(confirm).toHaveBeenCalledTimes(1)
+      expect(confirm.mock.calls[0][0]).toBe('Jump to the launching message? Loads about 0.5 MB of history')
+      expect(jumpAround).not.toHaveBeenCalled()
+      vi.restoreAllMocks()
+    })
+
+    it('a launch the server cannot find (404) shows a banner message and keeps the chip', async () => {
+      const { messageStore } = await mountLegs([[3, 'launch-1']])
+      messageStore.applyTaskLifecycleFrame(SESSION, 'task_started', { task_id: 'task-ghost', tool_use_id: 'launch-ghost', description: 'ghost' }, 1700000004)
+      await new Promise(r => setTimeout(r, 50))
+      const ghost = [...document.querySelectorAll('[data-testid="lane-launched-earlier"]')].find(el => el.getAttribute('aria-label').includes('ghost'))
+      ghost.click()
+      await new Promise(r => setTimeout(r, 150))
+      const banner = document.querySelector('[data-testid="history-banner"]')
+      expect(banner.textContent).toContain("Couldn't find the launching message in the history")
+      expect(document.querySelectorAll('[data-testid="lane-launched-earlier"]').length).toBeGreaterThan(0)
+    })
+
+    it('parent_unresolved (window anchored on the tool_call record) shows the banner message', async () => {
+      const { server } = await mountLegs([[3, 'launch-1']])
+      const handle = server.handle
+      apiMock.get.mockImplementation(async (url) => {
+        const data = await handle(url)
+        return url.includes('around_id=') ? { ...data, parent_unresolved: true } : data
+      })
+      chip().click()
+      await new Promise(r => setTimeout(r, 150))
+      const banner = document.querySelector('[data-testid="history-banner"]')
+      expect(banner?.textContent).toContain("Couldn't find the launching message in the history")
+    })
+
+    it('a busy server (503 resolve_busy) shows a banner message and keeps the chip', async () => {
+      await mountLegs([[3, 'launch-1']])
+      apiMock.get.mockImplementation(async (url) => {
+        if (url.includes('around_id=')) throw Object.assign(new Error('resolve_busy'), { status: 503 })
+        throw new Error(`unexpected ${url}`)
+      })
+      chip().click()
+      await new Promise(r => setTimeout(r, 150))
+      expect(document.querySelector('[data-testid="history-banner"]').textContent).toContain('The server is busy')
+      expect(chip()).toBeTruthy()
+    })
+
+    it('a new jump that replaces the island re-clamps the legs that depended on it: no orphaned chips', async () => {
+      const { messageStore } = await mountLegs([[3, 'launch-a'], [20, 'launch-b']])
+      expect(document.querySelectorAll('[data-testid="lane-launched-earlier"]')).toHaveLength(2)
+      // jump to launch-a: its window (rows ~0..9) becomes the island
+      const jumpA = (await import('@/composables/useHistoryBackfill')).historyBackfill.jumpAround(SESSION, { toolUseId: 'launch-a' }, {})
+      await jumpA.promise
+      await new Promise(r => setTimeout(r, 80))
+      expect(messageStore.isMessageLoaded(SESSION, 'msg-3')).toBe(true)
+      expect(document.querySelectorAll('[data-testid="lane-launched-earlier"]')).toHaveLength(1) // only launch-b is still unloaded
+      // jump to launch-b: the island is REPLACED, launch-a is unloaded again and clamps again
+      const jumpB = (await import('@/composables/useHistoryBackfill')).historyBackfill.jumpAround(SESSION, { toolUseId: 'launch-b' }, {})
+      await jumpB.promise
+      await new Promise(r => setTimeout(r, 80))
+      expect(messageStore.isMessageLoaded(SESSION, 'msg-3')).toBe(false)
+      expect(messageStore.isMessageLoaded(SESSION, 'msg-20')).toBe(true)
+      const chips = [...document.querySelectorAll('[data-testid="lane-launched-earlier"]')]
+      expect(chips).toHaveLength(1)
+      expect(chips[0].getAttribute('aria-label')).toContain('launch-a')
+      expect(document.querySelectorAll('.gutter-lane')).toHaveLength(2)
+    })
   })
 })

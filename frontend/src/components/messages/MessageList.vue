@@ -32,6 +32,7 @@
           :sessionId="viewSessionId"
           :laneOffsets="laneOffsets"
           @chip-click="onGutterChipClick"
+          @jump-launch="jumpToLaunch"
         />
 
         <!-- Resync stall banner (issue #2140): independent of hydrationStage/displayableItems
@@ -200,6 +201,7 @@ import { historyBackfill } from '@/composables/useHistoryBackfill'
 import { useHydrationStage } from '@/composables/useHydrationStage'
 import { HYDRATION_STAGE_LABELS } from '@/utils/hydrationStage'
 import { cursorOffset, formatJumpSize, jumpNeedsConfirm, planTurnStep } from '@/utils/turnNavigation'
+import { parseTimestamp } from '@/utils/time'
 import { AROUND_WINDOW_FILE_BYTES, islandIsFull } from '@/utils/historyIntervals'
 
 const messageStore = useMessageStore()
@@ -626,6 +628,74 @@ function anchorOffsetWithinRow(rowIndex, anchorDomId) {
   return { top: anchorRect.top - rowTop, bottom: anchorRect.bottom - rowTop }
 }
 
+// Issue #2030 (stage 3 PR 3C-2): the loaded intervals' row ranges and time spans, oldest first —
+// `[{ start, end, first, last }]` (row indices, ms timestamps). A `gap` row separates an island from
+// the suffix. Only read when a lane's launch row is not loaded.
+const intervalSpans = computed(() => {
+  const items = displayableItems.value
+  const gapAt = items.findIndex(item => item.type === 'gap')
+  const ranges = gapAt >= 0 ? [[0, gapAt - 1], [gapAt + 1, items.length - 1]] : [[0, items.length - 1]]
+  const spans = []
+  for (const [start, end] of ranges) {
+    let first = null
+    let last = null
+    for (let i = start; i <= end; i++) {
+      const item = items[i]
+      const ts = item.type === 'compaction' ? item.messages[0]?.timestamp : item.type === 'message' ? item.message?.timestamp : null
+      if (ts == null) continue
+      const ms = parseTimestamp(ts).getTime()
+      if (first == null) first = ms
+      last = ms
+    }
+    if (first != null) spans.push({ start, end, first, last })
+  }
+  return spans
+})
+
+// First row of the first loaded interval whose time span overlaps the leg's [started_at, ended_at or
+// now]; null when none does (a leg wholly before, between or after the loaded intervals draws no lane).
+function clampedLegRow(leg, spans) {
+  if (leg.started_at == null) return null
+  const from = parseTimestamp(leg.started_at).getTime()
+  const to = leg.status === 'running' || leg.ended_at == null ? Infinity : parseTimestamp(leg.ended_at).getTime()
+  for (const span of spans) {
+    if (from <= span.last && to >= span.first) return span.start
+  }
+  return null
+}
+
+// The lane chip of a leg launched before the loaded intervals: one bounded window around its
+// launching message (around_id=<tool_use_id>), through the same island path as every other jump.
+// A slow link confirms first (it names the window size); failures surface in the history banner.
+async function jumpToLaunch(lane) {
+  const sessionId = viewSessionId.value
+  const toolUseId = messageStore.getTaskLegEntry(lane.taskId)?.legs?.[lane.legIndex]?.tool_use_id
+  if (!sessionId || !toolUseId) return
+  if (jumpNeedsConfirm({ slowLink: historyBackfill.getMode(sessionId) === 'manual' }) &&
+      typeof window !== 'undefined' && typeof window.confirm === 'function' &&
+      !window.confirm(`Jump to the launching message? Loads about ${formatJumpSize(AROUND_WINDOW_FILE_BYTES)} of history`)) {
+    return
+  }
+  beginTurnJump()
+  try {
+    const jump = historyBackfill.jumpAround(sessionId, { toolUseId }, { label: 'the launching message', expectParent: true })
+    await jump.promise
+    const index = await launchRowAfterJump(lane)
+    if (index != null) await scrollToItemIndexTrusted(index, { align: 'start', behavior: 'auto' })
+  } catch {
+    // failed (the banner says why), cancelled or superseded: the loaded intervals are left as is
+  } finally {
+    endTurnJump()
+  }
+}
+
+// The launch row of a lane once the jump loaded it (after the list and virtualizer caught up).
+async function launchRowAfterJump(lane) {
+  await nextTick()
+  await new Promise(resolve => requestAnimationFrame(resolve))
+  return resolveSubagentPrimaryIndex(lane.taskId, lane.legIndex)
+}
+
 // Issue #1748 (stage: windowing): SubagentGlobalGutter's lane top/bottom, computed here (not
 // in the gutter itself) because it must live inside a reactive scope that reads
 // rowVirtualizer.value directly — the virtualizer instance is a mutated-in-place class, so a
@@ -639,11 +709,34 @@ const laneOffsets = computed(() => {
   const totalSize = forceFreshMeasurements(rowVirtualizer.value)
   const measurements = rowVirtualizer.value.measurementsCache
 
+  // Issue #2030 (stage 3 PR 3C-2): while the history is partial, a leg whose launch row is not
+  // loaded is clamped to the top of the first loaded interval its activity overlaps (see clampedLegRow).
+  const partial = !messageStore.isHistoryComplete(viewSessionId.value)
+  let spans = null
+
   for (const entry of messageStore.allTaskLegEntriesForSession(viewSessionId.value)) {
     entry.legs.forEach((leg, legIndex) => {
       const primaryIndex = indexMaps.value.toolUseIndex.get(leg.tool_use_id)
       const startItem = primaryIndex != null ? measurements[primaryIndex] : null
-      if (!startItem) return // matches old `if (!startEl) continue`
+      if (!startItem) {
+        if (!partial || !leg.tool_use_id) return // history complete: matches old `if (!startEl) continue`
+        spans ??= intervalSpans.value
+        const clampIndex = clampedLegRow(leg, spans)
+        if (clampIndex == null) return // the leg's activity is entirely outside the loaded intervals
+        const clampItem = measurements[clampIndex]
+        if (!clampItem) return
+        const top = clampItem.start
+        let bottom
+        if (leg.status === 'running') {
+          bottom = totalSize
+        } else {
+          const terminalIndex = indexMaps.value.signalIndex.get(`subagent-anchor-terminal-${entry.task_id}-${legIndex}`)
+          const endItem = terminalIndex != null ? measurements[terminalIndex] : null
+          bottom = endItem ? Math.max(endItem.end, top + 26) : top + 26 // no terminal row loaded: a short stub
+        }
+        offsets.set(`${entry.task_id}:${legIndex}`, { top, bottom, height: Math.max(0, bottom - top), launchedEarlier: true })
+        return
+      }
       const primaryDomId = `subagent-anchor-primary-${entry.task_id}-${legIndex}`
       const primaryDelta = anchorOffsetWithinRow(primaryIndex, primaryDomId)
       const top = startItem.start + (primaryDelta ? primaryDelta.top : 0)

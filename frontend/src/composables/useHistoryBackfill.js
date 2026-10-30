@@ -368,6 +368,10 @@ export function createHistoryBackfill(deps = {}) {
       : err.reason === 'not-found' ? `Couldn't find ${what} in the history`
       : err.reason === 'reset' ? 'The history changed — try again'
       : `Couldn't open ${what}: ${err.message || 'request failed'}`
+    publishJumpErrorText(sessionId, text)
+  }
+
+  function publishJumpErrorText(sessionId, text) {
     setStatus(sessionId, { jumpError: text })
     clearTimeout(jumpErrorTimers.get(sessionId))
     jumpErrorTimers.set(sessionId, setTimeout(() => {
@@ -394,7 +398,15 @@ export function createHistoryBackfill(deps = {}) {
     setStatus(sessionId, { jump: { ...meta }, island: null, error: null, jumpError: null })
     const promise = store.loadAround(sessionId, target, { signal: op.controller.signal })
     const settled = promise.then(
-      (result) => { endIslandOp(sessionId, op); return result },
+      (result) => {
+        endIslandOp(sessionId, op)
+        // A tool_use_id lookup whose launching message the server could not find: the window is
+        // anchored on the tool_call record instead, so say so rather than landing silently.
+        if (result?.parentUnresolved && meta.expectParent) {
+          publishJumpErrorText(sessionId, `Couldn't find ${meta.label || 'the launching message'} in the history`)
+        }
+        return result
+      },
       (err) => {
         endIslandOp(sessionId, op)
         // A failed jump is not silent (a cancel / supersede is the user's own doing, not a failure).
