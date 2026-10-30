@@ -699,14 +699,16 @@ async function bringLaunchCardIntoView(lane) {
   const area = messagesArea.value
   if (!area) return
   // The virtualizer keeps correcting the jump's scroll offset while the rows around the target are
-  // measured: wait until the position has been stable for a few frames before adjusting it.
+  // measured: wait until the position has been stable for a few frames before adjusting it. A
+  // position that never settles (the user scrolled, another jump started) is left alone.
   let last = null
   let stable = 0
   for (let frame = 0; frame < 40 && stable < 5; frame++) {
-    await new Promise(resolve => requestAnimationFrame(resolve))
+    await nextFrame()
     stable = area.scrollTop === last ? stable + 1 : 0
     last = area.scrollTop
   }
+  if (stable < 5 || turnJumpsOpen > 1) return
   const card = document.getElementById(`subagent-anchor-primary-${lane.taskId}-${lane.legIndex}`)
   if (!card) return
   const areaRect = area.getBoundingClientRect()
@@ -714,6 +716,16 @@ async function bringLaunchCardIntoView(lane) {
   if (cardRect.bottom <= areaRect.bottom - 8) return // already visible: keep the message top aligned
   const margin = messageSearch.isOpen.value ? 56 : 16
   setScrollOffset(area.scrollTop + (cardRect.top - areaRect.top) - margin)
+}
+
+// One animation frame, but never stuck in a hidden tab (rAF does not fire there).
+function nextFrame() {
+  return new Promise(resolve => {
+    let done = false
+    const finish = () => { if (!done) { done = true; resolve() } }
+    requestAnimationFrame(finish)
+    setTimeout(finish, 100)
+  })
 }
 
 // The launch row of a lane once the jump loaded it (after the list and virtualizer caught up).

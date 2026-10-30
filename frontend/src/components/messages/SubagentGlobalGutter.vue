@@ -99,19 +99,37 @@ const lanes = computed(() => {
     withBounds.map(l => ({ id: `${l.taskId}:${l.legIndex}`, top: l.top, bottom: l.bottom }))
   )
 
-  // Clamped lanes in stack order; the ones past the cap are not drawn (counted on the last drawn).
-  const earlier = withBounds
-    .filter(l => l.launchedEarlier)
-    .sort((a, b) => (slotAssignment.get(`${a.taskId}:${a.legIndex}`) ?? 0) - (slotAssignment.get(`${b.taskId}:${b.legIndex}`) ?? 0))
-  const hidden = new Set(earlier.slice(MAX_EARLIER_CHIPS).map(l => `${l.taskId}:${l.legIndex}`))
-  const lastShown = earlier[Math.min(earlier.length, MAX_EARLIER_CHIPS) - 1]
-  const pitch = earlier.length >= 2 ? EARLIER_PITCH : CHIP_SIZE + CHIP_GAP
+  // Which clamped lanes are drawn: at most MAX_EARLIER_CHIPS, those needing attention and running ones first.
+  const earlier = withBounds.filter(l => l.launchedEarlier)
+  const rank = (l) => (messageStore.hasOpenPermissionForTask(props.sessionId, l.taskId) ? 2 : 0) + (l.leg.status === 'running' ? 1 : 0)
+  const shown = [...earlier]
+    .sort((a, b) => rank(b) - rank(a) || (slotAssignment.get(`${a.taskId}:${a.legIndex}`) ?? 0) - (slotAssignment.get(`${b.taskId}:${b.legIndex}`) ?? 0))
+    .slice(0, MAX_EARLIER_CHIPS)
+  const hidden = new Set(earlier.filter(l => !shown.includes(l)).map(l => `${l.taskId}:${l.legIndex}`))
+  const visible = withBounds.filter(l => !hidden.has(`${l.taskId}:${l.legIndex}`))
+  const lastShown = [...shown].sort((a, b) => (slotAssignment.get(`${a.taskId}:${a.legIndex}`) ?? 0) - (slotAssignment.get(`${b.taskId}:${b.legIndex}`) ?? 0)).pop()
 
-  return withBounds.filter(l => !hidden.has(`${l.taskId}:${l.legIndex}`)).map(l => {
+  // A slot is as tall as its tallest chip: clamped chips (44x44 hit area) need EARLIER_PITCH while two or
+  // more are stacked, every other chip keeps the ordinary pitch, so lanes whose launch row is loaded are
+  // untouched when no clamped lane sits above them.
+  const slotPitch = []
+  for (const l of visible) {
+    const slot = slotAssignment.get(`${l.taskId}:${l.legIndex}`) ?? 0
+    const height = l.launchedEarlier && shown.length >= 2 ? EARLIER_PITCH : CHIP_SIZE + CHIP_GAP
+    slotPitch[slot] = Math.max(slotPitch[slot] || 0, height)
+  }
+  const slotOffset = []
+  let running = BASE_TOP
+  for (let slot = 0; slot < slotPitch.length; slot++) {
+    slotOffset[slot] = running
+    running += slotPitch[slot] || CHIP_SIZE + CHIP_GAP
+  }
+
+  return visible.map(l => {
     const key = `${l.taskId}:${l.legIndex}`
     const slotIndex = slotAssignment.get(key) ?? 0
     const agentColor = getAgentColor(slugifyAgentName(l.taskId))
-    const offsetPx = BASE_TOP + slotIndex * pitch
+    const offsetPx = slotOffset[slotIndex]
     return {
       moreCount: l === lastShown ? hidden.size : 0,
       key,

@@ -77,4 +77,29 @@ describe('SubagentGlobalGutter: launched-earlier chips', () => {
     const lanesWithLine = [...ctx.container.querySelectorAll('.gutter-lane')].map(l => l.classList.contains('lane-line'))
     expect(lanesWithLine).toEqual([true, true, false])
   })
+
+  it('a running clamped lane is never the one dropped by the five-chip cap', async () => {
+    const ctx = mountGutter(7)
+    for (let i = 0; i < 6; i++) {
+      ctx.store.applyTaskLifecycleFrame(SESSION, 'task_notification', { task_id: `task-${i}`, status: 'completed', summary: 'done' }, 1700000100 + i)
+    }
+    await withOffsets(ctx, 7)
+    const labels = chips(ctx.container).map(c => c.getAttribute('aria-label'))
+    expect(labels).toHaveLength(5)
+    expect(labels).toContain('Agent 6: launched earlier — jump') // the only running leg
+    expect(ctx.container.querySelector('.chip-more').textContent).toBe('+2')
+  })
+
+  it('lanes with a loaded launch keep the ordinary 28 px pitch among themselves; only slots holding stacked clamped chips are taller', async () => {
+    const ctx = mountGutter(4)
+    ctx.laneOffsets.set('task-0:0', { top: 0, bottom: 5000, height: 5000, launchedEarlier: true })
+    ctx.laneOffsets.set('task-1:0', { top: 0, bottom: 5000, height: 5000, launchedEarlier: true })
+    ctx.laneOffsets.set('task-2:0', { top: 100, bottom: 4000, height: 3900 })
+    ctx.laneOffsets.set('task-3:0', { top: 200, bottom: 3000, height: 2800 })
+    await nextTick()
+    const offsets = Object.fromEntries([...ctx.container.querySelectorAll('.lane-chip')].map(c => [c.getAttribute('aria-label').split(':')[0], parseFloat(c.style.top)]))
+    expect(offsets['Agent 0']).toBe(8)
+    expect(offsets['Agent 1']).toBe(54) // 8 + 46
+    expect(offsets['Agent 3'] - offsets['Agent 2']).toBe(28) // loaded-launch chips stay 28 apart
+  })
 })
