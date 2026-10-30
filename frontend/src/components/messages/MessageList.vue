@@ -720,6 +720,8 @@ const laneOffsets = computed(() => {
       const startItem = primaryIndex != null ? measurements[primaryIndex] : null
       if (!startItem) {
         if (!partial || !leg.tool_use_id) return // history complete: matches old `if (!startEl) continue`
+        // A launch tool call that IS loaded but has no row (a hidden/filtered message) is not "launched earlier".
+        if (messageStore.findLoadedToolCall(viewSessionId.value, leg.tool_use_id)) return
         spans ??= intervalSpans.value
         const clampIndex = clampedLegRow(leg, spans)
         if (clampIndex == null) return // the leg's activity is entirely outside the loaded intervals

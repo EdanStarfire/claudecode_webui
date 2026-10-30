@@ -2591,6 +2591,16 @@ describe('tail-first history (issue #2030, stage 1b)', () => {
       expect(document.querySelectorAll('.gutter-lane')).toHaveLength(0)
     })
 
+    it('a leg whose launch tool call is loaded (but has no row) draws no clamped lane and no chip', async () => {
+      const { messageStore } = await mountLegs([[3, 'launch-1']])
+      expect(chip()).toBeTruthy()
+      messageStore.applyRecord(SESSION, { type: 'tool_call', tool_use_id: 'launch-1', name: 'Task', status: 'completed', input: {}, timestamp: 1700000049 }, 'load')
+      await new Promise(r => setTimeout(r, 50))
+      expect(messageStore.findLoadedToolCall(SESSION, 'launch-1')).toBeTruthy()
+      expect(chip()).toBeNull()
+      expect(document.querySelectorAll('.gutter-lane')).toHaveLength(0)
+    })
+
     it('a retired leg that ended before the loaded history draws no lane', async () => {
       const { messageStore } = await mountLegs([[3, 'launch-old']])
       messageStore.applyTaskLifecycleFrame(SESSION, 'task_notification', { task_id: 'task-launch-old', status: 'completed', summary: 'done' }, 1700000010)
