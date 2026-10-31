@@ -106,7 +106,7 @@ Hash-based routing (`createWebHashHistory`):
 - **Key actions**: `addComm()`, `sendComm()`, `loadMinions()`, `createMinion()`, `haltAll()`, `resumeAll()`
 
 #### `ui.js` — UI state & persistence
-- **State**: `rightSidebarCollapsed`, `rightSidebarWidth`, `rightSidebarActiveTab`, `browsingProjectId`, `expandedStacks` (Set), `autoScrollEnabled`, `isRedBackground`, `activeModal`, `restartInProgress`
+- **State**: `rightSidebarCollapsed`, `rightSidebarWidth`, `rightSidebarActiveTab`, `browsingProjectId`, `expandedStacks` (Set), `autoScrollEnabled`, `autoBackfillEnabled` (stage 3 PR 3D: background loading of older history, default on, persisted as `webui-sidebar-autoBackfill`; `setAutoBackfill`), `isRedBackground`, `activeModal`, `restartInProgress`
 - **Persistence**: localStorage with `webui-sidebar-` prefix
 - **Key actions**: `toggleRightSidebar()`, `setBrowsingProject()`, `toggleStack()`, `showModal()`, `hideModal()`, `showRestartModal()`
 
@@ -202,8 +202,9 @@ Hash-based routing (`createWebHashHistory`):
 #### `useHistoryBackfill.js` — Older-history backfill scheduler (issue #2030)
 - Paced page-by-page backfill behind the tail window: fixed page budget, gap `max(500 ms, 2× last page)`, paused while the connection is not `connected`, during live catch-up / activity, hidden tab, or a user REST call; slow-link mode (saveData / 2g / measured < 100 KiB/s) is on-demand only
 - **Jumps (stage 3 PR 3C-1)**: `jumpAround(id, target, {label})` fetches ONE bounded `around=` window as the island (user-driven: no pacing pauses, works in slow-link mode, `{promise, cancel}`, rejects with `err.reason` `not-found|busy|reset|aborted|superseded|failed`); `requestIslandOlder/requestIslandNewer(id)` grow it one page on demand; `cancelJump`, `getMode`; `scheduleIndex` requests the history index after the window + snapshots (not on a slow link). The stage 2 `requestUntil` extend-suffix jump and its >2 MiB confirm are gone
+- **Scroll-driven loading + auto-load setting (stage 3 PR 3D)**: `MessageList.vue` requests the next page of an interval edge when the user is scrolling within ~3 viewport heights of it (`utils/scrollPrefetch.js`: distance widened by scroll speed x measured page latency, capped at 8 viewports; up for the topmost interval, down toward the gap row for the island) — `requestOlder` / `requestIslandOlder` / `requestIslandNewer`, user priority (no inter-page gap, still paused while the live stream catches up). An idle list asks for nothing; the paced background loop stays the extender of the LIVE SUFFIX only, yields while a user fetch (island) runs (`paused: 'user-fetch'`) and is switched off by the UI setting `uiStore.autoBackfillEnabled` (default on, persisted; the banner's "Stop" / "Load in background"; `paused: 'auto-off'`, on-demand pages and "Load full history" still work). `getPageLatencyMs(id, {island})` feeds the prefetch distance
 - **Older-page view hook (issue #2320 follow-up)**: `setPageApplyHook(id, fn)` / `clearPageApplyHook(id, fn)` — `MessageList.vue` registers a function the scheduler calls right before an OLDER page is applied (suffix backfill page or island `before` page); its return value is called right after. The list uses it to keep the viewport on the same message (`utils/prependAnchor.js`); a throwing hook never fails a page
-- **Exports**: `historyBackfill` (`start`, `stop`, `requestOlder`, `jumpAround`, `requestIslandOlder`, `requestIslandNewer`, `cancelJump`, `scheduleIndex`, `getMode`, `loadAll`, `retry`, `setScrollInteraction`, `setPageApplyHook`, `clearPageApplyHook`, reactive `statusBySession`), `createHistoryBackfill(deps)` for tests
+- **Exports**: `historyBackfill` (`start`, `stop`, `requestOlder`, `jumpAround`, `requestIslandOlder`, `requestIslandNewer`, `cancelJump`, `scheduleIndex`, `getMode`, `getPageLatencyMs`, `loadAll`, `retry`, `setScrollInteraction`, `setPageApplyHook`, `clearPageApplyHook`, `stopForced`, reactive `statusBySession`), `createHistoryBackfill(deps)` for tests
 
 #### `useAgentColor.js` — Per-agent color assignment
 - Stable deterministic color per agent/session ID for visual differentiation
@@ -270,8 +271,8 @@ Hash-based routing (`createWebHashHistory`):
 #### `historyIntervals.js` / `loadedRows.js` — Interval model helpers (issue #2030 stage 3 PR 3C-1)
 - `historyIntervals.js`: `intervalsTouch`, `gapBetween`, `windowBytes`, `islandIsFull`, `ISLAND_MAX_BYTES`, `formatHistorySize`; `loadedRows.js`: `buildLoadedRows(store, sessionId)` (plain pipeline without an island, per-interval pipeline + `gap` row with one); `turnNavigation.js`: `planTurnStep` (Prev/Next over the loaded intervals + the history index), `findTurnBefore/AtOrAfter`
 
-#### `virtualScroll.js` / `prependAnchor.js` — Message-list scroll corrections (issues #2320)
-- `virtualScroll.js`: `scrollWithSizerGuard` (the virtualizer's `scrollToFn`: a write past the reachable range waits for the spacer to grow), `shouldAdjustForItemSizeChange` (assigned to the virtualizer INSTANCE: re-measured rows wholly above the fold are compensated whatever the scroll direction); `prependAnchor.js`: `captureMessageAnchor` / `anchorCorrection` (keep the viewport on the same message across an older-page prepend)
+#### `virtualScroll.js` / `prependAnchor.js` / `scrollPrefetch.js` — Message-list scroll corrections (issue #2320) and prefetch distance (stage 3 PR 3D)
+- `virtualScroll.js`: `scrollWithSizerGuard` (the virtualizer's `scrollToFn`: a write past the reachable range waits for the spacer to grow), `shouldAdjustForItemSizeChange` (assigned to the virtualizer INSTANCE: re-measured rows wholly above the fold are compensated whatever the scroll direction); `prependAnchor.js`: `captureMessageAnchor` / `anchorCorrection` (keep the viewport on the same message across an older-page prepend); `scrollPrefetch.js`: `prefetchDistancePx`, `nextScrollSpeed` (how far from an interval edge the next page is requested)
 
 #### `historyMerge.js` — Prepend-merge for tail-first history (issue #2030)
 - **Functions**: `mergeOlderPage(current, older)`, `mergeToolCallFields(current, older)` (newer entry wins field-by-field; an older record only fills what is absent)
