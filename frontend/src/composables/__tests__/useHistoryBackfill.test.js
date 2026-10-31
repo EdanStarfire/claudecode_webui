@@ -128,6 +128,36 @@ describe('history backfill scheduler (issue #2030, minimum pacing rules)', () =>
     t.scheduler.stop(SID)
   })
 
+  it('runs the view hook right before an older page is applied and its returned function right after; a failing hook never fails the page (stage 3 PR 3D)', async () => {
+    const t = setup({ pages: 2 })
+    const order = []
+    t.messageStore.applyFetchedOlderPage = vi.fn(() => { order.push('apply'); t.state.remaining--; return true })
+    t.scheduler.setPageApplyHook(SID, () => { order.push('before'); return () => order.push('after') })
+    t.scheduler.start(SID)
+    await settle(t.scheduler)
+    expect(order).toEqual(['before', 'apply', 'after', 'before', 'apply', 'after'])
+    const t2 = setup({ pages: 1 })
+    const failing = () => { throw new Error('boom') }
+    t2.scheduler.setPageApplyHook(SID, failing)
+    t2.scheduler.start(SID)
+    await settle(t2.scheduler)
+    expect(t2.state.applied).toHaveLength(1)
+    t2.scheduler.clearPageApplyHook(SID, failing)
+  })
+
+  it('clearPageApplyHook removes a hook only while it is still the registered one', async () => {
+    const t = setup({ pages: 2 })
+    const calls = []
+    const mine = () => { calls.push('mine') }
+    const theirs = () => { calls.push('theirs') }
+    t.scheduler.setPageApplyHook(SID, mine)
+    t.scheduler.setPageApplyHook(SID, theirs) // another list instance replaced it
+    t.scheduler.clearPageApplyHook(SID, mine) // the first instance unmounting must not remove the replacement
+    t.scheduler.start(SID)
+    await settle(t.scheduler)
+    expect(calls).toEqual(['theirs', 'theirs'])
+  })
+
   it('pure sizing/gap functions', () => {
     expect(nextPageBudget(PAGE_BUDGET_BYTES, 100)).toBe(2 * PAGE_BUDGET_BYTES)
     expect(nextPageBudget(MAX_PAGE_BUDGET_BYTES, 100)).toBe(MAX_PAGE_BUDGET_BYTES)

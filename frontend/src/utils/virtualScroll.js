@@ -27,3 +27,15 @@ export function scrollWithSizerGuard(offset, { adjustments, behavior } = {}, ins
   })
   attempt(1)
 }
+
+// A re-measured row ENTIRELY above the viewport changes the position of everything below it. The
+// library skips compensating those re-measurements while the scroll direction reads "backward" (to
+// avoid a cascade of corrections while scrolling up through unmeasured rows), so a user scrolling up
+// while rows above settle to their real size (newly prepended rows render markdown, images ...) sees
+// the view jump by the sum. First measurements keep the library's rule (any row starting above the
+// fold); re-measurements of rows wholly above the fold are compensated whatever the direction.
+export function shouldAdjustForItemSizeChange(item, delta, instance) {
+  const offset = instance.getScrollOffset() + instance.scrollAdjustments
+  const firstMeasure = !instance.itemSizeCache.has(item.key)
+  return firstMeasure ? item.start < offset : item.end <= offset
+}

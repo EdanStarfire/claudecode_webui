@@ -203,7 +203,8 @@ import { HYDRATION_STAGE_LABELS } from '@/utils/hydrationStage'
 import { cursorOffset, formatJumpSize, jumpNeedsConfirm, planTurnStep } from '@/utils/turnNavigation'
 import { parseTimestamp } from '@/utils/time'
 import { AROUND_WINDOW_FILE_BYTES, islandIsFull } from '@/utils/historyIntervals'
-import { scrollWithSizerGuard } from '@/utils/virtualScroll'
+import { scrollWithSizerGuard, shouldAdjustForItemSizeChange } from '@/utils/virtualScroll'
+import { anchorCorrection, captureMessageAnchor } from '@/utils/prependAnchor'
 
 const messageStore = useMessageStore()
 const sessionStore = useSessionStore()
@@ -339,6 +340,8 @@ const rowVirtualizer = useVirtualizer(computed(() => ({
   onChange: scheduleStickyScroll,
 })))
 
+// Issue #2320 follow-up: see shouldAdjustForItemSizeChange (the library reads it from the instance, not from options).
+rowVirtualizer.value.shouldAdjustScrollPositionOnItemSizeChange = shouldAdjustForItemSizeChange
 const virtualNav = useVirtualNavigation(rowVirtualizer)
 
 // Pairs each virtual row with its displayableItems entry ONCE per render, instead of the template
@@ -455,6 +458,48 @@ onUnmounted(() => bannerObserver?.disconnect())
 // Island state for the gap row (issue #2030 stage 3 PR 3C-1)
 const islandLoading = computed(() => historyStatus.value?.island?.loading || null)
 const islandError = computed(() => historyStatus.value?.island?.error || null)
+
+// Issue #2320 follow-up: keep the viewport on the same MESSAGE across an older page being prepended
+// (utils/prependAnchor.js says why the virtualizer's own row anchor is not enough at the very top).
+function rowMessageId(item) {
+  return item?.type === 'message' ? resolveMessageId(item.message) : null
+}
+
+const ANCHOR_RECORD_MAX_INDEX = 12
+
+function beforeOlderPageApplied() {
+  const virtualizer = rowVirtualizer.value
+  const offset = virtualizer?.scrollOffset
+  if (offset == null || (stickyToBottom.value && uiStore.autoScrollEnabled)) return null
+  const rows = displayableItems.value
+  const item = virtualizer.getVirtualItemForOffset(offset)
+  // Only the first rows are rewritten by a page merge; further down the library's own key anchor is exact.
+  if (!item || item.index > ANCHOR_RECORD_MAX_INDEX) return null
+  const anchor = captureMessageAnchor(rows, offset, (index) => virtualizer.measurementsCache[index]?.start, item.index, rowMessageId)
+  if (!anchor) return null
+  return () => {
+    // after the page's rows rendered and the virtualizer's own anchoring / first measurements ran
+    nextTick(() => requestAnimationFrame(() => {
+      const v = rowVirtualizer.value
+      if (!v) return
+      const current = v.scrollOffset ?? 0
+      const delta = anchorCorrection(
+        anchor,
+        (id) => indexMaps.value.messageIdIndex.get(id) ?? null,
+        (index) => v.measurementsCache[index]?.start,
+        current,
+      )
+      if (delta) setScrollOffset(current + delta)
+    }))
+  }
+}
+
+watch(viewSessionId, (id, previous) => {
+  if (previous) historyBackfill.clearPageApplyHook(previous, beforeOlderPageApplied)
+  if (id) historyBackfill.setPageApplyHook(id, beforeOlderPageApplied)
+}, { immediate: true })
+onActivated(() => { if (viewSessionId.value) historyBackfill.setPageApplyHook(viewSessionId.value, beforeOlderPageApplied) })
+onUnmounted(() => { if (viewSessionId.value) historyBackfill.clearPageApplyHook(viewSessionId.value, beforeOlderPageApplied) })
 
 function loadNewerHistory() {
   historyBackfill.requestIslandNewer(viewSessionId.value)

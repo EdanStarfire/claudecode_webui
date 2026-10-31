@@ -1870,6 +1870,18 @@ describe('tail-first history (issue #2030, stage 1b)', () => {
     expect(document.querySelector('[data-testid="history-banner"]')).toBeFalsy()
   })
 
+  it('registers its older-page view hook with the scheduler and removes only its own on unmount (issue #2320 follow-up)', async () => {
+    const { historyBackfill } = await import('@/composables/useHistoryBackfill')
+    const set = vi.spyOn(historyBackfill, 'setPageApplyHook')
+    const clear = vi.spyOn(historyBackfill, 'clearPageApplyHook')
+    const { wrapper } = await mountWithStore()
+    expect(set).toHaveBeenCalledWith(SESSION, expect.any(Function))
+    const hook = set.mock.calls.at(-1)[1]
+    wrapper.unmount()
+    expect(clear).toHaveBeenCalledWith(SESSION, hook)
+    vi.restoreAllMocks()
+  })
+
   it('renders no banner for a session shorter than one window', async () => {
     const { messageStore } = await mountWithStore()
     await installTail(messageStore, messagesAt(30, 40), { hasMoreBefore: false })
