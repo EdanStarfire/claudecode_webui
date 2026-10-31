@@ -13,10 +13,12 @@
     >
       <span v-if="historyBanner.kind === 'loading' || historyBanner.kind === 'jump'" class="spinner-border spinner-border-sm flex-shrink-0" aria-hidden="true"></span>
       <span class="flex-grow-1">{{ historyBanner.text }}</span>
-      <button v-if="historyBanner.kind === 'manual'" class="btn btn-sm btn-outline-secondary py-0" data-testid="history-load-older" @click="loadOlderHistory">Load older history</button>
-      <button v-if="historyBanner.kind === 'manual'" class="btn btn-sm btn-outline-secondary py-0" data-testid="history-load-full" @click="loadFullHistory">Load full history</button>
-      <button v-if="historyBanner.kind === 'jump'" class="btn btn-sm btn-outline-secondary py-0" data-testid="history-jump-cancel" @click="cancelTurnJump">Cancel</button>
-      <button v-if="historyBanner.kind === 'error'" class="btn btn-sm btn-outline-danger py-0" @click="historyBackfill.retry(viewSessionId)">Retry</button>
+      <button v-if="historyBanner.kind === 'manual'" class="btn btn-sm btn-outline-secondary py-0 history-banner-btn" data-testid="history-load-older" @click="loadOlderHistory">Load older history</button>
+      <button v-if="historyBanner.kind === 'loading'" class="btn btn-sm btn-outline-secondary py-0 history-banner-btn" data-testid="history-autoload-off" aria-label="Stop loading older history in the background" title="Stop loading older history in the background; it then loads as you scroll up" @click="setAutoBackfill(false)">Stop</button>
+      <button v-if="historyBanner.kind === 'off'" class="btn btn-sm btn-outline-secondary py-0 history-banner-btn" data-testid="history-autoload-on" @click="setAutoBackfill(true)">Load in background</button>
+      <button v-if="historyBanner.kind === 'manual' || historyBanner.kind === 'off'" class="btn btn-sm btn-outline-secondary py-0 history-banner-btn" data-testid="history-load-full" @click="loadFullHistory">Load full history</button>
+      <button v-if="historyBanner.kind === 'jump'" class="btn btn-sm btn-outline-secondary py-0 history-banner-btn" data-testid="history-jump-cancel" @click="cancelTurnJump">Cancel</button>
+      <button v-if="historyBanner.kind === 'error'" class="btn btn-sm btn-outline-danger py-0 history-banner-btn" @click="historyBackfill.retry(viewSessionId)">Retry</button>
     </div>
     <div class="messages-area overflow-auto" :class="{ 'theme-red': uiStore.isRedBackground }" ref="messagesArea" role="log" aria-live="polite" aria-label="Conversation messages" @scroll="onScroll" data-testid="message-list">
       <div class="messages-content" ref="messagesContent">
@@ -204,6 +206,7 @@ import { cursorOffset, formatJumpSize, jumpNeedsConfirm, planTurnStep } from '@/
 import { parseTimestamp } from '@/utils/time'
 import { AROUND_WINDOW_FILE_BYTES, islandIsFull } from '@/utils/historyIntervals'
 import { scrollWithSizerGuard, shouldAdjustForItemSizeChange } from '@/utils/virtualScroll'
+import { nextScrollSpeed, prefetchDistancePx } from '@/utils/scrollPrefetch'
 import { anchorCorrection, captureMessageAnchor } from '@/utils/prependAnchor'
 
 const messageStore = useMessageStore()
@@ -432,10 +435,18 @@ const historyBanner = computed(() => {
     return { kind: 'jump', text: `Loading ${status.jump.label || `turn ${status.jump.ordinal}`}…` }
   }
   if (status?.mode === 'manual') {
-    return { kind: 'manual', text: `Showing newest messages — older history isn't loaded automatically on this connection.${percent && ` (${percent.trim()} loaded)`}` }
+    return { kind: 'manual', text: `Older history loads as you scroll up on this connection.${percent && ` (${percent.trim()} loaded)`}` }
   }
-  return { kind: 'loading', text: `Showing newest messages — loading older history…${percent}${status?.paused ? ' (paused)' : ''}` }
+  if (!uiStore.autoBackfillEnabled && !status?.forced) {
+    return { kind: 'off', text: `Older history loads as you scroll up.${percent && ` (${percent.trim()} loaded)`}` }
+  }
+  return { kind: 'loading', text: `Loading older history…${percent}` }
 })
+
+function setAutoBackfill(enabled) {
+  uiStore.setAutoBackfill(enabled)
+  if (!enabled) historyBackfill.stopForced(viewSessionId.value) // "Stop" also ends a "Load full history"
+}
 
 // The floating search bar sits below the banner: publish the banner's rendered height as a CSS
 // variable (it wraps to several lines on a phone).
@@ -529,29 +540,87 @@ function loadFullHistory() {
   historyBackfill.loadAll(viewSessionId.value)
 }
 
-// Scrolling within one screen of the loaded top requests the next older page immediately (it
-// bypasses the inter-page gap, not the pause-while-live-catching-up rule). Also tells the
-// scheduler whether a gesture is active so a prepend never lands mid-gesture.
-function reportHistoryScrollState() {
+// Scroll-driven loading (issue #2030 stage 3 PR 3D): scrolling toward an interval edge prefetches the
+// next page of that interval at user priority (no inter-page gap, still paused while the live stream
+// is catching up) — up for any interval, down for the pinned island. The prefetch distance is three
+// viewport heights, widened to what the user would scroll through while one page is in flight
+// (measured page latency x recent scroll speed) so a fast scroll does not reach the edge first.
+const PREFETCH_USER_ACTIVE_MS = 2000 // how long after the last wheel / touch / key a scroll still counts as the user's
+let lastUserInputAt = -Infinity
+let scrollSampleTop = 0
+let scrollSampleAt = 0
+let scrollSpeedPxPerMs = 0 // signed: negative while scrolling up
+
+function onPointerDown() { pointerDown = true }
+function onPointerUp() { pointerDown = false; lastUserInputAt = performance.now() }
+
+function noteScrollSpeed(el) {
+  const at = performance.now()
+  // Only the user's own scrolling counts: an anchored prepend / jump rewrites scrollTop in one frame.
+  if (!userGestureActive.value || isProgrammaticScroll.value) {
+    scrollSpeedPxPerMs = 0
+    scrollSampleTop = el.scrollTop
+    scrollSampleAt = at
+    return
+  }
+  scrollSpeedPxPerMs = nextScrollSpeed(scrollSpeedPxPerMs, scrollSampleTop, scrollSampleAt, el.scrollTop, at)
+  scrollSampleTop = el.scrollTop
+  scrollSampleAt = at
+}
+
+const gapRowIndex = computed(() => displayableItems.value.findIndex(item => item.type === 'gap'))
+let pointerDown = false // a scrollbar drag fires scroll events without wheel / touch events
+
+function evaluateHistoryEdges() {
   const sessionId = viewSessionId.value
   const el = messagesArea.value
-  const range = visibleIndexRange.value
-  if (!sessionId || !el || !range) return
-  const nearTop = range.top <= 3 || el.scrollTop < el.clientHeight
+  const virtualizer = rowVirtualizer.value
+  if (!sessionId || !el || !virtualizer || !visibleIndexRange.value) return
+  // The virtualizer's own offset model is the scroll position (it equals scrollTop in a browser).
+  const top = virtualizer.scrollOffset ?? el.scrollTop
+  const ch = virtualizer.scrollRect?.height || el.clientHeight
+  const island = currentIsland.value
+  const upDistance = prefetchDistancePx(ch, -scrollSpeedPxPerMs, historyBackfill.getPageLatencyMs(sessionId, { island: !!island }))
+  const nearTop = top <= upDistance // the next page is needed soon: apply it even mid-gesture (the anchored prepend keeps the place)
   historyBackfill.setScrollInteraction(sessionId, { gestureActive: userGestureActive.value, nearTop })
-  // Slow-link mode promises no unrequested loading: there, only a real user gesture near the top
-  // asks for the (single) next page — a short list must not keep re-requesting by itself.
-  const manual = historyStatus.value?.mode === 'manual'
-  if (nearTop && (!manual || userGestureActive.value) && !isInitialLoad.value && !messageStore.isHistoryComplete(sessionId)) {
-    // The topmost interval pages upward: the island when one is loaded (the suffix keeps its own
-    // background backfill), the suffix otherwise.
-    const island = currentIsland.value
-    if (!island) historyBackfill.requestOlder(sessionId)
-    else if (island.hasMoreBefore) historyBackfill.requestIslandOlder(sessionId)
+  if (isInitialLoad.value || messageStore.isHistoryComplete(sessionId)) return
+  // Only a user who is (or just was) scrolling asks for a page: an idle list is extended by the
+  // background loop (or, in slow-link mode / with auto-load off, not at all — nothing loads unrequested).
+  if (!userGestureActive.value && !pointerDown && performance.now() - lastUserInputAt > PREFETCH_USER_ACTIVE_MS) return
+  // A failed fetch waits for the banner's Retry / the error to clear instead of retrying on every scroll event.
+  const status = historyStatus.value
+  if (status?.error) return
+  // Up: the topmost interval pages upward (the island when one is loaded — the suffix keeps its own
+  // background backfill — the suffix otherwise). Within one screen of the top the user is already waiting.
+  if (nearTop) {
+    if (!island) historyBackfill.requestOlder(sessionId, { urgent: top < ch })
+    else if (island.hasMoreBefore && !status?.island?.error) historyBackfill.requestIslandOlder(sessionId)
+  }
+  // Down: only the island has a lower edge (the gap row above the live suffix).
+  if (island?.hasMoreAfter && !islandIsFull(island) && !status?.island?.error) {
+    const gap = gapRowIndex.value >= 0 ? virtualizer.measurementsCache[gapRowIndex.value] : null
+    // Only while the viewport is above the gap (below it the user is already in the live suffix).
+    if (gap && gap.end > top) {
+      const downDistance = prefetchDistancePx(ch, scrollSpeedPxPerMs, historyBackfill.getPageLatencyMs(sessionId, { island: true }))
+      if (gap.start - (top + ch) <= downDistance) historyBackfill.requestIslandNewer(sessionId)
+    }
   }
 }
-watch(visibleIndexRange, reportHistoryScrollState)
-watch(userGestureActive, reportHistoryScrollState)
+
+let edgeEvalScheduled = false
+function scheduleEdgeEvaluation() {
+  if (edgeEvalScheduled) return
+  edgeEvalScheduled = true
+  requestAnimationFrame(() => {
+    edgeEvalScheduled = false
+    evaluateHistoryEdges()
+  })
+}
+watch(viewSessionId, () => { lastUserInputAt = -Infinity; scrollSpeedPxPerMs = 0; scrollSampleAt = 0; pointerDown = false })
+watch(visibleIndexRange, scheduleEdgeEvaluation)
+watch(userGestureActive, scheduleEdgeEvaluation)
+// A page landing while the viewport is still inside the prefetch distance chains the next one.
+watch(() => displayableItems.value.length, scheduleEdgeEvaluation)
 
 function findPrevTurnIndex() {
   const range = visibleIndexRange.value
@@ -597,7 +666,7 @@ function planTurn(direction) {
   }
   return planTurnStep(direction, {
     boundaries: turnBoundaryIndices.value,
-    gapIndex: island ? displayableItems.value.findIndex(item => item.type === 'gap') : -1,
+    gapIndex: island ? gapRowIndex.value : -1,
     top: range.top,
     bottom: range.bottom,
     viewTop,
@@ -834,7 +903,7 @@ const laneOffsets = computed(() => {
   const partial = !messageStore.isHistoryComplete(viewSessionId.value)
   let spans = null
   // The gap row between an island and the suffix: a lane spanning it is drawn as a visible line.
-  const gapAt = currentIsland.value ? displayableItems.value.findIndex(item => item.type === 'gap') : -1
+  const gapAt = currentIsland.value ? gapRowIndex.value : -1
   const gapRow = gapAt >= 0 ? measurements[gapAt] : null
   const crossesGap = (top, bottom) => !!gapRow && top < gapRow.start && bottom > gapRow.end
 
@@ -1357,6 +1426,7 @@ function scheduleStickyScroll() {
 // silence." The expiry check defers to `touchDown` so the window never closes while a finger is
 // physically still on the screen, even if GESTURE_WINDOW_MS elapses without a touchmove.
 function renewGestureWindow() {
+  lastUserInputAt = performance.now()
   userGestureActive.value = true
   clearTimeout(gestureExpiryTimer)
   gestureExpiryTimer = setTimeout(() => {
@@ -1412,6 +1482,8 @@ function onGestureTouchEnd() {
 
 // Scroll event handler: track user-initiated scroll position and guard programmatic scrolls
 function onScroll() {
+  if (messagesArea.value) noteScrollSpeed(messagesArea.value)
+  scheduleEdgeEvaluation()
   if (isProgrammaticScroll.value) return
   // Issue #2100: during the post-touchend momentum phase, there are no further JS gesture
   // events — only the 'scroll' events momentum itself produces. Renew the window from here,
@@ -1499,6 +1571,8 @@ onMounted(() => {
     el.addEventListener('touchend', onGestureTouchEnd, { passive: true })
     el.addEventListener('mousedown', renewGestureWindow, { passive: true })
     el.addEventListener('mouseup', renewGestureWindow, { passive: true })
+    el.addEventListener('mousedown', onPointerDown, { passive: true })
+    window.addEventListener('mouseup', onPointerUp, { passive: true })
     for (const type of ['wheel', 'touchstart', 'mousedown']) el.addEventListener(type, noteUserScroll, { passive: true })
   }
   window.addEventListener('keydown', onGestureKeydown)
@@ -1514,6 +1588,8 @@ onUnmounted(() => {
     el.removeEventListener('touchend', onGestureTouchEnd)
     el.removeEventListener('mousedown', renewGestureWindow)
     el.removeEventListener('mouseup', renewGestureWindow)
+    el.removeEventListener('mousedown', onPointerDown)
+    window.removeEventListener('mouseup', onPointerUp)
     for (const type of ['wheel', 'touchstart', 'mousedown']) el.removeEventListener(type, noteUserScroll)
   }
   window.removeEventListener('keydown', onGestureKeydown)
@@ -1656,6 +1732,16 @@ function normalizeMessage(message) {
 
 .history-banner-error {
   color: var(--bs-danger);
+}
+
+/* Touch-sized banner controls on a phone. */
+@media (max-width: 767.98px) {
+  .history-banner-btn {
+    min-height: 44px;
+    padding-inline: 0.9rem;
+    /* the 44 px hit area must not make the banner taller than its one text line */
+    margin-block: -9px;
+  }
 }
 
 .messages-area {

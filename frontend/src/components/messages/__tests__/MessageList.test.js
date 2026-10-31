@@ -1860,14 +1860,46 @@ describe('tail-first history (issue #2030, stage 1b)', () => {
 
     const banner = document.querySelector('[data-testid="history-banner"]')
     expect(banner).toBeTruthy()
-    expect(banner.textContent).toContain('Showing newest messages')
-    expect(banner.textContent).toContain('loading older history')
+    expect(banner.textContent).toContain('Loading older history')
     // The banner sits outside the scroll container, so it can never shift scroll coordinates.
     expect(document.querySelector('.messages-area').contains(banner)).toBe(false)
 
     messageStore.applyFetchedOlderPage(SESSION, await messageStore.fetchOlderPage(SESSION, { signal: new AbortController().signal }))
     await new Promise(r => setTimeout(r, 50))
     expect(document.querySelector('[data-testid="history-banner"]')).toBeFalsy()
+  })
+
+  it('the loading banner can stop the background loading, and the off banner turns it back on or loads everything (stage 3 PR 3D)', async () => {
+    const { historyBackfill } = await import('@/composables/useHistoryBackfill')
+    const { messageStore, pinia } = await mountWithStore()
+    const { useUIStore } = await import('@/stores/ui')
+    const ui = useUIStore(pinia)
+    ui.setAutoBackfill(true)
+    await installTail(messageStore, messagesAt(30, 60))
+    await new Promise(r => setTimeout(r, 50))
+    const banner = () => document.querySelector('[data-testid="history-banner"]')
+    expect(banner().textContent).toContain('Loading older history')
+    expect(banner().textContent).not.toMatch(/Showing newest|gated|locked/i)
+    await fireEvent.click(document.querySelector('[data-testid="history-autoload-off"]'))
+    expect(ui.autoBackfillEnabled).toBe(false)
+    await new Promise(r => setTimeout(r, 30))
+    expect(banner().textContent).toContain('loads as you scroll up')
+    expect(document.querySelector('[data-testid="history-autoload-off"]')).toBeFalsy()
+    // a running "Load full history" shows the loading banner again, with Stop
+    historyBackfill.statusBySession.value = new Map([[SESSION, { mode: 'auto', paused: null, loading: true, error: null, forced: true }]])
+    await new Promise(r => setTimeout(r, 30))
+    expect(banner().textContent).toContain('Loading older history')
+    expect(document.querySelector('[data-testid="history-autoload-off"]')).toBeTruthy()
+    historyBackfill.statusBySession.value = new Map()
+    await new Promise(r => setTimeout(r, 30))
+    const loadAll = vi.spyOn(historyBackfill, 'loadAll').mockImplementation(() => {})
+    vi.spyOn(window, 'confirm').mockReturnValue(true)
+    await fireEvent.click(document.querySelector('[data-testid="history-load-full"]'))
+    expect(loadAll).toHaveBeenCalledWith(SESSION)
+    await fireEvent.click(document.querySelector('[data-testid="history-autoload-on"]'))
+    expect(ui.autoBackfillEnabled).toBe(true)
+    vi.restoreAllMocks()
+    ui.setAutoBackfill(true)
   })
 
   it('registers its older-page view hook with the scheduler and removes only its own on unmount (issue #2320 follow-up)', async () => {
@@ -1896,7 +1928,7 @@ describe('tail-first history (issue #2030, stage 1b)', () => {
     historyBackfill.statusBySession.value = new Map([[SESSION, { mode: 'manual', paused: null, loading: false, error: null }]])
     await new Promise(r => setTimeout(r, 50))
 
-    expect(document.querySelector('[data-testid="history-banner"]').textContent).toContain("isn't loaded automatically")
+    expect(document.querySelector('[data-testid="history-banner"]').textContent).toContain('loads as you scroll up on this connection')
     const loadOlder = vi.spyOn(historyBackfill, 'requestOlder').mockImplementation(() => {})
     const loadAll = vi.spyOn(historyBackfill, 'loadAll').mockImplementation(() => {})
     await fireEvent.click(document.querySelector('[data-testid="history-load-older"]'))
@@ -2393,6 +2425,29 @@ describe('tail-first history (issue #2030, stage 1b)', () => {
       expect(document.querySelector('[data-testid="history-gap-jump-latest"]')).toBeTruthy()
     })
 
+    it('scrolling toward the gap prefetches the next island page below at user priority (stage 3 PR 3D)', async () => {
+      const { historyBackfill } = await import('@/composables/useHistoryBackfill')
+      const { messageStore, wrapper } = await mountIsland()
+      const newer = vi.spyOn(historyBackfill, 'requestIslandNewer').mockResolvedValue(false)
+      vi.spyOn(historyBackfill, 'requestIslandOlder').mockResolvedValue(false)
+      await messageStore.loadAround(SESSION, { cursor: 'b:10' })
+      await new Promise(r => setTimeout(r, 80))
+      newer.mockClear()
+      await wrapper.vm.scrollToItemIndex(0, { align: 'start', behavior: 'auto' })
+      await new Promise(r => setTimeout(r, 80))
+      expect(newer).not.toHaveBeenCalled() // far from the gap
+      // the island's last rows, just above the gap row (a scroll jump counts as user scrolling)
+      await wrapper.vm.scrollToItemIndex(12, { align: 'start', behavior: 'auto' })
+      await new Promise(r => setTimeout(r, 120))
+      expect(newer).toHaveBeenCalledWith(SESSION)
+      newer.mockClear()
+      // below the gap (inside the live suffix) nothing is prefetched
+      await wrapper.vm.scrollToItemIndex(20, { align: 'start', behavior: 'auto' })
+      await new Promise(r => setTimeout(r, 120))
+      expect(newer).not.toHaveBeenCalled()
+      vi.restoreAllMocks()
+    })
+
     it('with no island there is no gap row and the rows are the plain pipeline output', async () => {
       await mountIsland()
       expect(document.querySelector('[data-testid="history-gap-row"]')).toBeNull()
@@ -2417,6 +2472,8 @@ describe('tail-first history (issue #2030, stage 1b)', () => {
 
     it('Jump to latest scrolls to the live end and keeps the island loaded', async () => {
       const { messageStore, wrapper } = await mountIsland()
+      const { historyBackfill: hb3d } = await import('@/composables/useHistoryBackfill')
+      vi.spyOn(hb3d, 'requestIslandNewer').mockResolvedValue(false) // the scroll prefetch toward the gap would merge the small island away
       await messageStore.loadAround(SESSION, { cursor: 'b:10' })
       await showGap(wrapper)
       const scroll = vi.spyOn(wrapper.vm.$el.querySelector('.messages-area'), 'scrollTop', 'set')
@@ -2448,6 +2505,8 @@ describe('tail-first history (issue #2030, stage 1b)', () => {
     it('scrolling to the top of the island pages the island upward (not the suffix)', async () => {
       const { historyBackfill } = await import('@/composables/useHistoryBackfill')
       const { messageStore, wrapper } = await mountIsland({ aroundBefore: 3 })
+      const { historyBackfill: hb3d } = await import('@/composables/useHistoryBackfill')
+      vi.spyOn(hb3d, 'requestIslandNewer').mockResolvedValue(false) // the scroll prefetch toward the gap would merge the small island away
       const olderIsland = vi.spyOn(historyBackfill, 'requestIslandOlder').mockResolvedValue(false)
       const olderSuffix = vi.spyOn(historyBackfill, 'requestOlder')
       await messageStore.loadAround(SESSION, { cursor: 'b:20' }) // the window starts below the file start: older history remains
@@ -2465,6 +2524,8 @@ describe('tail-first history (issue #2030, stage 1b)', () => {
 
     it('with the history index: Prev at the suffix top is the turn right before it (unloaded), Next at the island bottom the first turn after it; inside an interval both are plain loaded rows', async () => {
       const { messageStore, wrapper, all } = await mountIsland({ aroundBefore: 3 })
+      const { historyBackfill: hb3d } = await import('@/composables/useHistoryBackfill')
+      vi.spyOn(hb3d, 'requestIslandNewer').mockResolvedValue(false) // the scroll prefetch toward the gap would merge the small island away
       const turnIds = all.filter(m => m.type === 'user').map(m => m.message_id)
       const real = apiMock.get.getMockImplementation()
       apiMock.get.mockImplementation((url) => (String(url).includes('/history_index')

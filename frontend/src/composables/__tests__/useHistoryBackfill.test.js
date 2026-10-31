@@ -10,7 +10,7 @@ import {
 
 const SID = 'sess-1'
 
-function setup({ pages = 5, pageMs = 100, history = {}, polling = {}, hidden = () => false, slow = () => false, mutations = () => 0, onSleep } = {}) {
+function setup({ pages = 5, pageMs = 100, history = {}, polling = {}, hidden = () => false, slow = () => false, mutations = () => 0, autoBackfill = () => true, onSleep } = {}) {
   let clock = 1_000_000
   const state = { remaining: pages, applied: [], fetched: [], aborts: [], restarts: [], sleeps: [] }
   const pollingStore = { currentSessionId: SID, sessionState: 'connected', getLastBatchInfo: () => null, ...polling }
@@ -41,6 +41,7 @@ function setup({ pages = 5, pageMs = 100, history = {}, polling = {}, hidden = (
     sleep: async (ms) => { state.sleeps.push(ms); clock += ms; onSleep?.(state, ms); await new Promise(r => setTimeout(r, 0)) },
     idleSlot: async () => {},
     mutationsInFlight: mutations,
+    autoBackfillEnabled: autoBackfill,
     isHidden: hidden,
     isSlowLink: slow,
   })
@@ -125,6 +126,29 @@ describe('history backfill scheduler (issue #2030, minimum pacing rules)', () =>
     for (let i = 0; i < 5; i++) { t.scheduler.requestOlder(SID); await settle(t.scheduler, 30) }
     expect(t.state.fetched.length).toBeGreaterThanOrEqual(3)
     expect(new Set(t.state.fetched.map(f => f.opts.maxBytes))).toEqual(new Set([PAGE_BUDGET_BYTES]))
+    t.scheduler.stop(SID)
+  })
+
+  it('a prefetch (not urgent) uses the adaptive budget, an urgent request the base budget (stage 3 PR 3D)', async () => {
+    const t = setup({ pages: 8, pageMs: 50, slow: () => true })
+    t.scheduler.start(SID)
+    for (let i = 0; i < 4; i++) { t.scheduler.requestOlder(SID, { urgent: false }); await settle(t.scheduler, 30) }
+    const budgets = t.state.fetched.map(f => f.opts.maxBytes)
+    expect(budgets[0]).toBe(PAGE_BUDGET_BYTES)
+    expect(Math.max(...budgets)).toBeGreaterThan(PAGE_BUDGET_BYTES) // fast pages grew the budget
+    const before = t.state.fetched.length
+    t.scheduler.requestOlder(SID, { urgent: true })
+    await settle(t.scheduler, 30)
+    expect(t.state.fetched[before].opts.maxBytes).toBe(PAGE_BUDGET_BYTES)
+    t.scheduler.stop(SID)
+  })
+
+  it('a prefetch never uses less than the base budget even when pages are slow', async () => {
+    const t = setup({ pages: 6, pageMs: 3000, slow: () => true })
+    t.scheduler.start(SID)
+    for (let i = 0; i < 4; i++) { t.scheduler.requestOlder(SID, { urgent: false }); await settle(t.scheduler, 30) }
+    expect(t.state.fetched.length).toBeGreaterThanOrEqual(3)
+    expect(Math.min(...t.state.fetched.map(f => f.opts.maxBytes))).toBe(PAGE_BUDGET_BYTES)
     t.scheduler.stop(SID)
   })
 
@@ -230,6 +254,80 @@ describe('history backfill scheduler (issue #2030, minimum pacing rules)', () =>
     await settle(t.scheduler)
     expect(t.state.sleeps.length).toBeGreaterThanOrEqual(3)
     expect(t.state.applied).toHaveLength(1)
+  })
+
+  it('the autoBackfill setting off stops the background loop, on-demand pages still load, and turning it on resumes (issue #2030 stage 3 PR 3D)', async () => {
+    let on = false
+    const t = setup({ pages: 4, autoBackfill: () => on })
+    t.scheduler.start(SID)
+    await new Promise(r => setTimeout(r, 20))
+    expect(t.state.fetched).toHaveLength(0)
+    expect(t.scheduler.statusBySession.value.get(SID).paused).toBe('auto-off')
+    // an on-demand page (scroll toward the edge) is user priority: it loads although auto-load is off
+    t.scheduler.requestOlder(SID)
+    await new Promise(r => setTimeout(r, 20))
+    expect(t.state.fetched).toHaveLength(1)
+    expect(t.state.fetched[0].opts.maxBytes).toBe(PAGE_BUDGET_BYTES)
+    // setting back on: the remaining pages follow
+    on = true
+    await settle(t.scheduler, 400)
+    expect(t.state.applied).toHaveLength(4)
+  })
+
+  it('stopForced ends a "Load full history" override so the autoBackfill setting applies again', async () => {
+    const t = setup({ pages: 50, pageMs: 5, autoBackfill: () => false })
+    t.scheduler.start(SID)
+    t.scheduler.loadAll(SID)
+    expect(t.scheduler.statusBySession.value.get(SID).forced).toBe(true)
+    await new Promise(r => setTimeout(r, 15))
+    t.scheduler.stopForced(SID)
+    expect(t.scheduler.statusBySession.value.get(SID).forced).toBe(false)
+    await new Promise(r => setTimeout(r, 15))
+    const fetchedAtStop = t.state.fetched.length
+    await new Promise(r => setTimeout(r, 30))
+    expect(t.state.fetched.length).toBe(fetchedAtStop)
+    t.scheduler.stop(SID)
+  })
+
+  it('"Load full history" overrides the autoBackfill setting', async () => {
+    const t = setup({ pages: 3, autoBackfill: () => false })
+    t.scheduler.start(SID)
+    await new Promise(r => setTimeout(r, 10))
+    expect(t.state.fetched).toHaveLength(0)
+    t.scheduler.loadAll(SID)
+    await settle(t.scheduler)
+    expect(t.state.applied).toHaveLength(3)
+  })
+
+  it('the background loop yields to a user-driven island fetch and resumes after it', async () => {
+    const t = setup({ pages: 2 })
+    let release
+    t.messageStore.getIsland = () => ({ hasMoreBefore: true, hasMoreAfter: false })
+    t.messageStore.fetchIslandPage = vi.fn(() => new Promise(resolve => { release = () => resolve({ edge: 'before', records: [] }) }))
+    t.messageStore.applyIslandPage = vi.fn(() => true)
+    const island = t.scheduler.requestIslandOlder(SID)
+    t.scheduler.start(SID)
+    await new Promise(r => setTimeout(r, 20))
+    expect(t.state.fetched).toHaveLength(0)
+    expect(t.scheduler.statusBySession.value.get(SID).paused).toBe('user-fetch')
+    release()
+    await island
+    await settle(t.scheduler)
+    expect(t.state.applied).toHaveLength(2)
+  })
+
+  it('reports the measured page latency of the suffix loop and of the island', async () => {
+    const t = setup({ pages: 2, pageMs: 300, slow: () => true })
+    expect(t.scheduler.getPageLatencyMs(SID)).toBe(0)
+    t.scheduler.start(SID)
+    t.scheduler.requestOlder(SID)
+    await new Promise(r => setTimeout(r, 20))
+    expect(t.scheduler.getPageLatencyMs(SID)).toBeGreaterThanOrEqual(300)
+    t.messageStore.getIsland = () => ({ hasMoreBefore: true, hasMoreAfter: false })
+    t.messageStore.fetchIslandPage = vi.fn(async () => { t.advance(120); return { edge: 'before', records: [] } })
+    t.messageStore.applyIslandPage = vi.fn(() => true)
+    await t.scheduler.requestIslandOlder(SID)
+    expect(t.scheduler.getPageLatencyMs(SID, { island: true })).toBe(120)
   })
 
   it('never throttles an archive view on a live connection state', async () => {
