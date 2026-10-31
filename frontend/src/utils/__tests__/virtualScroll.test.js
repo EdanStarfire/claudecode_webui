@@ -1,5 +1,5 @@
 import { describe, it, expect, vi } from 'vitest'
-import { scrollWithSizerGuard } from '@/utils/virtualScroll'
+import { scrollWithSizerGuard, shouldAdjustForItemSizeChange } from '@/utils/virtualScroll'
 
 function makeEl({ scrollHeight = 1000, clientHeight = 400 } = {}) {
   return { scrollHeight, clientHeight, scrollTo: vi.fn() }
@@ -119,5 +119,27 @@ describe('scrollWithSizerGuard (issue #2320)', () => {
   it('ignores a missing scroll element', () => {
     const { defer } = makeDefer()
     expect(() => scrollWithSizerGuard(10, {}, { scrollElement: null }, defer)).not.toThrow()
+  })
+})
+
+describe('shouldAdjustForItemSizeChange (issue #2030 stage 3 PR 3D)', () => {
+  const instance = (offset, known = []) => ({ getScrollOffset: () => offset, scrollAdjustments: 0, itemSizeCache: new Map(known.map(k => [k, 100])) })
+
+  it('compensates a first measurement of a row that starts above the fold, not one below it', () => {
+    expect(shouldAdjustForItemSizeChange({ key: 'a', start: 100, end: 260 }, 5, instance(500))).toBe(true)
+    expect(shouldAdjustForItemSizeChange({ key: 'a', start: 600, end: 760 }, 5, instance(500))).toBe(false)
+  })
+
+  it('compensates a re-measured row wholly above the fold whatever the scroll direction (the library skips it while "backward")', () => {
+    expect(shouldAdjustForItemSizeChange({ key: 'a', start: 100, end: 260 }, 5, instance(500, ['a']))).toBe(true)
+  })
+
+  it('does not compensate a re-measured row that spans the fold (it grows below the anchor point)', () => {
+    expect(shouldAdjustForItemSizeChange({ key: 'a', start: 400, end: 560 }, 5, instance(500, ['a']))).toBe(false)
+  })
+
+  it('counts pending adjustments in the offset', () => {
+    const inst = { getScrollOffset: () => 500, scrollAdjustments: 100, itemSizeCache: new Map([['a', 100]]) }
+    expect(shouldAdjustForItemSizeChange({ key: 'a', start: 400, end: 560 }, 5, inst)).toBe(true)
   })
 })

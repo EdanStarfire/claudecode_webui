@@ -126,6 +126,19 @@ export function createHistoryBackfill(deps = {}) {
   const loops = new Map()
   // sessionId -> { gestureActive, nearTop } reported by the message list
   const scrollInteraction = new Map()
+  // sessionId -> () => (() => void) | void: the message list's hook around an OLDER page being applied
+  // (called right before; its return value right after) so it can keep the viewport on the same message.
+  const pageApplyHooks = new Map()
+
+  function applyWithHook(sessionId, apply) {
+    let after = null
+    try { after = pageApplyHooks.get(sessionId)?.() } catch { after = null }
+    try {
+      return apply()
+    } finally {
+      try { after?.() } catch { /* a view hook must never fail a page */ }
+    }
+  }
 
   function setStatus(sessionId, patch) {
     const previous = statusBySession.value.get(sessionId)
@@ -245,7 +258,7 @@ export function createHistoryBackfill(deps = {}) {
           if (controller.signal.aborted || loops.get(sessionId) !== loop) break
 
           const applyStartedAt = now()
-          store.applyFetchedOlderPage(sessionId, page, { source: history.source || 'load' })
+          applyWithHook(sessionId, () => store.applyFetchedOlderPage(sessionId, page, { source: history.source || 'load' }))
           loop.lastPageEndedAt = now()
           const applyMs = loop.lastPageEndedAt - applyStartedAt
           markPerf('history-backfill-apply', applyStartedAt, applyMs)
@@ -467,7 +480,8 @@ export function createHistoryBackfill(deps = {}) {
       }
       await idleSlot()
       if (op.controller.signal.aborted) return false
-      return store.applyIslandPage(sessionId, page)
+      const apply = () => store.applyIslandPage(sessionId, page)
+      return edge === 'before' ? applyWithHook(sessionId, apply) : apply()
     } catch (err) {
       if (op.controller.signal.aborted || err?.reason === 'superseded' || err?.reason === 'aborted') return false
       pushDebugEvent('message', 'island-page-error', { sessionId, edge, message: err?.message })
@@ -510,6 +524,16 @@ export function createHistoryBackfill(deps = {}) {
     start(sessionId)
   }
 
+  /** The message list registers its hook around an older page being applied. */
+  function setPageApplyHook(sessionId, hook) {
+    pageApplyHooks.set(sessionId, hook)
+  }
+
+  /** Removes `hook` — only if it is still the registered one (another list instance may have replaced it). */
+  function clearPageApplyHook(sessionId, hook) {
+    if (pageApplyHooks.get(sessionId) === hook) pageApplyHooks.delete(sessionId)
+  }
+
   /** The message list reports scroll state so a prepend never lands mid-gesture. */
   function setScrollInteraction(sessionId, interaction) {
     scrollInteraction.set(sessionId, interaction)
@@ -530,6 +554,8 @@ export function createHistoryBackfill(deps = {}) {
     loadAll,
     retry,
     setScrollInteraction,
+    setPageApplyHook,
+    clearPageApplyHook,
     isRunning: (sessionId) => loops.has(sessionId),
   }
 }
