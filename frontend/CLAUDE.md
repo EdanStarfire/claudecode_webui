@@ -64,6 +64,8 @@ Hash-based routing (`createWebHashHistory`):
 | `/session/:sessionId/archive/:archiveId` | `SessionView` | Archived session (read-only) |
 | `/archive/agent/:agentId/:archiveId` | `SessionView` | Deleted agent archive (read-only) |
 
+Any of the three session routes accepts `?msg=<message_id>` (issue #2030 stage 3 PR 3F): `MessageList.vue` lands on that message after the newest window loaded — scrolled to when loaded, otherwise ONE bounded `around_id` island through `historyBackfill.jumpAround` (slow link: one confirm naming the ~0.5 MB window) — aligns it to the top and pulses its row; the param stays in the URL (a refresh re-lands) until another navigation (`beginTurnJump`) drops it. An unknown / expired / hidden id shows the banner notice "Couldn't find that message in the history" (`historyBackfill.showNotice`) and drops the param. "Copy link to message" (`components/messages/CopyLinkButton.vue`, in the header line of user and assistant messages; `utils/messageLink.js` builds `<origin>/<path>#<route>?msg=<id>` for the live, archive and deleted-agent views and copies with an `execCommand` fallback for plain http). A cold load of an archive route waits for the session list (`SessionView.waitForProjectId`) instead of showing nothing.
+
 ## Pinia Stores (23)
 
 ### Core Stores (6)
@@ -204,7 +206,7 @@ Hash-based routing (`createWebHashHistory`):
 - **Jumps (stage 3 PR 3C-1)**: `jumpAround(id, target, {label})` fetches ONE bounded `around=` window as the island (user-driven: no pacing pauses, works in slow-link mode, `{promise, cancel}`, rejects with `err.reason` `not-found|busy|reset|aborted|superseded|failed`); `requestIslandOlder/requestIslandNewer(id)` grow it one page on demand; `cancelJump`, `getMode`; `scheduleIndex` requests the history index after the window + snapshots (not on a slow link). The stage 2 `requestUntil` extend-suffix jump and its >2 MiB confirm are gone
 - **Scroll-driven loading + auto-load setting (stage 3 PR 3D)**: `MessageList.vue` requests the next page of an interval edge when the user is scrolling within ~3 viewport heights of it (`utils/scrollPrefetch.js`: distance widened by scroll speed x measured page latency, capped at 8 viewports; up for the topmost interval, down toward the gap row for the island) — `requestOlder` / `requestIslandOlder` / `requestIslandNewer`, user priority (no inter-page gap, still paused while the live stream catches up). An idle list asks for nothing; the paced background loop stays the extender of the LIVE SUFFIX only, yields while a user fetch (island) runs (`paused: 'user-fetch'`) and is switched off by the UI setting `uiStore.autoBackfillEnabled` (default on, persisted; the banner's "Stop" / "Load in background"; `paused: 'auto-off'`, on-demand pages and "Load full history" still work). `getPageLatencyMs(id, {island})` feeds the prefetch distance
 - **Older-page view hook (issue #2320 follow-up)**: `setPageApplyHook(id, fn)` / `clearPageApplyHook(id, fn)` — `MessageList.vue` registers a function the scheduler calls right before an OLDER page is applied (suffix backfill page or island `before` page); its return value is called right after. The list uses it to keep the viewport on the same message (`utils/prependAnchor.js`); a throwing hook never fails a page
-- **Exports**: `historyBackfill` (`start`, `stop`, `requestOlder`, `jumpAround`, `requestIslandOlder`, `requestIslandNewer`, `cancelJump`, `scheduleIndex`, `getMode`, `getPageLatencyMs`, `loadAll`, `retry`, `setScrollInteraction`, `setPageApplyHook`, `clearPageApplyHook`, `stopForced`, reactive `statusBySession`), `createHistoryBackfill(deps)` for tests
+- **Exports**: `historyBackfill` (`start`, `stop`, `requestOlder`, `jumpAround`, `requestIslandOlder`, `requestIslandNewer`, `cancelJump`, `scheduleIndex`, `getMode`, `getPageLatencyMs`, `loadAll`, `retry`, `setScrollInteraction`, `setPageApplyHook`, `clearPageApplyHook`, `stopForced`, `showNotice`, reactive `statusBySession`), `createHistoryBackfill(deps)` for tests
 
 #### `useAgentColor.js` — Per-agent color assignment
 - Stable deterministic color per agent/session ID for visual differentiation
@@ -273,6 +275,9 @@ Hash-based routing (`createWebHashHistory`):
 
 #### `virtualScroll.js` / `prependAnchor.js` / `scrollPrefetch.js` — Message-list scroll corrections (issue #2320) and prefetch distance (stage 3 PR 3D)
 - `virtualScroll.js`: `scrollWithSizerGuard` (the virtualizer's `scrollToFn`: a write past the reachable range waits for the spacer to grow), `shouldAdjustForItemSizeChange` (assigned to the virtualizer INSTANCE: re-measured rows wholly above the fold are compensated whatever the scroll direction); `prependAnchor.js`: `captureMessageAnchor` / `anchorCorrection` (keep the viewport on the same message across an older-page prepend); `scrollPrefetch.js`: `prefetchDistancePx`, `nextScrollSpeed` (how far from an interval edge the next page is requested)
+
+#### `messageLink.js` — Deep links (issue #2030 stage 3 PR 3F)
+- `buildMessageLink(id)` (`<origin>/<path>#<route>?msg=<id>` for the open live / archive / deleted-agent view), `copyText(text)` (async clipboard with an `execCommand` fallback for plain http); used by `components/messages/CopyLinkButton.vue`
 
 #### `historyMerge.js` — Prepend-merge for tail-first history (issue #2030)
 - **Functions**: `mergeOlderPage(current, older)`, `mergeToolCallFields(current, older)` (newer entry wins field-by-field; an older record only fills what is absent)

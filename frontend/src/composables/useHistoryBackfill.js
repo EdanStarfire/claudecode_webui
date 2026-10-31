@@ -452,6 +452,11 @@ export function createHistoryBackfill(deps = {}) {
     return { promise: settled, cancel: () => op.controller.abort() }
   }
 
+  /** A short notice in the history banner (the jump-error slot: expires on its own). */
+  function showNotice(sessionId, text) {
+    publishJumpErrorText(sessionId, text)
+  }
+
   /** Cancels the session's pending jump / island page (the loaded intervals stay valid). */
   function cancelJump(sessionId) {
     islandOps.get(sessionId)?.controller.abort()
@@ -582,6 +587,7 @@ export function createHistoryBackfill(deps = {}) {
     scheduleIndex,
     jumpAround,
     cancelJump,
+    showNotice,
     requestIslandOlder,
     requestIslandNewer,
     getMode,
