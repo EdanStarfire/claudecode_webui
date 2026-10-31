@@ -203,6 +203,7 @@ import { HYDRATION_STAGE_LABELS } from '@/utils/hydrationStage'
 import { cursorOffset, formatJumpSize, jumpNeedsConfirm, planTurnStep } from '@/utils/turnNavigation'
 import { parseTimestamp } from '@/utils/time'
 import { AROUND_WINDOW_FILE_BYTES, islandIsFull } from '@/utils/historyIntervals'
+import { scrollWithSizerGuard } from '@/utils/virtualScroll'
 
 const messageStore = useMessageStore()
 const sessionStore = useSessionStore()
@@ -328,6 +329,9 @@ const rowVirtualizer = useVirtualizer(computed(() => ({
   // (it resolves the first visible row's key at its new index in the same render pass).
   getItemKey: (index) => itemKeys.value[index] ?? `i:${index}`,
   anchorTo: 'end',
+  // Issue #2320: scroll writes past the DOM's reachable range (the spacer has not grown yet after a
+  // prepend) wait for the render — see utils/virtualScroll.js.
+  scrollToFn: (offset, opts, instance) => scrollWithSizerGuard(offset, opts, instance, nextTick),
   // Fires on every virtualizer measurement change — in particular, a mounted tail row's own
   // height changing (streaming growth) while no new item was added, which today's whole-container
   // ResizeObserver caught incidentally. This is the explicit wiring point plan §7 calls out as
