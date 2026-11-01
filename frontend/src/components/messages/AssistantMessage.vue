@@ -245,11 +245,15 @@ function isSubagentLaunchAnchor(tc) {
  */
 function segEnrichedToolCalls(seg, attachedTools, orphanedTools) {
   const sessionId = sessionStore.currentSessionId
-  const toolCalls = sessionId ? messageStore.loadedToolCalls(sessionId) : []
 
   return segToolUses(seg, attachedTools, orphanedTools).map(toolUse => {
-    const liveToolCall = toolCalls.find(tc => tc.id === toolUse.id)
+    // Issue #2326: O(1) indexed lookup (the reactive store entry); a per-row linear scan made every
+    // scroll step O(rows x toolCalls) on large sessions.
+    const liveToolCall = sessionId ? messageStore.findLoadedToolCall(sessionId, toolUse.id) : undefined
     if (liveToolCall) return liveToolCall
+    // The index is not reactive: on a miss, track both lists' lengths (no union copy) so the row
+    // updates when the call arrives.
+    if (sessionId) void (messageStore.toolCallsBySession.get(sessionId)?.length + messageStore.getIsland(sessionId)?.toolCalls.length)
     return {
       id: toolUse.id,
       name: toolUse.name,
