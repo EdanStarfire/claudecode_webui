@@ -428,7 +428,8 @@ const visibleIndexRange = computed(() => {
 const historyStatus = computed(() => historyBackfill.statusBySession.value.get(viewSessionId.value) || null)
 const historyLoading = computed(() => {
   const status = historyStatus.value
-  return !!(status && (status.loading || status.jump || status.island?.loading))
+  // `paused`: a requested page is held back (connection, hidden tab, catch-up) — still pending, still show it.
+  return !!(status && (status.loading || status.paused || status.jump || status.island?.loading))
 })
 // Between two chained pages the status flips false -> true within a frame or two: hold the spinner for
 // SPINNER_HOLD_MS after a load ends so it does not blink (skipped under reduced motion; a session
@@ -569,7 +570,7 @@ function jumpToLatest() {
 }
 
 // Scroll-driven loading (issue #2030 stage 3 PR 3D): scrolling toward an interval edge prefetches the
-// next page of that interval at user priority (no inter-page gap, still paused while the live stream
+// next page of that interval at user priority (still held back while the live stream
 // is catching up) — up for any interval, down for the pinned island. The prefetch distance is three
 // viewport heights, widened to what the user would scroll through while one page is in flight
 // (measured page latency x recent scroll speed) so a fast scroll does not reach the edge first.
@@ -622,8 +623,7 @@ function evaluateHistoryEdges() {
   // A failed fetch waits for the notice's Retry / the error to clear instead of retrying on every scroll event.
   const status = historyStatus.value
   if (status?.error) return
-  // Up: the topmost interval pages upward (the island when one is loaded — the suffix keeps its own
-  // background backfill — the suffix otherwise). Within one screen of the top the user is already waiting.
+  // Up: the topmost interval pages upward (the island when one is loaded, the suffix otherwise). Within one screen of the top the user is already waiting.
   if (nearTop) {
     if (!island) historyBackfill.requestOlder(sessionId, { urgent: top < ch })
     else if (island.hasMoreBefore && !status?.island?.error) historyBackfill.requestIslandOlder(sessionId)

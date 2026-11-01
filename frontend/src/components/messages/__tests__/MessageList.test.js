@@ -1884,6 +1884,8 @@ describe('tail-first history (issue #2030, stage 1b)', () => {
     expect(spinner().textContent).toContain('Loading history')
     // outside the scroll container: it can never shift scroll coordinates
     expect(document.querySelector('.messages-area').contains(spinner())).toBe(false)
+    await set({ paused: 'connection-backoff' })
+    expect(spinner()).toBeTruthy() // a requested page held back is still pending
     await set({ jump: { label: 'turn 4' } })
     expect(spinner()).toBeTruthy()
     await set({ island: { loading: 'before', error: null } })

@@ -180,7 +180,7 @@ export function createHistoryBackfill(deps = {}) {
     return isSlowLink(history) ? 'manual' : 'auto'
   }
 
-  /** A user-driven request is pending (an on-demand page): no gap, no live-activity pause. */
+  /** A user-driven request is pending (an on-demand page). */
   function isPriority(loop) {
     return loop.demand > 0
   }
@@ -301,7 +301,8 @@ export function createHistoryBackfill(deps = {}) {
       pageStats.set(sessionId, { budget: loop.budget, lastPageMs: loop.lastPageMs })
       if (loops.get(sessionId) === loop) loops.delete(sessionId)
       const history = messageStore().getHistoryState(sessionId)
-      if (!history || !history.hasMoreBefore) clearStatus(sessionId)
+      // A jump / island page still in flight keeps its own status (the spinner) when the last older page ends the loop.
+      if (!history || !history.hasMoreBefore) { if (islandOps.has(sessionId)) setStatus(sessionId, { loading: false, paused: null }); else clearStatus(sessionId) }
       else setStatus(sessionId, { loading: false, paused: null })
     }
   }
@@ -330,7 +331,6 @@ export function createHistoryBackfill(deps = {}) {
   }
 
   function trimBusy(sessionId) {
-    // "Load full history" is an explicit request for everything: neither while it runs nor after it ended.
     return islandOps.has(sessionId) || !!statusBySession.value.get(sessionId)?.loading || (loops.get(sessionId)?.demand || 0) > 0
   }
 
@@ -446,6 +446,11 @@ export function createHistoryBackfill(deps = {}) {
     jumpErrorTimers.delete(sessionId)
     // Nothing is in flight any more: the spinner must not wait for the aborted requests to settle.
     if (statusBySession.value.has(sessionId)) setStatus(sessionId, { loading: false, jump: null, island: null })
+  }
+
+  /** The loaded history was replaced (resync / reset): a load error of the old suffix no longer applies. */
+  function clearError(sessionId) {
+    if (statusBySession.value.get(sessionId)?.error) setStatus(sessionId, { error: null })
   }
 
   function stopAll() {
@@ -623,7 +628,7 @@ export function createHistoryBackfill(deps = {}) {
     return (island ? islandPageMs.get(sessionId) : (loops.get(sessionId) ?? pageStats.get(sessionId))?.lastPageMs) || 0
   }
 
-  /** 'auto' | 'manual' (slow link, nothing loads unrequested) for this session right now. */
+  /** 'auto' | 'manual' (slow link: jump confirms, small search pages, index on Prev) for this session right now. */
   function getMode(sessionId) {
     const history = messageStore().getHistoryState(sessionId)
     return currentModeFor(sessionId, history)
@@ -655,6 +660,7 @@ export function createHistoryBackfill(deps = {}) {
     start,
     stop,
     stopAll,
+    clearError,
     requestOlder,
     scheduleIndex,
     jumpAround,
@@ -685,6 +691,7 @@ export const historyBackfill = createHistoryBackfill()
  */
 export function scheduleIndexIfIncomplete(sessionId, after = []) {
   if (useMessageStore().isHistoryComplete(sessionId)) return
+  historyBackfill.clearError(sessionId)
   historyBackfill.scheduleIndex(sessionId, after)
 }
 

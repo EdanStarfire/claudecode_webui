@@ -364,6 +364,30 @@ describe('history page scheduler (issue #2331: on-demand only)', () => {
     expect(nearTop.state.applied).toHaveLength(1)
   })
 
+  it('a page held back (connection backoff) is reported as paused while pending; clearError drops a stale load error', async () => {
+    const t = setup({ pages: 1, polling: { sessionState: 'backoff' } })
+    t.scheduler.requestOlder(SID)
+    await new Promise(r => setTimeout(r, 20))
+    expect(t.scheduler.statusBySession.value.get(SID).paused).toBe('connection-backoff')
+    t.pollingStore.sessionState = 'connected'
+    await settle(t.scheduler)
+    expect(t.state.applied).toHaveLength(1)
+    t.scheduler.statusBySession.value = new Map([[SID, { mode: 'auto', paused: null, loading: false, error: 'boom' }]])
+    t.scheduler.clearError(SID)
+    expect(t.scheduler.statusBySession.value.get(SID).error).toBeNull()
+  })
+
+  it('the last older page ending the loop does not wipe the status of a jump still in flight', async () => {
+    const t = setup({ pages: 1 })
+    t.messageStore.loadAround = vi.fn(() => new Promise(() => {}))
+    t.messageStore.getIsland = () => null
+    t.scheduler.requestOlder(SID)
+    t.scheduler.jumpAround(SID, { cursor: 'b:5' }, { label: 'turn 4' })
+    await settle(t.scheduler)
+    expect(t.scheduler.statusBySession.value.get(SID)?.jump).toMatchObject({ label: 'turn 4' })
+    t.scheduler.stop(SID)
+  })
+
   describe('slow-link mode', () => {
     it('reports manual mode but still loads exactly one page per request', async () => {
       const t = setup({ pages: 5, slow: () => true })

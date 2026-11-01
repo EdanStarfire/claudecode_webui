@@ -101,12 +101,12 @@ describe('SessionStatusBar turn navigation (issue #2030)', () => {
   })
 
   it('an idle index on a slow link keeps Prev enabled; pressing it fetches the index first', async () => {
+    vi.spyOn(historyBackfill, 'getMode').mockReturnValue('manual') // slow link (derived, not read from the status)
     let step = 0
     const { virtualNav, messageStore } = await mountBar({
       prevTurn: () => (step === 0 ? { kind: 'pending', reason: 'idle' } : { kind: 'loaded', index: 2 }),
       startOffset: 5000,
     })
-    historyBackfill.statusBySession.value = new Map([[SID, { mode: 'manual', paused: null, loading: false, error: null }]])
     await nextTick()
     vi.spyOn(messageStore, 'ensureHistoryIndex').mockImplementation(async () => { step = 1; return null })
     expect(prev().disabled).toBe(false)
@@ -155,10 +155,10 @@ describe('SessionStatusBar turn navigation (issue #2030)', () => {
     })
 
     it('a slow link asks first naming the window size; nothing starts while the confirm is open, Cancel never starts it, OK does', async () => {
+      vi.spyOn(historyBackfill, 'getMode').mockReturnValue('manual')
       const spy = jumpAround()
       const { virtualNav } = await mountBar({ prevTurn: target({ sizeHint: 0, cursor: 'b:0' }), startOffset: 30 * MB })
-      historyBackfill.statusBySession.value = new Map([[SID, { mode: 'manual', paused: null, loading: false, error: null }]])
-      await nextTick()
+        await nextTick()
       const atConfirm = []
       const confirm = vi.spyOn(window, 'confirm').mockImplementation(() => {
         atConfirm.push({ jump: spy.mock.calls.length, begin: virtualNav.beginTurnJump.mock.calls.length, jumpStatus: historyBackfill.statusBySession.value.get(SID)?.jump ?? null })
