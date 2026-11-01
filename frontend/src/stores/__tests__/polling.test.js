@@ -459,6 +459,32 @@ describe('polling store - backendStatus (issue #1989, consolidated epic #1990 st
   })
 })
 
+describe('polling store - session switch hook (issue #2030 stage 4 PR 4d)', () => {
+  it('connectSession tells the history scheduler which session was left behind and which was entered', async () => {
+    const { usePollingStore } = await import('@/stores/polling')
+    const { useSessionStore } = await import('@/stores/session')
+    const { historyBackfill } = await import('@/composables/useHistoryBackfill')
+    const pollingStore = usePollingStore()
+    const sessionStore = useSessionStore()
+    for (const sid of ['sess-x', 'sess-y']) sessionStore.sessions.set(sid, makeSession({ session_id: sid }))
+    apiMock.get.mockResolvedValue({ cursor: 0 })
+    sequencedPollMock([{ ui: { events: [], next_cursor: 1 }, sessions: {}, backend_status: 'ok' }])
+    const spy = vi.spyOn(historyBackfill, 'onSessionSwitch').mockImplementation(() => {})
+    await pollingStore.connectSession('sess-x')
+    await flush()
+    expect(spy).toHaveBeenLastCalledWith(null, 'sess-x')
+    await pollingStore.connectSession('sess-y')
+    await flush()
+    expect(spy).toHaveBeenLastCalledWith('sess-x', 'sess-y')
+    spy.mockClear()
+    await pollingStore.connectSession('sess-y') // same session again: nothing left behind
+    await flush()
+    expect(spy).not.toHaveBeenCalled()
+    spy.mockRestore()
+    await pollingStore.disconnectSession()
+  })
+})
+
 describe('polling store - 401 re-auth (issue #2040)', () => {
   it('startUIPolling: a 401 calls triggerReauth, sets uiState/sessionState idle, and does not schedule a backoff retry', async () => {
     vi.useFakeTimers()

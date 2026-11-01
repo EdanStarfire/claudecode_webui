@@ -258,25 +258,6 @@ describe('island growth and merge', () => {
     await store.loadAround(SID, { cursor: 'b:90' })
     expect(store.applyIslandPage(SID, page)).toBe(false)
   })
-
-  it('the interim size cap stops paging and keeps the edge flags', async () => {
-    const { store } = await setup()
-    const real = apiMock.get.getMockImplementation()
-    const { ISLAND_MAX_BYTES } = await import('@/utils/historyIntervals')
-    apiMock.get.mockImplementation(async (url) => {
-      const data = await real(url)
-      if (String(url).includes('around=')) return { ...data, start_cursor: 'b:0', end_cursor: `b:${ISLAND_MAX_BYTES + 10}` }
-      if (String(url).includes('window=tail')) return { ...data, start_cursor: `b:${ISLAND_MAX_BYTES * 3}` }
-      return data
-    })
-    await store.loadMessages(SID, null, 0, { window: 'tail', signal: sig() }) // suffix far beyond the island
-    await store.loadAround(SID, { cursor: 'b:30' })
-    const { islandIsFull } = await import('@/utils/historyIntervals')
-    expect(islandIsFull(store.getIsland(SID))).toBe(true)
-    expect(await store.fetchIslandPage(SID, 'after', { signal: sig() })).toBeNull()
-    expect(await store.fetchIslandPage(SID, 'before', { signal: sig() })).toBeNull()
-    expect(store.getIsland(SID)).toMatchObject({ hasMoreAfter: true, hasMoreBefore: true })
-  })
 })
 
 describe('review fixes', () => {

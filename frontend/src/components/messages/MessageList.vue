@@ -13,10 +13,10 @@
     >
       <span v-if="historyBanner.kind === 'loading' || historyBanner.kind === 'jump'" class="spinner-border spinner-border-sm flex-shrink-0" aria-hidden="true"></span>
       <span class="flex-grow-1">{{ historyBanner.text }}</span>
-      <button v-if="historyBanner.kind === 'manual'" class="btn btn-sm btn-outline-secondary py-0 history-banner-btn" data-testid="history-load-older" @click="loadOlderHistory">Load older history</button>
+      <button v-if="historyBanner.kind === 'manual' || historyBanner.kind === 'budget'" class="btn btn-sm btn-outline-secondary py-0 history-banner-btn" data-testid="history-load-older" @click="loadOlderHistory">Load older history</button>
       <button v-if="historyBanner.kind === 'loading'" class="btn btn-sm btn-outline-secondary py-0 history-banner-btn" data-testid="history-autoload-off" aria-label="Stop loading older history in the background" title="Stop loading older history in the background; it then loads as you scroll up" @click="setAutoBackfill(false)">Stop</button>
       <button v-if="historyBanner.kind === 'off'" class="btn btn-sm btn-outline-secondary py-0 history-banner-btn" data-testid="history-autoload-on" @click="setAutoBackfill(true)">Load in background</button>
-      <button v-if="historyBanner.kind === 'manual' || historyBanner.kind === 'off'" class="btn btn-sm btn-outline-secondary py-0 history-banner-btn" data-testid="history-load-full" @click="loadFullHistory">Load full history</button>
+      <button v-if="historyBanner.kind === 'manual' || historyBanner.kind === 'off' || historyBanner.kind === 'budget'" class="btn btn-sm btn-outline-secondary py-0 history-banner-btn" data-testid="history-load-full" @click="loadFullHistory">Load full history</button>
       <button v-if="historyBanner.kind === 'jump'" class="btn btn-sm btn-outline-secondary py-0 history-banner-btn" data-testid="history-jump-cancel" @click="cancelTurnJump">Cancel</button>
       <button v-if="historyBanner.kind === 'error'" class="btn btn-sm btn-outline-danger py-0 history-banner-btn" @click="historyBackfill.retry(viewSessionId)">Retry</button>
     </div>
@@ -112,7 +112,6 @@
               :approx-bytes="row.item.approxBytes"
               :loading="islandLoading === 'after'"
               :error="islandError"
-              :full="islandIsFull(currentIsland)"
               @load-newer="loadNewerHistory"
               @jump-latest="jumpToLatest"
             />
@@ -205,10 +204,11 @@ import { useHydrationStage } from '@/composables/useHydrationStage'
 import { HYDRATION_STAGE_LABELS } from '@/utils/hydrationStage'
 import { cursorOffset, formatJumpSize, jumpNeedsConfirm, planTurnStep } from '@/utils/turnNavigation'
 import { parseTimestamp } from '@/utils/time'
-import { AROUND_WINDOW_FILE_BYTES, islandIsFull } from '@/utils/historyIntervals'
+import { AROUND_WINDOW_FILE_BYTES } from '@/utils/historyIntervals'
 import { scrollWithSizerGuard, shouldAdjustForItemSizeChange } from '@/utils/virtualScroll'
 import { nextScrollSpeed, prefetchDistancePx } from '@/utils/scrollPrefetch'
 import { anchorCorrection, captureMessageAnchor } from '@/utils/prependAnchor'
+import { TRIM_GUARD_VIEWPORTS } from '@/utils/historyBudget'
 import { MESSAGE_LINK_PARAM } from '@/utils/messageLink'
 
 const messageStore = useMessageStore()
@@ -446,6 +446,11 @@ const historyBanner = computed(() => {
   if (status?.jump) {
     return { kind: 'jump', text: `Loading ${status.jump.label || `turn ${status.jump.ordinal}`}…` }
   }
+  // The loaded part reached the memory budget (or an idle trim released the old end): older history stays
+  // out until the user scrolls to it or asks (the paced loop does not restart).
+  if (!status?.loading && !status?.forced && (status?.paused === 'budget' || messageStore.getHistoryState(sessionId)?.budgetReached)) {
+    return { kind: 'budget', text: 'Older history is not loaded to save memory — scroll up or Load older' }
+  }
   if (status?.mode === 'manual') {
     return { kind: 'manual', text: `Older history loads as you scroll up on this connection.${percent && ` (${percent.trim()} loaded)`}` }
   }
@@ -490,14 +495,18 @@ function rowMessageId(item) {
 
 const ANCHOR_RECORD_MAX_INDEX = 12
 
-function beforeOlderPageApplied() {
+// `meta.trim` (issue #2030 stage 4 PR 4d): the apply REMOVES rows above the viewport (idle trim of the old
+// end, island far-edge eviction), which the virtualizer does not compensate for — anchor on the message
+// wherever the viewport is and correct to the pixel.
+function beforeOlderPageApplied(meta) {
   const virtualizer = rowVirtualizer.value
   const offset = virtualizer?.scrollOffset
   if (offset == null || (stickyToBottom.value && uiStore.autoScrollEnabled)) return null
   const rows = displayableItems.value
   const item = virtualizer.getVirtualItemForOffset(offset)
+  const trim = !!meta?.trim
   // Only the first rows are rewritten by a page merge; further down the library's own key anchor is exact.
-  if (!item || item.index > ANCHOR_RECORD_MAX_INDEX) return null
+  if (!item || (!trim && item.index > ANCHOR_RECORD_MAX_INDEX)) return null
   const anchor = captureMessageAnchor(rows, offset, (index) => virtualizer.measurementsCache[index]?.start, item.index, rowMessageId)
   if (!anchor) return null
   return () => {
@@ -511,18 +520,57 @@ function beforeOlderPageApplied() {
         (id) => indexMaps.value.messageIdIndex.get(id) ?? null,
         (index) => v.measurementsCache[index]?.start,
         current,
+        trim ? 1 : undefined,
       )
       if (delta) setScrollOffset(current + delta)
     }))
   }
 }
 
+// Memory budget (issue #2030 stage 4 PR 4d): how many leading SUFFIX messages an idle trim may remove — only
+// rows that end at least TRIM_GUARD_VIEWPORTS (12) viewport heights above the viewport top, so the scroll
+// prefetch (<= 8 viewports) can never ask for a page the trim just released. 0 when the viewport is in or
+// above an island, or too close to the old edge.
+function trimGuard() {
+  const sessionId = viewSessionId.value
+  const virtualizer = rowVirtualizer.value
+  if (!sessionId || !virtualizer) return null
+  const clientHeight = virtualizer.scrollRect?.height || messagesArea.value?.clientHeight || 0
+  const limitPx = (virtualizer.scrollOffset ?? messagesArea.value?.scrollTop ?? 0) - TRIM_GUARD_VIEWPORTS * clientHeight
+  const none = { maxCutMessages: 0 }
+  if (!(limitPx > 0)) return none
+  const rows = displayableItems.value
+  const cache = virtualizer.measurementsCache
+  let lo = 0
+  let hi = Math.min(rows.length, cache.length) - 1
+  let last = -1
+  while (lo <= hi) {
+    const mid = (lo + hi) >> 1
+    if (cache[mid] && cache[mid].end <= limitPx) { last = mid; lo = mid + 1 } else hi = mid - 1
+  }
+  for (let index = last; index >= 0; index--) {
+    const id = rowMessageId(rows[index])
+    if (id == null) continue
+    const suffixIndex = messageStore.getSuffixMessageIndex(sessionId, id)
+    if (suffixIndex !== undefined) return { maxCutMessages: suffixIndex }
+  }
+  return none
+}
+
+function registerHistoryHooks(id) {
+  historyBackfill.setPageApplyHook(id, beforeOlderPageApplied)
+  historyBackfill.setTrimGuard(id, trimGuard)
+}
+function unregisterHistoryHooks(id) {
+  historyBackfill.clearPageApplyHook(id, beforeOlderPageApplied)
+  historyBackfill.clearTrimGuard(id, trimGuard)
+}
 watch(viewSessionId, (id, previous) => {
-  if (previous) historyBackfill.clearPageApplyHook(previous, beforeOlderPageApplied)
-  if (id) historyBackfill.setPageApplyHook(id, beforeOlderPageApplied)
+  if (previous) unregisterHistoryHooks(previous)
+  if (id) registerHistoryHooks(id)
 }, { immediate: true })
-onActivated(() => { if (viewSessionId.value) historyBackfill.setPageApplyHook(viewSessionId.value, beforeOlderPageApplied) })
-onUnmounted(() => { if (viewSessionId.value) historyBackfill.clearPageApplyHook(viewSessionId.value, beforeOlderPageApplied) })
+onActivated(() => { if (viewSessionId.value) registerHistoryHooks(viewSessionId.value) })
+onUnmounted(() => { if (viewSessionId.value) unregisterHistoryHooks(viewSessionId.value) })
 
 function loadNewerHistory() {
   historyBackfill.requestIslandNewer(viewSessionId.value)
@@ -596,6 +644,7 @@ function evaluateHistoryEdges() {
   const upDistance = prefetchDistancePx(ch, -scrollSpeedPxPerMs, historyBackfill.getPageLatencyMs(sessionId, { island: !!island }))
   const nearTop = top <= upDistance // the next page is needed soon: apply it even mid-gesture (the anchored prepend keeps the place)
   historyBackfill.setScrollInteraction(sessionId, { gestureActive: userGestureActive.value, nearTop })
+  historyBackfill.requestTrimCheck(sessionId) // cheap: arms an idle trim only while over the memory budget
   if (isInitialLoad.value || messageStore.isHistoryComplete(sessionId) || turnJumpsOpen > 0) return
   // Only a user who is (or just was) scrolling asks for a page: an idle list is extended by the
   // background loop (or, in slow-link mode / with auto-load off, not at all — nothing loads unrequested).
@@ -612,7 +661,7 @@ function evaluateHistoryEdges() {
     else if (island.hasMoreBefore && !status?.island?.error) historyBackfill.requestIslandOlder(sessionId)
   }
   // Down: only the island has a lower edge (the gap row above the live suffix).
-  if (island?.hasMoreAfter && !islandIsFull(island) && !status?.island?.error) {
+  if (island?.hasMoreAfter && !status?.island?.error) {
     const gap = gapRowIndex.value >= 0 ? virtualizer.measurementsCache[gapRowIndex.value] : null
     // Only while the viewport is above the gap (below it the user is already in the live suffix).
     if (gap && gap.end > top) {

@@ -237,9 +237,10 @@ export function useMessageSearch(sessionIdRef, { messageStore, getPageLimit } = 
   watch(
     () => messageStore?.getHistoryState?.(sessionIdRef.value)?.startCursor,
     () => {
-      if (query.value.trim() && (phase.value === 'local' || phase.value === 'fallback')) {
-        scheduleSearch({ preserveSelection: true, localOnly: true })
-      }
+      if (!query.value.trim()) return
+      // A complete history that a memory trim made partial again must search the whole history on the server.
+      if (phase.value === 'local' && !isComplete(sessionIdRef.value)) scheduleSearch({ preserveSelection: true })
+      else if (phase.value === 'local' || phase.value === 'fallback') scheduleSearch({ preserveSelection: true, localOnly: true })
     }
   )
 

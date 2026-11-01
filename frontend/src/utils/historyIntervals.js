@@ -9,8 +9,6 @@
 // touch test only (without it the touch test falls back to record overlap / `has_more_after`).
 import { cursorOffset } from '@/utils/turnNavigation'
 
-/** Interim cap (history-file bytes) on what one island may hold; stage 4 replaces it with eviction. */
-export const ISLAND_MAX_BYTES = 64 * 1024 * 1024
 /** Budget of one `after=` page ("Load newer") and of one island `before=` page. */
 export const ISLAND_PAGE_BYTES = 256 * 1024
 
@@ -19,11 +17,6 @@ export function windowBytes(startCursor, endCursor) {
   const start = cursorOffset(startCursor)
   const end = cursorOffset(endCursor)
   return start == null || end == null ? null : Math.max(0, end - start)
-}
-
-/** True when the island holds more than its interim cap (paging stops; edges stay visible). */
-export function islandIsFull(island) {
-  return !!island && (island.bytes || 0) >= ISLAND_MAX_BYTES
 }
 
 /**
