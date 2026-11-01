@@ -40,8 +40,14 @@ def generate_session_file(
     seed: int = 1,
     big_results: int | None = None,
     rare_token: str | None = None,
+    tool_results_metadata: bool = False,
 ) -> dict[str, Any]:
     """Write ``records`` JSONL lines to ``path`` (approximately ``target_bytes``).
+
+    ``tool_results_metadata=True`` adds ``metadata.tool_results=[{tool_use_id}]`` to the tool-result
+    carrier rows the way real sessions have it (the stock rows omit it, which leaves the browser's
+    hook-correlation pending-tool queue growing without bound — a fixture artifact). Default False
+    keeps the output byte-identical for the stage 2/3 load tests.
 
     Returns ``{"records", "bytes", "turns", "compactions"}`` (the true turn / group counts, from
     construction, independent of the reducer)."""
@@ -55,17 +61,21 @@ def generate_session_file(
     # (the generator is fast), then regenerate at the solved value.
     low, high = 50.0, 2000.0
     base = _write(path, rng_seed=seed, records=records, session_id=session_id, sizes=sizes,
-                  avg_tool=low, rare_token=rare_token)["bytes"]
+                  avg_tool=low, rare_token=rare_token,
+                  tool_results_metadata=tool_results_metadata)["bytes"]
     probe = _write(path, rng_seed=seed, records=records, session_id=session_id, sizes=sizes,
-                   avg_tool=high, rare_token=rare_token)["bytes"]
+                   avg_tool=high, rare_token=rare_token,
+                   tool_results_metadata=tool_results_metadata)["bytes"]
     slope = max(1e-9, (probe - base) / (high - low))
     avg_tool = max(low, low + (target_bytes - base) / slope)
     return _write(path, rng_seed=seed, records=records, session_id=session_id, sizes=sizes,
-                  avg_tool=avg_tool, rare_token=rare_token)
+                  avg_tool=avg_tool, rare_token=rare_token,
+                   tool_results_metadata=tool_results_metadata)
 
 
 def _write(path: Path, *, rng_seed: int, records: int, session_id: str, sizes: dict[int, int],
-           avg_tool: float, rare_token: str | None = None) -> dict[str, Any]:
+           avg_tool: float, rare_token: str | None = None,
+           tool_results_metadata: bool = False) -> dict[str, Any]:
     rng = random.Random(rng_seed)
     ts = 1_700_000_000.0
 
@@ -122,8 +132,10 @@ def _write(path: Path, *, rng_seed: int, records: int, session_id: str, sizes: d
                       else {"command": "ls"}, "result": result_text})
                 if n >= records:
                     break
-                emit({"type": "user", "content": "Tool results: 1 result",
-                      "metadata": {"has_tool_results": True}})
+                carrier_meta: dict[str, Any] = {"has_tool_results": True}
+                if tool_results_metadata:
+                    carrier_meta["tool_results"] = [{"tool_use_id": f"tu{tool_n}"}]
+                emit({"type": "user", "content": "Tool results: 1 result", "metadata": carrier_meta})
                 if rng.random() < 0.05 and n < records:
                     emit({"type": "system", "content": "", "metadata": {"subtype": "thinking_tokens"}})
                 if rng.random() < 0.02 and n + 1 < records:

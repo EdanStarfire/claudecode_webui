@@ -1,5 +1,7 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest'
 import { setActivePinia, createPinia } from 'pinia'
+import { isProxy, isShallow } from 'vue'
+import { buildLoadedRows } from '@/utils/loadedRows'
 import { loadScaledRestHistory } from './helpers/scaleFixture'
 
 // Issue #2131 (AC3): the cold-load regression this issue exists to fix only manifests at
@@ -84,5 +86,33 @@ describe('cold load scale regression (Issue #2131, AC3)', () => {
     // Index maps stay 1:1 with the arrays they mirror.
     expect(store.messageIndexBySession.get(SID)?.size).toBe(uniqueMessageIds.size)
     expect(store.toolIndexBySession.get(SID)?.size).toBe(uniqueToolUseIds.size)
+  }, 30000)
+
+  // Issue #2030 stage 4 PR 4b: at 20k records the loaded history must carry no per-record
+  // reactivity (the proxies' get-trap cost and Dep/Link heap were the dominant cost). Asserted
+  // structurally rather than by wall time so the guard is deterministic: no message is a proxy,
+  // every tool entry is a shallow proxy, and a live append + row rebuild touches the same raw
+  // records (rows reference the stored message objects themselves).
+  it('keeps 20,000 loaded records proxy-free and rebuilds rows over the raw records', async () => {
+    const scaled = loadScaledRestHistory('primary', 20000)
+    apiMock.get.mockResolvedValueOnce({ messages: scaled, total_count: scaled.length, has_more: false, event_cursor: 1 })
+    const { useMessageStore } = await import('@/stores/message')
+    const store = useMessageStore()
+    await store.loadMessages(SID, scaled.length)
+
+    const messages = store.loadedMessages(SID)
+    expect(messages.length).toBeGreaterThan(5000)
+    expect(isProxy(messages)).toBe(false)
+    expect(messages.filter(isProxy)).toHaveLength(0)
+    const tools = store.loadedToolCalls(SID)
+    expect(tools.length).toBeGreaterThan(1000)
+    expect(tools.every(t => isProxy(t) && isShallow(t))).toBe(true)
+
+    store.applyRecord(SID, { type: 'assistant', message_id: 'live-tail', content: 'tail', timestamp: Date.now() / 1000, metadata: {} }, 'live')
+    expect(store.loadedMessages(SID).at(-1).message_id).toBe('live-tail')
+    const rows = buildLoadedRows(store, SID)
+    const messageRows = rows.filter(r => r.type === 'message')
+    expect(messageRows.at(-1).message).toBe(store.loadedMessages(SID).at(-1))
+    expect(messageRows.every(r => !isProxy(r.message))).toBe(true)
   }, 30000)
 })

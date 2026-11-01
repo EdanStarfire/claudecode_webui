@@ -260,7 +260,11 @@ let touchMomentumDeadline = null // timestamp (ms); set at touchend, cleared at 
 // Per-instance message and tool-call sources derived from the injected session id.
 // (Stage 3 PR 3C-1: the loaded* getters return the live suffix's own arrays unless a jumped-to island is loaded.)
 const sessionMessages = computed(() => messageStore.loadedMessages(viewSessionId.value))
-const sessionToolCalls = computed(() => messageStore.loadedToolCalls(viewSessionId.value))
+// Issue #2030 stage 4 PR 4b: the loaded arrays are raw (not reactive) and `sessionMessages` returns
+// the SAME array identity after an in-place append, so a watcher on `.value.length` would never
+// fire. Watchers read the store getters directly (they track the store's shallowRef Maps, which
+// every mutation replaces) or derive a primitive.
+const sessionMessageCount = computed(() => messageStore.loadedMessages(viewSessionId.value).length)
 const currentIsland = computed(() => messageStore.getIsland(viewSessionId.value))
 
 // TTS Read Aloud (issue #735)
@@ -1637,7 +1641,7 @@ function onScroll() {
 const lastSeenMessageCount = ref(sessionMessages.value.length)
 const ttsInitialized = ref(false)
 let lastSeenTailId = null
-watch(() => sessionMessages.value.length, (newLen) => {
+watch(sessionMessageCount, (newLen) => {
   // Issue #2030: a backfilled older page grows the list at the HEAD — the tail is unchanged and
   // nothing new should be read aloud.
   const tailId = sessionMessages.value[newLen - 1]?.message_id ?? null
@@ -1782,7 +1786,7 @@ onDeactivated(() => {
 watch(() => displayableItems.value.length, () => scheduleStickyScroll())
 
 // Auto-scroll on tool call updates (for permission requests, status changes, etc.)
-watch(() => sessionToolCalls.value.length, () => scheduleStickyScroll())
+watch(() => messageStore.loadedToolCalls(viewSessionId.value).length, () => scheduleStickyScroll())
 
 // Issue #1955: the live-typing preview renders OUTSIDE the virtualizer's tracked rows (a
 // normal-flow sibling, like TruncationBanner), so its growth no longer trips the virtualizer's
@@ -1796,7 +1800,7 @@ watch(() => {
 
 // Watch for tool call status changes (e.g., permission_required)
 watch(
-  () => sessionToolCalls.value.map(tc => `${tc.id}-${tc.status}`).join(','),
+  () => messageStore.loadedToolCalls(viewSessionId.value).map(tc => `${tc.id}-${tc.status}`).join(','),
   () => scheduleStickyScroll()
 )
 
