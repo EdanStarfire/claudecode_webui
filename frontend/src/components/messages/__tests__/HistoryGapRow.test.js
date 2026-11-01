@@ -31,10 +31,4 @@ describe('HistoryGapRow', () => {
     expect(screen.getByTestId('history-gap-error').textContent).toBe('boom')
     expect(screen.getByTestId('history-gap-load-newer').disabled).toBe(false)
   })
-
-  it('a full island (interim cap) disables Load newer and says so', () => {
-    render(HistoryGapRow, { props: { approxBytes: 1000, full: true } })
-    expect(screen.getByTestId('history-gap-load-newer').disabled).toBe(true)
-    expect(screen.getByTestId('history-gap-label').textContent).toContain('full')
-  })
 })

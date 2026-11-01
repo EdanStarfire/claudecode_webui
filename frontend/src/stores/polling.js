@@ -796,6 +796,14 @@ export const usePollingStore = defineStore('polling', () => {
   function connectUI() { startPolling() }
   function disconnectUI() { stopPolling() }
 
+  // Issue #2030 stage 4 PR 4d: the session left behind keeps only its newest history (memory budget).
+  function _notifySessionSwitch(previousId, nextId) {
+    if (previousId === nextId) return
+    import('@/composables/useHistoryBackfill')
+      .then(({ historyBackfill }) => historyBackfill.onSessionSwitch(previousId, nextId))
+      .catch((err) => pushDebugEvent('polling', 'session-switch-hook-failed', { message: err?.message }))
+  }
+
   async function connectSession(sessionId) {
     // Issue #1000: Prefer cursor from loadMessages() REST response (aligned with loaded
     // history). Falls back to the subscription's own cursor (resuming a previously-viewed,
@@ -820,8 +828,10 @@ export const usePollingStore = defineStore('polling', () => {
       }
     }
 
+    const previousSessionId = currentSessionId.value
     currentSessionId.value = sessionId
     isCurrentViewArchived.value = false
+    _notifySessionSwitch(previousSessionId, sessionId)
     touchSubscription(sessionId)
     subscriptions.get(sessionId).cursor = initialCursor
     interruptIfStale(sessionId, initialCursor)
@@ -877,7 +887,9 @@ export const usePollingStore = defineStore('polling', () => {
   // per-connection 'archived' state, no stale in-flight poll response can ever revert it —
   // nothing else ever writes it.
   function markSessionArchived(sessionId) {
+    const previousSessionId = currentSessionId.value
     currentSessionId.value = sessionId
+    _notifySessionSwitch(previousSessionId, sessionId)
     isCurrentViewArchived.value = true
     _syncSessionState()
     _syncSessionHasEverConnected()

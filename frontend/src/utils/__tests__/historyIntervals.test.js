@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest'
 import {
-  ISLAND_MAX_BYTES, windowBytes, islandIsFull, intervalsTouch, gapBetween, formatHistorySize,
+  windowBytes, intervalsTouch, gapBetween, formatHistorySize,
 } from '../historyIntervals'
 
 // Issue #2030 (stage 3 PR 3C-1): pure helpers of the interval model.
@@ -46,10 +46,5 @@ describe('gap and sizes', () => {
     expect(formatHistorySize(512 * 1024)).toBe('0.5 MB')
     expect(formatHistorySize(19 * 1024 * 1024)).toBe('19 MB')
     expect(formatHistorySize(3.4 * 1024 * 1024)).toBe('3.4 MB')
-  })
-  it('the interim cap marks an island full', () => {
-    expect(islandIsFull({ bytes: ISLAND_MAX_BYTES - 1 })).toBe(false)
-    expect(islandIsFull({ bytes: ISLAND_MAX_BYTES })).toBe(true)
-    expect(islandIsFull(null)).toBe(false)
   })
 })

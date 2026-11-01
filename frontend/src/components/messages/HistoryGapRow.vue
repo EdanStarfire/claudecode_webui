@@ -10,7 +10,7 @@
         type="button"
         class="btn btn-sm btn-outline-secondary"
         data-testid="history-gap-load-newer"
-        :disabled="loading || full"
+        :disabled="loading"
         @click="$emit('load-newer')"
       >Load newer</button>
       <button
@@ -35,15 +35,13 @@ const props = defineProps({
   approxBytes: { type: Number, default: null },
   loading: { type: Boolean, default: false },
   error: { type: String, default: null },
-  // The island reached its interim size cap: it grows no further.
-  full: { type: Boolean, default: false },
 })
 defineEmits(['load-newer', 'jump-latest'])
 
 const label = computed(() => {
   const size = formatHistorySize(props.approxBytes)
   const base = size ? `About ${size} of history not loaded` : 'History not loaded'
-  return props.full ? `${base} — this section is full, jump to the latest or elsewhere` : base
+  return base
 })
 </script>
 

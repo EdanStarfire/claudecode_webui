@@ -1869,6 +1869,31 @@ describe('tail-first history (issue #2030, stage 1b)', () => {
     expect(document.querySelector('[data-testid="history-banner"]')).toBeFalsy()
   })
 
+  it('shows the memory-budget banner (and its buttons) once the loop paused at the budget or a trim released the old end (stage 4 PR 4d)', async () => {
+    const { historyBackfill } = await import('@/composables/useHistoryBackfill')
+    const { messageStore } = await mountWithStore()
+    await installTail(messageStore, messagesAt(30, 60))
+    await new Promise(r => setTimeout(r, 50))
+    const banner = () => document.querySelector('[data-testid="history-banner"]')
+    expect(banner().textContent).toContain('Loading older history')
+    historyBackfill.statusBySession.value = new Map([[SESSION, { mode: 'auto', paused: 'budget', loading: false, error: null }]])
+    await new Promise(r => setTimeout(r, 30))
+    expect(banner().textContent).toContain('Older history is not loaded to save memory — scroll up or Load older')
+    expect(document.querySelector('[data-testid="history-load-older"]')).toBeTruthy()
+    expect(document.querySelector('[data-testid="history-load-full"]')).toBeTruthy()
+    const requestOlder = vi.spyOn(historyBackfill, 'requestOlder').mockImplementation(() => {})
+    await fireEvent.click(document.querySelector('[data-testid="history-load-older"]'))
+    expect(requestOlder).toHaveBeenCalledWith(SESSION)
+    // "Load full history" is running (between two pages nothing is in flight): the loading banner with Stop, not the budget copy
+    historyBackfill.statusBySession.value = new Map([[SESSION, { mode: 'auto', paused: 'budget', loading: false, error: null, forced: true }]])
+    await new Promise(r => setTimeout(r, 30))
+    expect(banner().textContent).toContain('Loading older history')
+    expect(document.querySelector('[data-testid="history-autoload-off"]')).toBeTruthy()
+    historyBackfill.statusBySession.value = new Map()
+    await new Promise(r => setTimeout(r, 30))
+    expect(banner().textContent).toContain('Loading older history')
+  })
+
   it('the loading banner can stop the background loading, and the off banner turns it back on or loads everything (stage 3 PR 3D)', async () => {
     const { historyBackfill } = await import('@/composables/useHistoryBackfill')
     const { messageStore, pinia } = await mountWithStore()

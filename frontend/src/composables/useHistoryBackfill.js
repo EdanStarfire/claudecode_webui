@@ -2,8 +2,13 @@ import { ref } from 'vue'
 import { getMutationsInFlight } from '@/utils/api'
 import { useMessageStore } from '@/stores/message'
 import { usePollingStore } from '@/stores/polling'
+import { useSessionStore } from '@/stores/session'
 import { useUIStore } from '@/stores/ui'
 import { pushDebugEvent } from '@/composables/useDebugBuffer'
+import { windowBytes } from '@/utils/historyIntervals'
+import {
+  TRIM_MIN_INTERVAL_MS, TRIM_RETRY_MS, backgroundKeepBytes, getHistoryBudgetBytes, trimTargetBytes,
+} from '@/utils/historyBudget'
 
 // Issue #2030 (stage 1b): background backfill of older history behind a tail-first load.
 //
@@ -36,7 +41,15 @@ import { pushDebugEvent } from '@/composables/useDebugBuffer'
 //   - slow-link mode (saveData, 2g, or measured first-window throughput < SLOW_LINK_BPS when the
 //     Network Information API is absent): NO automatic backfill — older history loads on demand
 //     (scrolling near the top, the banner's button) only.
-// There is no ceiling: on a good link backfill runs until `has_more_before` is false.
+// Memory budget (issue #2030 stage 4 PR 4d, utils/historyBudget.js): the background loop is the
+// extender of the live suffix only up to the budget (64 MiB of history file on a desktop, 32 MiB on
+// a phone) — then it ends with `paused: 'budget'` and stays off (a trim never re-arms it). User-driven
+// pages (scroll prefetch, the banner's buttons, "Load full history") are never refused by it. When the
+// loaded history exceeds the budget (explicit user scrolling, live growth) an IDLE trim releases the
+// OLD end back to 0.75 x budget — only while no gesture is active, nothing is in flight, and the
+// message list reports the removed rows are >= 12 viewports above the viewport (the scroll prefetch
+// fires within 8, so it can never ask for a page the trim just removed); at most once per 30 s.
+// A session that stops being the current one keeps only its newest min(8 MiB, budget/4).
 
 export const PAGE_BUDGET_BYTES = 256 * 1024
 export const MIN_PAGE_BUDGET_BYTES = 64 * 1024
@@ -61,6 +74,7 @@ const INDEX_AFTER_SNAPSHOTS_MAX_MS = 5000
 const WAIT_POLL_MS = 250
 const PAGE_INACTIVITY_MS = 30000
 const MAX_CONSECUTIVE_ERRORS = 5
+const PERMANENT_TRIM_REASONS = new Set(['no-history', 'no-ledger', 'ledger-chain', 'opaque-cursor'])
 const BLOCKING_CONNECTION_STATES = new Set(['idle', 'connecting', 'resyncing', 'backoff', 'unreachable'])
 
 /** Next page budget from how long the last page took: grow when fast, shrink when slow. */
@@ -127,6 +141,11 @@ export function createHistoryBackfill(deps = {}) {
   const isHidden = deps.isHidden || (() => typeof document !== 'undefined' && document.visibilityState === 'hidden')
   const isSlowLink = deps.isSlowLink || ((history) => detectSlowLink(history))
   const autoBackfillEnabled = deps.autoBackfillEnabled || (() => useUIStore().autoBackfillEnabled)
+  const budgetBytes = deps.budgetBytes || (() => getHistoryBudgetBytes())
+  const BACKGROUND_TRIM_DELAY_MS = deps.backgroundTrimDelayMs ?? 30000
+  const viewedSessionId = deps.viewedSessionId || (() => useSessionStore().currentSessionId)
+  // No entry == the list never rendered (nothing to preserve); the ui store records whether a list follows the live end.
+  const isStickyBottom = deps.isStickyBottom || ((sessionId) => useUIStore().stickyToBottomBySession.get(sessionId) !== false)
 
   const statusBySession = ref(new Map())
   // sessionId -> { token, demand: number, lastPageMs, lastPageEndedAt, forcedAuto }
@@ -136,10 +155,19 @@ export function createHistoryBackfill(deps = {}) {
   // sessionId -> () => (() => void) | void: the message list's hook around an OLDER page being applied
   // (called right before; its return value right after) so it can keep the viewport on the same message.
   const pageApplyHooks = new Map()
+  // sessionId -> () => { maxCutMessages } | null: the message list's answer to "how many leading
+  // messages may an idle trim remove" (rows >= 12 viewports above the viewport) — absent == no list shown.
+  const trimGuards = new Map()
+  const trimTimers = new Map()
+  const lastTrimAt = new Map()
+  const leaveTimers = new Map()
+  const fullRequested = new Set() // sessions where the user pressed "Load full history": never trimmed while current
 
-  function applyWithHook(sessionId, apply) {
+  // `meta.trim`: the apply REMOVES rows above the viewport (a trim, or an island eviction of the near end),
+  // so the list anchors on the message wherever the viewport is, not only near the top.
+  function applyWithHook(sessionId, apply, meta = null) {
     let after = null
-    try { after = pageApplyHooks.get(sessionId)?.() } catch { after = null }
+    try { after = pageApplyHooks.get(sessionId)?.(meta) } catch { after = null }
     try {
       return apply()
     } finally {
@@ -174,11 +202,19 @@ export function createHistoryBackfill(deps = {}) {
     return loop.demand > 0
   }
 
+  /** Loaded history (file bytes) has reached the budget, or a trim already released the old end. */
+  function isOverBudget(sessionId, history) {
+    if (history.budgetReached) return true
+    const loaded = messageStore().historyProgress?.(sessionId)?.loadedBytes
+    return loaded != null && loaded >= budgetBytes()
+  }
+
   /** Why the loop must not fetch right now (null == free to go). `demand` = user-driven page. */
   // `demand` = a user-driven page; `loop.forcedAuto` ('Load full history') overrides the autoBackfill setting.
   function blockedReason(sessionId, history, demand, loop) {
     const polling = pollingStore()
     if (polling.currentSessionId !== sessionId) return 'not-current'
+    if (!demand && !loop?.forcedAuto && isOverBudget(sessionId, history)) return 'budget'
     if (isHidden()) return 'hidden'
     if (mutationsInFlight() > 0) return 'user-request'
     // The background extender yields to any user-driven history fetch and honours the UI setting.
@@ -204,6 +240,8 @@ export function createHistoryBackfill(deps = {}) {
       if (!history || !history.hasMoreBefore) return false
       const reason = blockedReason(sessionId, history, demand(), loop)
       if (reason === 'not-current') return false
+      // At the budget the background extender is done for good (no polling wait): only demand pages go on.
+      if (reason === 'budget') { loop.endedBy = 'budget'; return false }
       setStatus(sessionId, { paused: reason })
       if (!reason) return true
       await sleep(WAIT_POLL_MS)
@@ -270,6 +308,7 @@ export function createHistoryBackfill(deps = {}) {
 
           const applyStartedAt = now()
           applyWithHook(sessionId, () => store.applyFetchedOlderPage(sessionId, page, { source: history.source || 'load' }))
+          requestTrimCheck(sessionId)
           loop.lastPageEndedAt = now()
           const applyMs = loop.lastPageEndedAt - applyStartedAt
           markPerf('history-backfill-apply', applyStartedAt, applyMs)
@@ -318,8 +357,107 @@ export function createHistoryBackfill(deps = {}) {
       if (loops.get(sessionId) === loop) loops.delete(sessionId)
       const history = messageStore().getHistoryState(sessionId)
       if (!history || !history.hasMoreBefore) clearStatus(sessionId)
-      else setStatus(sessionId, { loading: false, paused: null })
+      else setStatus(sessionId, { loading: false, paused: loop.endedBy === 'budget' ? 'budget' : null })
     }
+  }
+
+  // ---- memory budget: idle trim of the old end, background keep-bytes (issue #2030 stage 4 PR 4d) ----
+
+  function loadedBytesOf(sessionId) {
+    return messageStore().historyProgress?.(sessionId)?.loadedBytes ?? null
+  }
+
+  function cancelTrim(sessionId) {
+    clearTimeout(trimTimers.get(sessionId))
+    trimTimers.delete(sessionId)
+  }
+
+  /**
+   * Arms an idle trim check for the current session when it holds more than the budget (cheap and
+   * idempotent: the message list calls it on scroll, the loop after every page). The check retries
+   * every TRIM_RETRY_MS while the conditions (idle, no gesture, far from the old edge) do not hold.
+   */
+  function requestTrimCheck(sessionId, delay = 2000) {
+    if (trimTimers.has(sessionId)) return
+    const loaded = loadedBytesOf(sessionId)
+    if (loaded == null || loaded <= budgetBytes()) return
+    trimTimers.set(sessionId, setTimeout(() => { trimTimers.delete(sessionId); runTrimCheck(sessionId) }, delay))
+  }
+
+  function trimBusy(sessionId) {
+    // "Load full history" is an explicit request for everything: neither while it runs nor after it ended.
+    return fullRequested.has(sessionId) || islandOps.has(sessionId) || !!statusBySession.value.get(sessionId)?.loading || (loops.get(sessionId)?.demand || 0) > 0
+  }
+
+  async function runTrimCheck(sessionId) {
+    const store = messageStore()
+    const history = store.getHistoryState(sessionId)
+    if (!history || pollingStore().currentSessionId !== sessionId) return
+    const budget = budgetBytes()
+    const loaded = loadedBytesOf(sessionId)
+    if (loaded == null || loaded <= budget) return
+    const retry = (delay = TRIM_RETRY_MS) => requestTrimCheck(sessionId, delay)
+    const sinceLast = now() - (lastTrimAt.get(sessionId) ?? -Infinity)
+    if (sinceLast < TRIM_MIN_INTERVAL_MS) return retry(TRIM_MIN_INTERVAL_MS - sinceLast)
+    const ready = () => {
+      if (pollingStore().currentSessionId !== sessionId || isHidden()) return null
+      if (scrollInteraction.get(sessionId)?.gestureActive || trimBusy(sessionId)) return null
+      const guard = trimGuards.get(sessionId)?.()
+      return guard && guard.maxCutMessages > 0 ? guard : null
+    }
+    if (!ready()) return retry()
+    await idleSlot()
+    const guard = ready() // the world may have moved while waiting for the idle slot
+    if (!guard) return retry()
+    // Rows far above the viewport go; the virtualizer keeps the viewport on its rows by key (browser-verified, 0 px drift).
+    const result = store.trimOldEnd(sessionId, {
+      targetBytes: trimTargetBytes(budget), maxCutMessages: guard.maxCutMessages, kind: 'budget',
+    })
+    if (result?.trimmed) {
+      lastTrimAt.set(sessionId, now())
+      markPerf('history-trim', now(), 0)
+    }
+    // Nothing to release by construction (no ledger / opaque cursors): the next page or scroll re-arms the check.
+    if (!result?.trimmed && PERMANENT_TRIM_REASONS.has(result?.reason)) return
+    const left = loadedBytesOf(sessionId)
+    // Still over (the guard limited the cut, or nothing could be released yet): look again later.
+    if (left != null && left > budget) retry(result?.trimmed ? TRIM_MIN_INTERVAL_MS : TRIM_RETRY_MS)
+  }
+
+  /**
+   * The current session changed (polling.connectSession): the one left behind keeps only its newest
+   * min(8 MiB, budget/4) once it has been idle for a moment, and the one entered cancels its own
+   * pending background trim. A list scrolled up (not following the live end) is left alone — its
+   * viewport would otherwise jump on return.
+   */
+  function onSessionSwitch(previousId, nextId) {
+    if (nextId) { clearTimeout(leaveTimers.get(nextId)); leaveTimers.delete(nextId) }
+    if (!previousId || previousId === nextId) return
+    cancelTrim(previousId)
+    fullRequested.delete(previousId)
+    clearTimeout(leaveTimers.get(previousId))
+    leaveTimers.set(previousId, setTimeout(async () => {
+      leaveTimers.delete(previousId)
+      const store = messageStore()
+      const keep = backgroundKeepBytes(budgetBytes())
+      const loaded = loadedBytesOf(previousId)
+      const shown = () => pollingStore().currentSessionId === previousId || viewedSessionId() === previousId
+      if (loaded == null || loaded <= keep || shown()) return
+      // Only a session whose list follows the live end: a saved scroll position is index based and a trim would shift it.
+      if (!isStickyBottom(previousId)) return
+      const guard = trimGuards.get(previousId)?.() ?? null
+      await idleSlot()
+      if (shown()) return
+      store.trimOldEnd(previousId, { targetBytes: keep, maxCutMessages: guard ? guard.maxCutMessages : Infinity, kind: 'background' })
+    }, BACKGROUND_TRIM_DELAY_MS))
+  }
+
+  function setTrimGuard(sessionId, fn) {
+    trimGuards.set(sessionId, fn)
+  }
+
+  function clearTrimGuard(sessionId, fn) {
+    if (trimGuards.get(sessionId) === fn) trimGuards.delete(sessionId)
   }
 
   /**
@@ -343,17 +481,19 @@ export function createHistoryBackfill(deps = {}) {
   }
 
   /** Begins (or continues) backfilling `sessionId`. At most one loop per session. */
-  function start(sessionId) {
+  // `initial` seeds the loop's flags BEFORE it first evaluates its block reasons (runLoop starts synchronously).
+  function start(sessionId, initial = {}) {
     const history = messageStore().getHistoryState(sessionId)
     if (!history || !history.hasMoreBefore) return
     if (loops.has(sessionId)) return
-    const loop = { demand: 0, urgent: false, lastPageMs: 0, lastPageEndedAt: null, forcedAuto: false, budget: PAGE_BUDGET_BYTES }
+    const loop = { demand: 0, urgent: false, lastPageMs: 0, lastPageEndedAt: null, forcedAuto: false, budget: PAGE_BUDGET_BYTES, ...initial }
     loops.set(sessionId, loop)
     setStatus(sessionId, { mode: currentModeFor(sessionId, history, loop), paused: null, error: null })
     runLoop(sessionId, loop)
   }
 
   function stop(sessionId) {
+    cancelTrim(sessionId)
     loops.delete(sessionId)
     messageStore().abortBackfill(sessionId)
     islandOps.get(sessionId)?.controller.abort()
@@ -375,7 +515,8 @@ export function createHistoryBackfill(deps = {}) {
   function requestOlder(sessionId, { urgent = true } = {}) {
     const history = messageStore().getHistoryState(sessionId)
     if (!history || !history.hasMoreBefore) return
-    if (!loops.has(sessionId)) start(sessionId)
+    cancelTrim(sessionId) // the user is heading to the old edge: a pending trim waits (re-armed after the page lands)
+    if (!loops.has(sessionId)) start(sessionId, { demand: 1, urgent })
     const loop = loops.get(sessionId)
     if (!loop) return
     if (loop.demand === 0) { loop.demand = 1; loop.urgent = urgent } else if (urgent) loop.urgent = true
@@ -482,6 +623,7 @@ export function createHistoryBackfill(deps = {}) {
       if (islandOps.has(sessionId)) return false
       return requestIslandPage(sessionId, edge)
     }
+    cancelTrim(sessionId)
     const op = { controller: new AbortController(), kind: edge, done: null }
     islandOps.set(sessionId, op)
     op.done = runIslandPage(sessionId, edge, op)
@@ -508,7 +650,11 @@ export function createHistoryBackfill(deps = {}) {
       await idleSlot()
       if (op.controller.signal.aborted) return false
       const apply = () => store.applyIslandPage(sessionId, page)
-      return edge === 'before' ? applyWithHook(sessionId, apply) : apply()
+      if (edge === 'before') return applyWithHook(sessionId, apply)
+      // An `after` page past the budget releases the island's FAR (upper) end: rows above the viewport go.
+      const island = store.getIsland(sessionId)
+      const grown = (island?.bytes || 0) + (windowBytes(page.requestedFrom, page.endCursor) ?? 0)
+      return grown > budgetBytes() ? applyWithHook(sessionId, apply, { trim: true }) : apply()
     } catch (err) {
       if (op.controller.signal.aborted || err?.reason === 'superseded' || err?.reason === 'aborted') return false
       pushDebugEvent('message', 'island-page-error', { sessionId, edge, message: err?.message })
@@ -542,7 +688,9 @@ export function createHistoryBackfill(deps = {}) {
   function loadAll(sessionId) {
     const history = messageStore().getHistoryState(sessionId)
     if (!history || !history.hasMoreBefore) return
-    if (!loops.has(sessionId)) start(sessionId)
+    fullRequested.add(sessionId)
+    cancelTrim(sessionId)
+    if (!loops.has(sessionId)) start(sessionId, { forcedAuto: true })
     const loop = loops.get(sessionId)
     if (loop) {
       loop.forcedAuto = true
@@ -552,6 +700,7 @@ export function createHistoryBackfill(deps = {}) {
 
   /** Ends a "Load full history" override (the banner's Stop): the loop falls back to the settings again. */
   function stopForced(sessionId) {
+    fullRequested.delete(sessionId)
     const loop = loops.get(sessionId)
     if (loop) loop.forcedAuto = false
     if (statusBySession.value.has(sessionId)) setStatus(sessionId, { forced: false })
@@ -560,7 +709,7 @@ export function createHistoryBackfill(deps = {}) {
   /** Retry after the loop gave up on repeated errors. */
   function retry(sessionId) {
     stop(sessionId)
-    start(sessionId)
+    start(sessionId, { demand: 1, urgent: true }) // the user is waiting for that page: the budget does not refuse it
   }
 
   /** The message list registers its hook around an older page being applied. */
@@ -598,6 +747,10 @@ export function createHistoryBackfill(deps = {}) {
     setScrollInteraction,
     setPageApplyHook,
     clearPageApplyHook,
+    setTrimGuard,
+    clearTrimGuard,
+    requestTrimCheck,
+    onSessionSwitch,
     isRunning: (sessionId) => loops.has(sessionId),
   }
 }

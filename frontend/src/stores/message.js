@@ -6,7 +6,8 @@ import { useTaskStore } from './task'
 import { useBackgroundTasksStore } from './backgroundTasks'
 import { correlateHooks } from '../utils/hookCorrelation'
 import { mergeOlderPage, mergeToolCallFields } from '../utils/historyMerge'
-import { ISLAND_PAGE_BYTES, intervalsTouch, islandIsFull, windowBytes } from '../utils/historyIntervals'
+import { ISLAND_PAGE_BYTES, intervalsTouch, windowBytes } from '../utils/historyIntervals'
+import { getHistoryBudgetBytes, trimTargetBytes } from '../utils/historyBudget'
 import { cursorOffset } from '../utils/turnNavigation'
 import { getAgentColor, getAssistantRowColor, slugifyAgentName } from '../composables/useAgentColor'
 import { pushDebugEvent, flushDebugBuffer } from '../composables/useDebugBuffer'
@@ -104,6 +105,31 @@ export const useMessageStore = defineStore('message', () => {
   // Island hook correlation, cached per island revision: Map<sessionId, { rev, result }>.
   const _islandHookCache = new Map()
   let _islandSeq = 0
+  // Issue #2030 stage 4 PR 4d: exact cut points for the memory budget. One entry per older page that
+  // was prepended to the suffix (`applyFetchedOlderPage`, or an island merging into it), NEWEST FIRST:
+  // `{ startCursor, endCursor, count }` = the page covers [startCursor, endCursor) of the history file
+  // and added `count` messages at the front. `endCursor` is exactly the cursor the next `before=` fetch
+  // would have started from, so trimming whole segments off the OLD end needs no lookup: the new
+  // `history.startCursor` IS the cut segment's `endCursor`. Non-reactive; valid for one `generation`.
+  // Map<sessionId, { generation, segments }>
+  const _ledgerBySession = new Map()
+  // Same idea for the island: its pages in FILE order (base `around=` window, `before=` pages unshifted in
+  // front, `after=` pages pushed behind), each `{ startCursor, endCursor, count, region }`.
+  // Map<sessionId, { islandId, segments, minRegion, maxRegion }>
+  const _islandLedger = new Map()
+  // A tool entry may have records in several regions of the file (a start, later updates, an interrupt
+  // marker). A trim may only release an entry whose records ALL lie in the released region, or the later
+  // ones would be lost with it. Suffix: Map<sessionId, Map<toolUseId, page>> — the number of the OLDEST-
+  // arrived (newest in file order = smallest) older page that carried the entry's records; absent == the
+  // tail window or live (never released). Cleared for an id by any record applied outside an older-page
+  // replay. Island: Map<sessionId, Map<toolUseId, { lo, hi }>> — range of region ordinals it appears in
+  // (base 0, `before` pages -1.., `after` pages 1..).
+  const _toolPageBySession = new Map()
+  // Bytes appended to the history file by LIVE records since `history.totalBytes` was read (window / resync):
+  // an estimate (JSON length) so the budget sees live growth. Reset whenever totalBytes is refreshed.
+  const _liveBytesBySession = new Map()
+  const _islandToolRegions = new Map()
+  let _replayingOlder = false
   const HISTORY_INDEX_TIMEOUT_MS = 30000  // server waiter cap is 20 s, then 503
   const HISTORY_INDEX_RETRY_MS = 5000
   // A transient failure (503 index_building / timeout, twice) is retried later, a few times: it must
@@ -319,6 +345,9 @@ export const useMessageStore = defineStore('message', () => {
 
   function _deleteHistory(sessionId) {
     _dropIsland(sessionId)
+    _ledgerBySession.delete(sessionId)
+    _toolPageBySession.delete(sessionId)
+    _liveBytesBySession.delete(sessionId)
     _dropHistoryIndex(sessionId)
     if (!historyBySession.value.has(sessionId)) return
     const next = new Map(historyBySession.value)
@@ -345,7 +374,7 @@ export const useMessageStore = defineStore('message', () => {
   function historyProgress(sessionId) {
     const history = historyBySession.value.get(sessionId)
     if (!history) return null
-    const totalBytes = history.totalBytes || 0
+    const totalBytes = _fileBytes(sessionId, history)
     if (!history.hasMoreBefore) return { fraction: 1, loadedBytes: totalBytes, totalBytes }
     const match = /^b:(\d+)$/.exec(history.startCursor || '')
     if (!match || !totalBytes) return { fraction: null, loadedBytes: null, totalBytes }
@@ -589,6 +618,8 @@ export const useMessageStore = defineStore('message', () => {
       _dropHistoryIndex(sessionId)
       _backfilledToolIds.delete(sessionId)
       target = _createRecordTarget()
+      _ledgerBySession.delete(sessionId)
+      _toolPageBySession.delete(sessionId)
     }
     if (source === 'archive') {
       _applyArchiveRecords(sessionId, records, target, { captureInit: true })
@@ -606,11 +637,14 @@ export const useMessageStore = defineStore('message', () => {
     }
     _hookCorrelationCache.delete(sessionId)
 
+    _liveBytesBySession.delete(sessionId) // totalBytes is fresh again
     if (canMerge) {
       // Keep the older part we already hold; only the end moved.
       _setHistory(sessionId, { totalBytes: data.total_bytes })
     } else {
       _setHistory(sessionId, {
+        budgetReached: false, // a replaced suffix starts over: the memory-budget state belonged to the old one
+        trimmedBytes: 0,
         baseUrl,
         startCursor: data.start_cursor,
         hasMoreBefore: !!data.has_more_before,
@@ -697,12 +731,226 @@ export const useMessageStore = defineStore('message', () => {
   function applyFetchedOlderPage(sessionId, page, { source = 'load' } = {}) {
     const history = historyBySession.value.get(sessionId)
     if (!history || history.generation !== page.generation || history.startCursor !== page.requestedBefore) return false
-    applyOlderPage(sessionId, page.records, { source })
+    const newToolIds = _newToolIdsOf(sessionId, page.records)
+    const prepended = applyOlderPage(sessionId, page.records, { source })
+    _recordOlderSegment(sessionId, history.generation, {
+      startCursor: page.startCursor, endCursor: page.requestedBefore, count: prepended,
+    }, newToolIds)
     _setHistory(sessionId, { startCursor: page.startCursor, hasMoreBefore: page.hasMoreBefore })
     if (!page.hasMoreBefore) _hookCorrelationCache.delete(sessionId)
     // Stage 3 PR 3C-1: backfill growing the suffix upward may reach the island: they merge.
     if (islandBySession.value.has(sessionId)) _mergeIslandIfTouching(sessionId)
     return true
+  }
+
+  // ---- memory budget: ledger + oldest-end trim (Issue #2030, stage 4 PR 4d) ----
+
+  function _recordOlderSegment(sessionId, generation, segment, newToolIds = []) {
+    let ledger = _ledgerBySession.get(sessionId)
+    if (!ledger || ledger.generation !== generation) {
+      ledger = { generation, segments: [], pageSeq: 0 }
+      _ledgerBySession.set(sessionId, ledger)
+      _toolPageBySession.delete(sessionId)
+    }
+    segment.page = ++ledger.pageSeq
+    ledger.segments.push(segment)
+    if (newToolIds.length) {
+      let pages = _toolPageBySession.get(sessionId)
+      if (!pages) _toolPageBySession.set(sessionId, (pages = new Map()))
+      for (const id of newToolIds) pages.set(id, segment.page)
+    }
+  }
+
+  /**
+   * An island that merged into the suffix keeps its page structure in the suffix ledger (so a later trim can
+   * release it page by page instead of all at once). Falls back to ONE segment when the island's own ledger
+   * does not account for exactly the messages that were prepended (overlap with the suffix, a replaced ledger).
+   */
+  function _recordIslandSegments(sessionId, generation, island, suffixStart, prepended, newToolIds) {
+    const ledger = _islandLedger.get(sessionId)
+    const segments = ledger && ledger.islandId === island.id ? ledger.segments : null
+    if (!segments || segments.length < 2 || segments.reduce((n, seg) => n + seg.count, 0) !== prepended) {
+      _recordOlderSegment(sessionId, generation, { startCursor: island.startCursor, endCursor: suffixStart, count: prepended }, newToolIds)
+      return
+    }
+    const regions = _islandToolRegions.get(sessionId)
+    const idsBySegment = segments.map(() => [])
+    const regionIndex = new Map(segments.map((seg, i) => [seg.region, i]))
+    for (const id of newToolIds) {
+      // a tool is only as releasable as its NEWEST region (the segment closest to the live end)
+      const index = regionIndex.get(regions?.get(id)?.hi)
+      idsBySegment[index ?? segments.length - 1].push(id)
+    }
+    // the ledger lists the suffix's pages newest first: the island's last page first
+    for (let i = segments.length - 1; i >= 0; i--) {
+      const { startCursor, endCursor, count } = segments[i]
+      _recordOlderSegment(sessionId, generation, { startCursor, endCursor, count }, idsBySegment[i])
+    }
+  }
+
+  /** tool_use_ids of the page's tool_call records that have no entry in the suffix yet (they are created by this page). */
+  function _newToolIdsOf(sessionId, records) {
+    const toolIndex = toolIndexBySession.get(sessionId)
+    const ids = []
+    for (const record of records) {
+      if (record.type === 'tool_call' && record.tool_use_id && !toolIndex?.has(record.tool_use_id)) ids.push(record.tool_use_id)
+    }
+    return ids
+  }
+
+  function _noteLiveBytes(sessionId, record) {
+    if (!historyBySession.value.has(sessionId)) return
+    let size = 0
+    try { size = JSON.stringify(record).length + 1 } catch { /* unserialisable: not counted */ }
+    _liveBytesBySession.set(sessionId, (_liveBytesBySession.get(sessionId) || 0) + size)
+  }
+
+  /** Size of the history file as far as this tab knows: the window's `total_bytes` plus what live records added. */
+  function _fileBytes(sessionId, history) {
+    return (history?.totalBytes || 0) + (_liveBytesBySession.get(sessionId) || 0)
+  }
+
+  /** History-file bytes covered by the loaded suffix (`totalBytes - startOffset`), or null for opaque cursors. */
+  function _suffixLoadedBytes(sessionId, history) {
+    const start = cursorOffset(history?.startCursor)
+    return start == null ? null : Math.max(0, _fileBytes(sessionId, history) - start)
+  }
+
+  /** `{ segments, loadedBytes, cuttableMessages }` of the suffix's trim ledger, or null when there is none. Test/diagnostics aid. */
+  function getTrimInfo(sessionId) {
+    const history = historyBySession.value.get(sessionId)
+    const ledger = _ledgerBySession.get(sessionId)
+    if (!history || !ledger || ledger.generation !== history.generation) return null
+    return { segments: ledger.segments.length, loadedBytes: _suffixLoadedBytes(sessionId, history), cuttableMessages: ledger.segments.reduce((n, seg) => n + seg.count, 0) }
+  }
+
+  /** The index of `messageId` within the SUFFIX (not the island), or undefined. */
+  function getSuffixMessageIndex(sessionId, messageId) {
+    return messageIndexBySession.get(sessionId)?.get(messageId)
+  }
+
+  /** Tool-use ids referenced by `messages` (assistant `metadata.tool_uses`). */
+  function _toolUseIds(messages, into = new Set()) {
+    for (const message of messages) {
+      const uses = message.metadata?.tool_uses
+      if (uses) for (const use of uses) if (use.id) into.add(use.id)
+    }
+    return into
+  }
+
+  /**
+   * Cuts `front` messages off the front or `back` off the back of a record target and returns the new
+   * target. A tool entry goes only when `releasable(tool)` says ALL its records lie in the released
+   * region (see _toolPageBySession) and it is not pinned: still running / waiting for a permission, the
+   * launch tool of a known subagent leg (or a tool running under one), or referenced by a message that stays (including `alsoKept`,
+   * the other interval's messages). Everything else stays, owning message or not.
+   */
+  function _cutTarget(target, { front = 0, back = 0 }, alsoKept, releasable) {
+    const total = target.messages.length
+    const kept = front ? target.messages.slice(front) : target.messages.slice(0, total - back)
+    const stays = _toolUseIds(alsoKept, _toolUseIds(kept))
+    const toolCalls = target.toolCalls.filter(tool => {
+      if (!releasable(tool) || stays.has(tool.id)) return true
+      if (tool.status !== 'completed' && tool.status !== 'error') return true
+      // the launch tool of a subagent leg, and the tools its (unreleased) narration refers to
+      return taskIdByLaunchToolUseId.value.has(tool.id) ||
+        (!!tool.parent_tool_use_id && taskIdByLaunchToolUseId.value.has(tool.parent_tool_use_id))
+    })
+    const messageIndex = new Map()
+    for (const [key, idx] of target.messageIndex) {
+      const next = idx - front
+      if (next >= 0 && next < kept.length) messageIndex.set(key, next)
+    }
+    const retryIndex = new Map()
+    for (const [key, idx] of target.retryIndex) {
+      const next = idx - front
+      if (next >= 0 && next < kept.length) retryIndex.set(key, next)
+    }
+    const toolIndex = new Map()
+    toolCalls.forEach((tool, i) => toolIndex.set(tool.id, i))
+    return {
+      target: { messages: kept, messageIndex, toolCalls, toolIndex, retryIndex },
+      removedMessages: total - kept.length,
+      removedTools: target.toolCalls.length - toolCalls.length,
+      removedToolIds: target.toolCalls.filter(tool => !toolIndex.has(tool.id)).map(tool => tool.id),
+    }
+  }
+
+  /**
+   * Releases the OLD end of the loaded suffix down to `targetBytes` of history file, a whole page of the
+   * ledger at a time (so the new `startCursor` is an exact, server-snapped cursor and a later `before=`
+   * fetch returns precisely the released page). `maxCutMessages` (from the message list: only rows far
+   * above the viewport may go) bounds how many leading messages may be removed. Synchronous; the caller
+   * decides WHEN (idle, no gesture, nothing in flight). `kind: 'background'` (a session that is no longer
+   * the current one) leaves the backfill free to resume on re-entry; `'budget'` makes `budgetReached`
+   * sticky until the suffix is replaced. Returns `{ trimmed, reason?, messages, tools, bytes }`.
+   */
+  function trimOldEnd(sessionId, { targetBytes, maxCutMessages = Infinity, kind = 'budget' } = {}) {
+    const none = (reason) => ({ trimmed: false, reason })
+    const history = historyBySession.value.get(sessionId)
+    const ledger = _ledgerBySession.get(sessionId)
+    if (!history) return none('no-history')
+    const startOffset = cursorOffset(history.startCursor)
+    if (startOffset == null) return none('opaque-cursor')
+    if (!ledger || ledger.generation !== history.generation || !ledger.segments.length) return none('no-ledger')
+    if (_hydrationLoadStateBySession.has(sessionId)) return none('loading')
+    const segments = ledger.segments
+    if (segments[segments.length - 1].startCursor !== history.startCursor) {
+      _ledgerBySession.delete(sessionId) // the chain no longer reaches the loaded start: never guess
+      return none('ledger-chain')
+    }
+    const totalBytes = _fileBytes(sessionId, history)
+    if (totalBytes - startOffset <= targetBytes) return none('under-target')
+    const messages = messagesBySession.value.get(sessionId) || []
+
+    let cutSegments = 0
+    let cutMessages = 0
+    let newStart = startOffset
+    for (let i = segments.length - 1; i >= 0; i--) {
+      const segment = segments[i]
+      const end = cursorOffset(segment.endCursor)
+      if (end == null || cutMessages + segment.count > maxCutMessages) break
+      cutSegments++
+      cutMessages += segment.count
+      newStart = end
+      if (totalBytes - newStart <= targetBytes) break
+    }
+    if (!cutSegments) return none('guard')
+    if (cutMessages >= messages.length) return none('would-empty')
+
+    // A page request for the old edge is moot (its cursor no longer matches and applyFetchedOlderPage would
+    // drop it anyway); abort it so it does not burn bandwidth.
+    abortBackfill(sessionId)
+    const boundary = segments[segments.length - cutSegments].endCursor
+    const island = islandBySession.value.get(sessionId)
+    const pages = _toolPageBySession.get(sessionId)
+    const firstCutPage = segments[segments.length - cutSegments].page
+    const cut = _cutTarget({
+      messages,
+      messageIndex: messageIndexBySession.get(sessionId) || new Map(),
+      toolCalls: toolCallsBySession.value.get(sessionId) || [],
+      toolIndex: toolIndexBySession.get(sessionId) || new Map(),
+      retryIndex: retryIndexBySession.get(sessionId) || new Map(),
+    }, { front: cutMessages }, island ? island.messages : [], (tool) => (pages?.get(tool.id) ?? 0) >= firstCutPage)
+    segments.length -= cutSegments
+    if (pages) for (const id of cut.removedToolIds) pages.delete(id)
+    _installRecordTarget(sessionId, cut.target)
+    messagesBySession.value = new Map(messagesBySession.value)
+    toolCallsBySession.value = new Map(toolCallsBySession.value)
+    const backfilled = _backfilledToolIds.get(sessionId)
+    if (backfilled) for (const id of cut.removedToolIds) backfilled.delete(id)
+    _hookCorrelationCache.delete(sessionId)
+    const bytes = newStart - startOffset
+    _setHistory(sessionId, {
+      startCursor: boundary,
+      hasMoreBefore: true,
+      trimmedBytes: (history.trimmedBytes || 0) + bytes,
+      budgetReached: kind === 'budget',
+    })
+    // An island that used to end before the (now later) suffix start simply has a larger gap; one that
+    // overlapped it cannot exist (it would have been merged).
+    pushDebugEvent('message', 'history-trimmed', { sessionId, kind, messages: cut.removedMessages, tools: cut.removedTools, bytes })
+    return { trimmed: true, messages: cut.removedMessages, tools: cut.removedTools, bytes }
   }
 
   // ---- island: a pinned window of history away from the suffix (Issue #2030, stage 3 PR 3C-1) ----
@@ -749,6 +997,8 @@ export const useMessageStore = defineStore('message', () => {
   /** Forgets the island's content only (a request in flight is left alone). */
   function _clearIslandState(sessionId) {
     _islandTargets.delete(sessionId)
+    _islandLedger.delete(sessionId)
+    _islandToolRegions.delete(sessionId)
     _islandLatest.delete(sessionId)
     _islandHookCache.delete(sessionId)
     if (!islandBySession.value.has(sessionId)) return
@@ -829,6 +1079,8 @@ export const useMessageStore = defineStore('message', () => {
       toolIndex: toolIndexBySession.get(sessionId) || new Map(),
       retryIndex: retryIndexBySession.get(sessionId) || new Map(),
     }
+    const suffixStartBefore = history.startCursor
+    const newToolIds = target.toolCalls.filter(tool => !current.toolIndex.has(tool.id)).map(tool => tool.id)
     const merged = mergeOlderPage(current, target)
     _installRecordTarget(sessionId, merged)
     // What the island's records determined counts only where nothing newer did.
@@ -846,7 +1098,12 @@ export const useMessageStore = defineStore('message', () => {
     const islandStart = cursorOffset(island.startCursor)
     const suffixStart = cursorOffset(history.startCursor)
     const reachesFurther = islandStart != null && suffixStart != null ? islandStart < suffixStart : merged.prependedMessageCount > 0
-    if (reachesFurther) _setHistory(sessionId, { startCursor: island.startCursor, hasMoreBefore: island.hasMoreBefore })
+    if (reachesFurther) {
+      _setHistory(sessionId, { startCursor: island.startCursor, hasMoreBefore: island.hasMoreBefore })
+      _recordIslandSegments(sessionId, history.generation, island, suffixStartBefore, merged.prependedMessageCount, newToolIds)
+    } else if (merged.prependedMessageCount > 0) {
+      _ledgerBySession.delete(sessionId) // records were added at the front without a known cut point: never guess
+    }
     _hookCorrelationCache.delete(sessionId)
     // (A page request still working on the island is stale and is dropped when it lands; an in-flight
     // jump is NOT this island's and must keep running.)
@@ -917,6 +1174,14 @@ export const useMessageStore = defineStore('message', () => {
         parentUnresolved: !!data.parent_unresolved,
         bytes: windowBytes(data.start_cursor, data.end_cursor) ?? records.length * 2048,
       })
+      // The around window is the island's base segment (region 0): released like any page, as a whole.
+      _noteIslandToolRegions(sessionId, records, 0)
+      _islandLedger.set(sessionId, {
+        islandId: _islandSeq,
+        segments: [{ startCursor: data.start_cursor, endCursor: data.end_cursor, count: islandTarget.messages.length, region: 0 }],
+        minRegion: 0,
+        maxRegion: 0,
+      })
       const merged = _mergeIslandIfTouching(sessionId)
       pushDebugEvent('message', 'island-window', {
         sessionId, records: records.length, merged, bytes: windowBytes(data.start_cursor, data.end_cursor), ms: typeof performance !== 'undefined' ? Math.round(performance.now() - startedAt) : null,
@@ -930,15 +1195,14 @@ export const useMessageStore = defineStore('message', () => {
   /**
    * Fetches (does not apply) the island's next page on one edge: `before` (older, the topmost
    * interval's scroll-up page) or `after` ("Load newer": a forward page that stops at the suffix
-   * start). Resolves to the page, or null when that edge has nothing more / the island is full
-   * (interim cap: paging stops, the edge indicators stay). Same error reasons as loadAround.
+   * start). Resolves to the page, or null when that edge has nothing more. Same error reasons as
+   * loadAround. (Stage 4 PR 4d: no size cap — applyIslandPage evicts the far edge past the budget.)
    */
   async function fetchIslandPage(sessionId, edge, { signal: outerSignal, maxBytes = ISLAND_PAGE_BYTES, inactivityMs = ISLAND_REQUEST_INACTIVITY_MS } = {}) {
     const island = islandBySession.value.get(sessionId)
     const history = historyBySession.value.get(sessionId)
     if (!island || !history) return null
     if (edge === 'before' ? !island.hasMoreBefore : !island.hasMoreAfter) return null
-    if (islandIsFull(island)) return null
     const enc = encodeURIComponent
     const from = edge === 'before' ? island.startCursor : island.endCursor
     const query = edge === 'before'
@@ -974,6 +1238,68 @@ export const useMessageStore = defineStore('message', () => {
     }
   }
 
+  /** Records the region ordinal of every tool_call record of an island page (see _islandToolRegions). */
+  function _noteIslandToolRegions(sessionId, records, region) {
+    let regions = _islandToolRegions.get(sessionId)
+    if (!regions) _islandToolRegions.set(sessionId, (regions = new Map()))
+    for (const record of records) {
+      const id = record.type === 'tool_call' ? record.tool_use_id : null
+      if (!id) continue
+      const known = regions.get(id)
+      if (known) { known.lo = Math.min(known.lo, region); known.hi = Math.max(known.hi, region) } else regions.set(id, { lo: region, hi: region })
+    }
+  }
+
+  /**
+   * Island budget (stage 4 PR 4d, replaces the interim 64 MiB stop): when the island holds more than the
+   * budget, whole pages are released from the edge FARTHEST from the one that just grew, down to the trim
+   * target. Returns `{ patch, bytes }` for the island meta, or null when nothing was released.
+   */
+  function _evictIslandFarEdge(sessionId, landedEdge, startCursor, endCursor, estimatedBytes) {
+    const budget = getHistoryBudgetBytes()
+    // opaque (non-offset) cursors: fall back to the island's own estimate (2 KiB per message)
+    let bytes = windowBytes(startCursor, endCursor) ?? estimatedBytes
+    const ledger = _islandLedger.get(sessionId)
+    const target = _islandTargets.get(sessionId)
+    if (bytes == null || bytes <= budget || !ledger || !target) return null
+    const goal = trimTargetBytes(budget)
+    const patch = {}
+    let front = 0
+    let back = 0
+    let boundary = 0 // region ordinal of the nearest released page
+    // The page that just landed is at the near edge; release from the opposite end, whole pages, never the last one.
+    while (ledger.segments.length > 1 && bytes > goal) {
+      const next = landedEdge === 'before' ? ledger.segments.at(-1) : ledger.segments[0]
+      if (front + back + next.count >= target.messages.length) break // never empty the island
+      const segment = landedEdge === 'before' ? ledger.segments.pop() : ledger.segments.shift()
+      if (landedEdge === 'before') {
+        back += segment.count
+        boundary = segment.region
+        patch.endCursor = segment.startCursor
+        patch.hasMoreAfter = true
+      } else {
+        front += segment.count
+        boundary = segment.region
+        patch.startCursor = segment.endCursor
+        patch.hasMoreBefore = true
+      }
+      const released = segment.count * 2048
+      bytes = windowBytes(patch.startCursor ?? startCursor, patch.endCursor ?? endCursor) ?? bytes - released
+    }
+    if (!front && !back) return null
+    const regions = _islandToolRegions.get(sessionId)
+    const releasable = (tool) => {
+      const range = regions?.get(tool.id)
+      return !!range && (back ? range.lo >= boundary : range.hi <= boundary)
+    }
+    const cut = _cutTarget(target, { front, back }, messagesBySession.value.get(sessionId) || [], releasable)
+    if (regions) for (const id of cut.removedToolIds) regions.delete(id)
+    _islandTargets.set(sessionId, cut.target)
+    _islandHookCache.delete(sessionId)
+    pushDebugEvent('message', 'island-evicted', { sessionId, edge: landedEdge === 'before' ? 'after' : 'before', messages: cut.removedMessages, tools: cut.removedTools, bytes })
+    return { patch, bytes }
+  }
+
   /**
    * Applies a page returned by fetchIslandPage() unless the island moved on while it was in flight
    * (replaced / grown from the other edge / merged), in which case it is stale and dropped.
@@ -988,21 +1314,40 @@ export const useMessageStore = defineStore('message', () => {
     let patch
     const latest = {}
     const known = _islandLatest.get(sessionId) || {}
+    let ledger = _islandLedger.get(sessionId)
+    if (!ledger || ledger.islandId !== island.id) {
+      ledger = { islandId: island.id, segments: [], minRegion: 0, maxRegion: 0 }
+      _islandLedger.set(sessionId, ledger)
+    }
     if (page.edge === 'before') {
       const older = _replayHistoryRecords(sessionId, page.records, island.source, _createRecordTarget(), latest)
-      _islandTargets.set(sessionId, mergeOlderPage(target, older))
+      const merged = mergeOlderPage(target, older)
+      _islandTargets.set(sessionId, merged)
+      const region = --ledger.minRegion
+      _noteIslandToolRegions(sessionId, page.records, region)
+      ledger.segments.unshift({ startCursor: page.startCursor, endCursor: page.requestedFrom, count: merged.prependedMessageCount, region })
       _islandLatest.set(sessionId, { ...latest, ...known }) // older records never beat what the island already determined
       patch = { startCursor: page.startCursor, hasMoreBefore: page.hasMoreBefore }
     } else {
       // Newer records grow the island's own target (the live-update semantics: newer wins).
+      const countBefore = target.messages.length
       _replayHistoryRecords(sessionId, page.records, island.source, target, latest, true)
+      const region = ++ledger.maxRegion
+      _noteIslandToolRegions(sessionId, page.records, region)
+      ledger.segments.push({ startCursor: page.requestedFrom, endCursor: page.endCursor, count: target.messages.length - countBefore, region })
       _islandLatest.set(sessionId, { ...known, ...latest })
       patch = { endCursor: page.endCursor, hasMoreAfter: page.hasMoreAfter }
     }
     _shareIslandTools(sessionId, _islandTargets.get(sessionId))
     const startCursor = patch.startCursor ?? island.startCursor
     const endCursor = patch.endCursor ?? island.endCursor
-    const bytes = windowBytes(startCursor, endCursor) ?? island.bytes + page.records.length * 2048
+    let bytes = windowBytes(startCursor, endCursor) ?? island.bytes + page.records.length * 2048
+    // Past the budget the edge FARTHEST from the one just extended is released, a page at a time.
+    const evicted = _evictIslandFarEdge(sessionId, page.edge, startCursor, endCursor, bytes)
+    if (evicted) {
+      Object.assign(patch, evicted.patch)
+      bytes = evicted.bytes
+    }
     _commitIsland(sessionId, { ...patch, bytes })
     if (page.records.some(_touchesCompactionHooks)) _islandHookCache.delete(sessionId)
     pushDebugEvent('message', 'island-page', { sessionId, edge: page.edge, records: page.records.length, bytes })
@@ -1110,10 +1455,15 @@ export const useMessageStore = defineStore('message', () => {
       for (const [legIndex, list] of perLeg) narrationLengths.set(`${taskId}:${legIndex}`, list.length)
     }
 
-    if (source === 'archive') {
-      _applyArchiveRecords(sessionId, records, older, { captureInit: false })
-    } else {
-      for (const record of records) applyRecord(sessionId, record, 'load', { notify: false, target: older })
+    _replayingOlder = true
+    try {
+      if (source === 'archive') {
+        _applyArchiveRecords(sessionId, records, older, { captureInit: false })
+      } else {
+        for (const record of records) applyRecord(sessionId, record, 'load', { notify: false, target: older })
+      }
+    } finally {
+      _replayingOlder = false
     }
 
     // Latest wins: a value the newer records already determined must survive the older replay.
@@ -1973,6 +2323,7 @@ export const useMessageStore = defineStore('message', () => {
    */
   function applyRecord(sessionId, record, source, { notify = true, target = null } = {}) {
     if (!record || !record.type) return
+    if (source === 'live') _noteLiveBytes(sessionId, record)
     if (record.type === 'tool_call') {
       _applyToolCallRecord(sessionId, record, notify, target, source)
       return
@@ -2242,6 +2593,9 @@ export const useMessageStore = defineStore('message', () => {
       return
     }
 
+    // A record that is NOT part of an older-page/island replay is newer than any page: the entry now has a
+    // record in the live part of the file, so a trim must not release it with an old page.
+    if (!_replayingOlder) _toolPageBySession.get(sessionId)?.delete(toolUseId)
     const { toolCalls, toolIndex } = _resolveToolTarget(sessionId, target)
     // Issue #2131: O(1) identity lookup via toolIndex instead of an O(n) `.findIndex` scan.
     const existingIndex = toolIndex.has(toolUseId) ? toolIndex.get(toolUseId) : -1
@@ -3048,6 +3402,10 @@ export const useMessageStore = defineStore('message', () => {
     findLoadedToolCall,
     isHistoryComplete,
     historyProgress,
+    // Issue #2030 stage 4 PR 4d: memory budget
+    trimOldEnd,
+    getTrimInfo,
+    getSuffixMessageIndex,
     // Issue #2140: shared per-session in-progress history-load tracker — the single source
     // of truth both session.js's retryHydration() and polling.js's resync trigger claim
     // through before starting a new loadMessages() call.

@@ -494,6 +494,7 @@ describe('useMessageSearch — result order and local/server transitions (issue 
   // A store whose completeness the test flips; `needle` messages m1..m3, m2 has two matches.
   function flexStore() {
     const state = ref(false) // history complete?
+    const cursor = ref('b:100')
     const messages = [
       { id: 'm1', content: 'needle one', metadata: {} },
       { id: 'm2', content: 'needle two needle again', metadata: {} },
@@ -501,11 +502,12 @@ describe('useMessageSearch — result order and local/server transitions (issue 
     ]
     return {
       state,
+      cursor,
       messagesBySession: new Map([['s1', messages]]),
       toolCallsBySession: new Map(),
       toolIndexBySession: new Map(),
       isHistoryComplete: () => state.value,
-      getHistoryState: () => ({ startCursor: 'b:100', baseUrl: '/api/sessions/s1/messages' }),
+      getHistoryState: () => ({ startCursor: cursor.value, baseUrl: '/api/sessions/s1/messages' }),
     }
   }
   const serverPage = (ids) => ({
@@ -526,6 +528,23 @@ describe('useMessageSearch — result order and local/server transitions (issue 
     expect(search.currentMatch.value.messageId).toBe('m2') // next == older
     search.prev()
     expect(search.currentMatch.value.messageId).toBe('m3') // prev == newer
+  })
+
+  it('a complete history that a memory trim made partial again is searched on the server (issue #2030 stage 4 PR 4d)', async () => {
+    vi.useFakeTimers()
+    apiMock.get.mockReset()
+    apiMock.get.mockResolvedValue(serverPage(['m3', 'm2', 'm1']))
+    const store = flexStore()
+    store.state.value = true
+    const search = useMessageSearch(ref('s1'), { messageStore: store })
+    await type(search, 'needle')
+    expect(search.phase.value).toBe('local')
+    expect(apiMock.get).not.toHaveBeenCalled()
+    store.state.value = false // a trim released the old end...
+    store.cursor.value = 'b:200' // ...which moves the loaded start
+    await vi.advanceTimersByTimeAsync(1000)
+    expect(search.phase.value).toBe('server')
+    expect(apiMock.get).toHaveBeenCalledTimes(1)
   })
 
   it('a server search keeps its results, selection and highlight key when the history completes meanwhile', async () => {
