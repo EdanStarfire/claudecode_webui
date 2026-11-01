@@ -657,7 +657,7 @@ export const usePollingStore = defineStore('polling', () => {
       // Issue #2030: same for task events — re-fetch the server snapshot (live ones buffer).
       const tasksSnapshot = useTaskStore().hydrate(sessionId)
       // (a gap-replace dropped the history index: this refetches it; an intact one is kept)
-      import('@/composables/useHistoryBackfill').then(({ startBackfillIfIncomplete }) => startBackfillIfIncomplete(sessionId, [backgroundSnapshot, tasksSnapshot]))
+      import('@/composables/useHistoryBackfill').then(({ scheduleIndexIfIncomplete }) => scheduleIndexIfIncomplete(sessionId, [backgroundSnapshot, tasksSnapshot]))
       resyncAttemptsBySession.delete(sessionId)
       if (resyncStallBySession.value.has(sessionId)) {
         resyncStallBySession.value.delete(sessionId)
@@ -1023,8 +1023,8 @@ export const usePollingStore = defineStore('polling', () => {
           useTaskStore().hydrate(changedSessionId)
           messageStore.hydrateBackgroundAgents(changedSessionId).then(async () => {
             await messageStore.loadMessages(changedSessionId, null, 0, { window: 'tail' })
-            const { startBackfillIfIncomplete } = await import('@/composables/useHistoryBackfill')
-            startBackfillIfIncomplete(changedSessionId)  // also schedules the (dropped) history index
+            const { scheduleIndexIfIncomplete } = await import('@/composables/useHistoryBackfill')
+            scheduleIndexIfIncomplete(changedSessionId)  // also schedules the (dropped) history index
           })
         }
 

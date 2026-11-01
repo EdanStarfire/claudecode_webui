@@ -1898,9 +1898,8 @@ button:focus {
    bottom-center, so the two never collide). */
 .message-search-bar {
     position: absolute;
-    /* Issue #2030: sits below the history banner (its measured height is set on the wrapper by
-       MessageList) and never extends past the left edge of a narrow viewport. */
-    top: calc(12px + var(--history-banner-height, 0px));
+    /* Never extends past the left edge of a narrow viewport. */
+    top: 12px;
     right: 12px;
     max-width: calc(100% - 24px);
     z-index: 10;

@@ -10,46 +10,37 @@ import {
   TRIM_MIN_INTERVAL_MS, TRIM_RETRY_MS, backgroundKeepBytes, getHistoryBudgetBytes, trimTargetBytes,
 } from '@/utils/historyBudget'
 
-// Issue #2030 (stage 1b): background backfill of older history behind a tail-first load.
+// Issue #2030 (stage 1b), reworked by #2331: on-demand loading of older history behind a tail-first load.
 //
-// The session opens on its newest turn-snapped window; this scheduler then pulls the older
-// history in pages (`before=<cursor>`) and prepend-merges each one. It is deliberately gentle —
-// on a slow link the first paint of the newest messages matters far more than loading all of
-// the history — and it must never compete with live events or user actions.
+// The session opens on its newest turn-snapped window. Nothing else loads unless the user asks: a
+// scroll toward the top (`requestOlder`, via the message list's scroll prefetch) or a jump. The loop
+// below is the executor of those requests: it fetches `before=<cursor>` pages while a request is
+// pending and prepend-merges each one, then ends (there is no background extender any more).
 //
-// Pacing rules:
+// Rules:
 //   - adaptive page budget: starts at PAGE_BUDGET_BYTES, doubles while pages complete quickly
 //     (< FAST_PAGE_MS) up to MAX_PAGE_BUDGET_BYTES, halves when a page is slow (> SLOW_PAGE_MS)
-//     down to MIN_PAGE_BUDGET_BYTES — a fast link drains the history in a handful of large
-//     requests, a slow one keeps small pages;
-//   - inter-page gap proportional to the measured page time, GAP_FACTOR x lastPageMs clamped to
-//     [0, MAX_GAP_MS]: near zero on a fast link, a gentle duty cycle on a slow one;
-//   - paused while the connection is connecting / resyncing / backoff / unreachable, while the
-//     last poll batch was a catch-up burst, while a live batch landed within QUIET_MS, while the
-//     tab is hidden, and while a user REST action (send / permission / interrupt / ...) runs;
+//     down to MIN_PAGE_BUDGET_BYTES; a prefetch page uses the adaptive budget, an urgent one
+//     (the user is already waiting at the top) the base budget;
+//   - a page is held back while the connection is connecting / resyncing / backoff / unreachable,
+//     while the last poll batch was a catch-up burst, while the tab is hidden, and while a user REST
+//     action (send / permission / interrupt / ...) runs;
 //   - page fetches use low fetch priority and are aborted on session switch / reset;
 //   - jumps (issue #2030 stage 3 PR 3C-1: turn navigation, search hits) do not extend the suffix:
 //     jumpAround() fetches ONE bounded `around=` window as the pinned island (message store
 //     loadAround), requestIslandOlder() / requestIslandNewer() grow that island by one page on
-//     user demand (scrolling near its top, the gap row's "Load newer"). They are user-driven, so
-//     they bypass the pacing pauses, work in manual mode and can be cancelled;
-//   - this loop is the idle / low-priority extender of the LIVE SUFFIX only. User-driven loads (scrolling
-//     toward an interval edge: requestOlder / requestIslandOlder / requestIslandNewer, jumps) always
-//     win: while one runs the background loop waits ('user-fetch'), and the UI setting
-//     `autoBackfillEnabled` (default on) turns the background loop off ('auto-off'): older history
-//     then loads only on demand, like slow-link mode but without its confirms;
+//     user demand (scrolling near its top, the gap row's "Load newer"). They can be cancelled;
 //   - slow-link mode (saveData, 2g, or measured first-window throughput < SLOW_LINK_BPS when the
-//     Network Information API is absent): NO automatic backfill — older history loads on demand
-//     (scrolling near the top, the banner's button) only.
-// Memory budget (issue #2030 stage 4 PR 4d, utils/historyBudget.js): the background loop is the
-// extender of the live suffix only up to the budget (64 MiB of history file on a desktop, 32 MiB on
-// a phone) — then it ends with `paused: 'budget'` and stays off (a trim never re-arms it). User-driven
-// pages (scroll prefetch, the banner's buttons, "Load full history") are never refused by it. When the
-// loaded history exceeds the budget (explicit user scrolling, live growth) an IDLE trim releases the
-// OLD end back to 0.75 x budget — only while no gesture is active, nothing is in flight, and the
-// message list reports the removed rows are >= 12 viewports above the viewport (the scroll prefetch
-// fires within 8, so it can never ask for a page the trim just removed); at most once per 30 s.
-// A session that stops being the current one keeps only its newest min(8 MiB, budget/4).
+//     Network Information API is absent) only changes jump confirms, the search page size and the
+//     history index (fetched when the user presses Prev); scroll prefetch loads as usual.
+// Memory budget (issue #2030 stage 4 PR 4d, utils/historyBudget.js): pages the user asks for are never
+// refused by the budget (64 MiB of history file on a desktop, 32 MiB on a phone). When the loaded
+// history exceeds it (explicit user scrolling, live growth) an IDLE trim releases the OLD end back to
+// 0.75 x budget — only while no gesture is active, nothing is in flight, and the message list
+// reports the removed rows are >= 12 viewports above the viewport (the scroll prefetch fires
+// within 8, so it can never ask for a page the trim just removed); at most once per 30 s. Scrolling
+// back up refetches the released page. A session that stops being the current one keeps only its
+// newest min(8 MiB, budget/4).
 
 export const PAGE_BUDGET_BYTES = 256 * 1024
 export const MIN_PAGE_BUDGET_BYTES = 64 * 1024
@@ -58,8 +49,6 @@ export const MAX_PAGE_BUDGET_BYTES = 4 * 1024 * 1024
 export const MAX_PAGE_RECORDS = 5000
 export const FAST_PAGE_MS = 500
 export const SLOW_PAGE_MS = 2000
-export const GAP_FACTOR = 0.5
-export const MAX_GAP_MS = 2000
 // Applying a page runs on the main thread: a page that takes longer than this to apply must not
 // grow the budget, one that takes much longer shrinks it.
 export const APPLY_OK_MS = 100
@@ -82,11 +71,6 @@ export function nextPageBudget(budget, pageMs, applyMs = 0) {
   if (pageMs > SLOW_PAGE_MS || applyMs > APPLY_SLOW_MS) return Math.max(MIN_PAGE_BUDGET_BYTES, Math.floor(budget / 2))
   if (pageMs < FAST_PAGE_MS && applyMs <= APPLY_OK_MS) return Math.min(MAX_PAGE_BUDGET_BYTES, budget * 2)
   return budget
-}
-
-/** Delay before the next page: proportional to the last page's duration, bounded. */
-export function backfillGapMs(lastPageMs) {
-  return Math.min(MAX_GAP_MS, Math.max(0, GAP_FACTOR * (lastPageMs || 0)))
 }
 
 // DevTools-visible timing of each page's fetch and apply (Performance panel / getEntriesByName).
@@ -140,7 +124,6 @@ export function createHistoryBackfill(deps = {}) {
   const mutationsInFlight = deps.mutationsInFlight || defaultMutationsInFlight
   const isHidden = deps.isHidden || (() => typeof document !== 'undefined' && document.visibilityState === 'hidden')
   const isSlowLink = deps.isSlowLink || ((history) => detectSlowLink(history))
-  const autoBackfillEnabled = deps.autoBackfillEnabled || (() => useUIStore().autoBackfillEnabled)
   const budgetBytes = deps.budgetBytes || (() => getHistoryBudgetBytes())
   const BACKGROUND_TRIM_DELAY_MS = deps.backgroundTrimDelayMs ?? 30000
   const viewedSessionId = deps.viewedSessionId || (() => useSessionStore().currentSessionId)
@@ -148,8 +131,10 @@ export function createHistoryBackfill(deps = {}) {
   const isStickyBottom = deps.isStickyBottom || ((sessionId) => useUIStore().stickyToBottomBySession.get(sessionId) !== false)
 
   const statusBySession = ref(new Map())
-  // sessionId -> { token, demand: number, lastPageMs, lastPageEndedAt, forcedAuto }
+  // sessionId -> { demand: number, urgent, lastPageMs, budget }
   const loops = new Map()
+  // sessionId -> { budget, lastPageMs }: the page-size / latency estimate outlives a loop (each demand burst starts a new one)
+  const pageStats = new Map()
   // sessionId -> { gestureActive, nearTop } reported by the message list
   const scrollInteraction = new Map()
   // sessionId -> () => (() => void) | void: the message list's hook around an OLDER page being applied
@@ -161,8 +146,7 @@ export function createHistoryBackfill(deps = {}) {
   const trimTimers = new Map()
   const lastTrimAt = new Map()
   const leaveTimers = new Map()
-  const fullRequested = new Set() // sessions where the user pressed "Load full history": never trimmed while current
-
+  
   // `meta.trim`: the apply REMOVES rows above the viewport (a trim, or an island eviction of the near end),
   // so the list anchors on the message wherever the viewport is, not only near the top.
   function applyWithHook(sessionId, apply, meta = null) {
@@ -192,8 +176,7 @@ export function createHistoryBackfill(deps = {}) {
     statusBySession.value = next
   }
 
-  function currentModeFor(sessionId, history, loop) {
-    if (loop?.forcedAuto) return 'auto'
+  function currentModeFor(sessionId, history) {
     return isSlowLink(history) ? 'manual' : 'auto'
   }
 
@@ -202,46 +185,28 @@ export function createHistoryBackfill(deps = {}) {
     return loop.demand > 0
   }
 
-  /** Loaded history (file bytes) has reached the budget, or a trim already released the old end. */
-  function isOverBudget(sessionId, history) {
-    if (history.budgetReached) return true
-    const loaded = messageStore().historyProgress?.(sessionId)?.loadedBytes
-    return loaded != null && loaded >= budgetBytes()
-  }
-
-  /** Why the loop must not fetch right now (null == free to go). `demand` = user-driven page. */
-  // `demand` = a user-driven page; `loop.forcedAuto` ('Load full history') overrides the autoBackfill setting.
-  function blockedReason(sessionId, history, demand, loop) {
+  /** Why the loop must not fetch right now (null == free to go). */
+  function blockedReason(sessionId, history) {
     const polling = pollingStore()
     if (polling.currentSessionId !== sessionId) return 'not-current'
-    if (!demand && !loop?.forcedAuto && isOverBudget(sessionId, history)) return 'budget'
     if (isHidden()) return 'hidden'
     if (mutationsInFlight() > 0) return 'user-request'
-    // The background extender yields to any user-driven history fetch and honours the UI setting.
-    if (!demand && islandOps.has(sessionId)) return 'user-fetch'
-    if (!demand && !loop?.forcedAuto && !autoBackfillEnabled()) return 'auto-off'
     // Archive views have no live stream to protect.
     if (history.source !== 'archive') {
       if (BLOCKING_CONNECTION_STATES.has(polling.sessionState)) return `connection-${polling.sessionState}`
       const batch = polling.getLastBatchInfo?.(sessionId)
-      if (batch) {
-        const age = now() - batch.at
-        if (batch.count >= CATCHUP_EVENT_COUNT && age < QUIET_MS) return 'catching-up'
-        if (!demand && age < QUIET_MS) return 'live-activity'
-      }
+      if (batch && batch.count >= CATCHUP_EVENT_COUNT && now() - batch.at < QUIET_MS) return 'catching-up'
     }
     return null
   }
 
-  async function waitUnblocked(sessionId, loop, demand) {
+  async function waitUnblocked(sessionId, loop) {
     for (;;) {
       if (loops.get(sessionId) !== loop) return false
       const history = messageStore().getHistoryState(sessionId)
       if (!history || !history.hasMoreBefore) return false
-      const reason = blockedReason(sessionId, history, demand(), loop)
+      const reason = blockedReason(sessionId, history)
       if (reason === 'not-current') return false
-      // At the budget the background extender is done for good (no polling wait): only demand pages go on.
-      if (reason === 'budget') { loop.endedBy = 'budget'; return false }
       setStatus(sessionId, { paused: reason })
       if (!reason) return true
       await sleep(WAIT_POLL_MS)
@@ -255,31 +220,12 @@ export function createHistoryBackfill(deps = {}) {
         const store = messageStore()
         const history = store.getHistoryState(sessionId)
         if (!history || !history.hasMoreBefore) break
+        // Demand-only: the loop ends once every requested page has landed.
+        if (!isPriority(loop)) break
 
-        const mode = currentModeFor(sessionId, history, loop)
-        setStatus(sessionId, { mode })
-        // Manual mode only advances on demand (scroll near the top / banner button).
-        if (mode === 'manual' && !isPriority(loop)) {
-          setStatus(sessionId, { paused: null })
-          await sleep(WAIT_POLL_MS)
-          if (blockedReason(sessionId, history, true, loop) === 'not-current') break
-          continue
-        }
+        setStatus(sessionId, { mode: currentModeFor(sessionId, history) })
+        if (!(await waitUnblocked(sessionId, loop))) break
 
-        const isDemand = () => isPriority(loop)
-        if (!(await waitUnblocked(sessionId, loop, isDemand))) break
-
-        // Inter-page gap (bypassed by an explicit on-demand request).
-        if (!isDemand() && loop.lastPageEndedAt != null) {
-          const gap = backfillGapMs(loop.lastPageMs)
-          const remaining = gap - (now() - loop.lastPageEndedAt)
-          if (remaining > 0) {
-            await sleep(remaining)
-            continue // re-evaluate every condition after the wait
-          }
-        }
-
-        const wasDemand = isPriority(loop)
         const controller = store.claimBackfill(sessionId)
         setStatus(sessionId, { loading: true, error: null })
         const startedAt = now()
@@ -287,7 +233,7 @@ export function createHistoryBackfill(deps = {}) {
           const page = await store.fetchOlderPage(sessionId, {
             // A page the user is already waiting for (urgent) never uses a grown budget; a prefetch may grow it
             // but never shrinks below the base (a smaller page only costs the user another round trip).
-            signal: controller.signal, maxBytes: wasDemand ? (loop.urgent ? PAGE_BUDGET_BYTES : Math.max(PAGE_BUDGET_BYTES, loop.budget)) : loop.budget, maxRecords: MAX_PAGE_RECORDS, inactivityMs: PAGE_INACTIVITY_MS,
+            signal: controller.signal, maxBytes: loop.urgent ? PAGE_BUDGET_BYTES : Math.max(PAGE_BUDGET_BYTES, loop.budget), maxRecords: MAX_PAGE_RECORDS, inactivityMs: PAGE_INACTIVITY_MS,
           })
           if (controller.signal.aborted || loops.get(sessionId) !== loop) break
           loop.lastPageMs = now() - startedAt
@@ -309,11 +255,10 @@ export function createHistoryBackfill(deps = {}) {
           const applyStartedAt = now()
           applyWithHook(sessionId, () => store.applyFetchedOlderPage(sessionId, page, { source: history.source || 'load' }))
           requestTrimCheck(sessionId)
-          loop.lastPageEndedAt = now()
-          const applyMs = loop.lastPageEndedAt - applyStartedAt
+          const applyMs = now() - applyStartedAt
           markPerf('history-backfill-apply', applyStartedAt, applyMs)
           loop.budget = nextPageBudget(loop.budget, loop.lastPageMs, applyMs)
-          loop.lastPageMs += applyMs // the gap covers the main-thread cost of the page too
+          loop.lastPageMs += applyMs // the prefetch distance covers the main-thread cost of the page too
           consecutiveErrors = 0
           if (loop.demand > 0) loop.demand = Math.max(0, loop.demand - 1)
           if (loop.demand === 0) loop.urgent = false
@@ -331,7 +276,6 @@ export function createHistoryBackfill(deps = {}) {
                 window: 'tail', baseUrl: history.baseUrl, source: history.source || 'load',
                 ...(history.source === 'archive' ? { signal: controller.signal } : {}),
               })
-              loop.lastPageEndedAt = null
               loop.budget = PAGE_BUDGET_BYTES
               scheduleIndex(sessionId) // the replaced suffix dropped the old index
               continue
@@ -354,10 +298,11 @@ export function createHistoryBackfill(deps = {}) {
         }
       }
     } finally {
+      pageStats.set(sessionId, { budget: loop.budget, lastPageMs: loop.lastPageMs })
       if (loops.get(sessionId) === loop) loops.delete(sessionId)
       const history = messageStore().getHistoryState(sessionId)
       if (!history || !history.hasMoreBefore) clearStatus(sessionId)
-      else setStatus(sessionId, { loading: false, paused: loop.endedBy === 'budget' ? 'budget' : null })
+      else setStatus(sessionId, { loading: false, paused: null })
     }
   }
 
@@ -386,7 +331,7 @@ export function createHistoryBackfill(deps = {}) {
 
   function trimBusy(sessionId) {
     // "Load full history" is an explicit request for everything: neither while it runs nor after it ended.
-    return fullRequested.has(sessionId) || islandOps.has(sessionId) || !!statusBySession.value.get(sessionId)?.loading || (loops.get(sessionId)?.demand || 0) > 0
+    return islandOps.has(sessionId) || !!statusBySession.value.get(sessionId)?.loading || (loops.get(sessionId)?.demand || 0) > 0
   }
 
   async function runTrimCheck(sessionId) {
@@ -434,7 +379,6 @@ export function createHistoryBackfill(deps = {}) {
     if (nextId) { clearTimeout(leaveTimers.get(nextId)); leaveTimers.delete(nextId) }
     if (!previousId || previousId === nextId) return
     cancelTrim(previousId)
-    fullRequested.delete(previousId)
     clearTimeout(leaveTimers.get(previousId))
     leaveTimers.set(previousId, setTimeout(async () => {
       leaveTimers.delete(previousId)
@@ -480,15 +424,15 @@ export function createHistoryBackfill(deps = {}) {
     })
   }
 
-  /** Begins (or continues) backfilling `sessionId`. At most one loop per session. */
+  /** Begins the page loop for `sessionId` (ends at once without a pending demand). At most one loop per session. */
   // `initial` seeds the loop's flags BEFORE it first evaluates its block reasons (runLoop starts synchronously).
   function start(sessionId, initial = {}) {
     const history = messageStore().getHistoryState(sessionId)
     if (!history || !history.hasMoreBefore) return
     if (loops.has(sessionId)) return
-    const loop = { demand: 0, urgent: false, lastPageMs: 0, lastPageEndedAt: null, forcedAuto: false, budget: PAGE_BUDGET_BYTES, ...initial }
+    const loop = { demand: 0, urgent: false, lastPageMs: 0, budget: PAGE_BUDGET_BYTES, ...pageStats.get(sessionId), ...initial }
     loops.set(sessionId, loop)
-    setStatus(sessionId, { mode: currentModeFor(sessionId, history, loop), paused: null, error: null })
+    setStatus(sessionId, { mode: currentModeFor(sessionId, history), paused: null, error: null })
     runLoop(sessionId, loop)
   }
 
@@ -500,6 +444,8 @@ export function createHistoryBackfill(deps = {}) {
     islandPageMs.delete(sessionId)
     clearTimeout(jumpErrorTimers.get(sessionId))
     jumpErrorTimers.delete(sessionId)
+    // Nothing is in flight any more: the spinner must not wait for the aborted requests to settle.
+    if (statusBySession.value.has(sessionId)) setStatus(sessionId, { loading: false, jump: null, island: null })
   }
 
   function stopAll() {
@@ -507,10 +453,9 @@ export function createHistoryBackfill(deps = {}) {
   }
 
   /**
-   * Requests one older page now (scroll toward the top, the banner's button): user priority, no
-   * inter-page gap. `urgent` = the user is already waiting at the top: that page keeps the small base
+   * Requests one older page now (scroll toward the top): user priority. `urgent` = the user is already waiting at the top: that page keeps the small base
    * budget so it lands quickly; a prefetch (the user is still scrolling toward the edge) uses the
-   * adaptive budget like the background loop does.
+   * adaptive budget.
    */
   function requestOlder(sessionId, { urgent = true } = {}) {
     const history = messageStore().getHistoryState(sessionId)
@@ -560,7 +505,7 @@ export function createHistoryBackfill(deps = {}) {
    * becomes the island (replacing a previous one). Returns `{ promise, cancel }`; `promise`
    * resolves to the store's `{ status, anchorCursor, parentUnresolved }` and rejects with
    * `err.reason` 'not-found' | 'busy' | 'reset' | 'aborted' (cancelled) | 'superseded' | 'failed'.
-   * `meta.label` is published on the status as `jump` for the banner. A target already loaded
+   * `meta.label` is published on the status as `jump` (drives the spinner). A target already loaded
    * resolves at once ({ status: 'loaded' }). The suffix stays valid whatever happens.
    */
   function jumpAround(sessionId, target, meta = {}) {
@@ -593,7 +538,7 @@ export function createHistoryBackfill(deps = {}) {
     return { promise: settled, cancel: () => op.controller.abort() }
   }
 
-  /** A short notice in the history banner (the jump-error slot: expires on its own). */
+  /** A short notice over the list (the jump-error slot: expires on its own). */
   function showNotice(sessionId, text) {
     publishJumpErrorText(sessionId, text)
   }
@@ -675,35 +620,13 @@ export function createHistoryBackfill(deps = {}) {
 
   /** Measured duration of the last page fetch of the interval the user is scrolling toward (ms; 0 unknown). */
   function getPageLatencyMs(sessionId, { island = false } = {}) {
-    return (island ? islandPageMs.get(sessionId) : loops.get(sessionId)?.lastPageMs) || 0
+    return (island ? islandPageMs.get(sessionId) : (loops.get(sessionId) ?? pageStats.get(sessionId))?.lastPageMs) || 0
   }
 
   /** 'auto' | 'manual' (slow link, nothing loads unrequested) for this session right now. */
   function getMode(sessionId) {
     const history = messageStore().getHistoryState(sessionId)
-    return currentModeFor(sessionId, history, loops.get(sessionId))
-  }
-
-  /** Leaves slow-link/manual mode for this session: backfill the rest automatically (paced). */
-  function loadAll(sessionId) {
-    const history = messageStore().getHistoryState(sessionId)
-    if (!history || !history.hasMoreBefore) return
-    fullRequested.add(sessionId)
-    cancelTrim(sessionId)
-    if (!loops.has(sessionId)) start(sessionId, { forcedAuto: true })
-    const loop = loops.get(sessionId)
-    if (loop) {
-      loop.forcedAuto = true
-      setStatus(sessionId, { mode: 'auto', error: null, forced: true })
-    }
-  }
-
-  /** Ends a "Load full history" override (the banner's Stop): the loop falls back to the settings again. */
-  function stopForced(sessionId) {
-    fullRequested.delete(sessionId)
-    const loop = loops.get(sessionId)
-    if (loop) loop.forcedAuto = false
-    if (statusBySession.value.has(sessionId)) setStatus(sessionId, { forced: false })
+    return currentModeFor(sessionId, history)
   }
 
   /** Retry after the loop gave up on repeated errors. */
@@ -741,8 +664,6 @@ export function createHistoryBackfill(deps = {}) {
     requestIslandNewer,
     getMode,
     getPageLatencyMs,
-    loadAll,
-    stopForced,
     retry,
     setScrollInteraction,
     setPageApplyHook,
@@ -758,12 +679,12 @@ export function createHistoryBackfill(deps = {}) {
 export const historyBackfill = createHistoryBackfill()
 
 /**
- * Starts backfill for `sessionId` when only a suffix of its history is loaded, and schedules its
- * history index (after `after`, the snapshot requests that must settle first — issue #2030 stage 2).
+ * Schedules the history index of `sessionId` when only a suffix of its history is loaded (after
+ * `after`, the snapshot requests that must settle first — issue #2030 stage 2). Older pages load
+ * only on demand.
  */
-export function startBackfillIfIncomplete(sessionId, after = []) {
+export function scheduleIndexIfIncomplete(sessionId, after = []) {
   if (useMessageStore().isHistoryComplete(sessionId)) return
-  historyBackfill.start(sessionId)
   historyBackfill.scheduleIndex(sessionId, after)
 }
 
