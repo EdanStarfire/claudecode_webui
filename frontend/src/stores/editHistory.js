@@ -1,5 +1,5 @@
 import { defineStore } from 'pinia'
-import { ref, watch } from 'vue'
+import { ref } from 'vue'
 import { api } from '@/utils/api'
 import { useMessageStore } from './message'
 
@@ -93,48 +93,30 @@ export const useEditHistoryStore = defineStore('editHistory', () => {
     }
   }
 
-  // Reactive cross-watch: auto-refresh when Edit/Write/Bash tool calls complete.
-  // useMessageStore() is called inside setup (not at module load) per Pinia best practice.
+  // Auto-refresh when a live Edit/Write/Bash tool call completes. Driven by the message store's
+  // `onToolCompleted` event (issue #2030 stage 4 PR 4b) rather than a watcher over every tool of
+  // every session, whose getter was O(total tools) per tool update. The store only fires for LIVE
+  // records: a tool that arrived with a history page, an island or a reload isn't news — the
+  // server-side edit history already covers it. useMessageStore() is called inside setup (not at
+  // module load) per Pinia best practice.
   {
     const messageStore = useMessageStore()
-    watch(
-      () => {
-        const result = []
-        for (const [sessionId, calls] of messageStore.toolCallsBySession) {
-          for (const c of calls) {
-            if (
-              ['Edit', 'Write', 'Bash'].includes(c.name) &&
-              (c.status === 'completed' || c.status === 'error')
-            ) {
-              result.push({ sessionId, toolUseId: c.id })
-            }
-          }
-        }
-        return result
-      },
-      (snapshot) => {
-        const newlyCompleted = new Map()
-        for (const { sessionId, toolUseId } of snapshot) {
-          let seen = seenCompletedTools.get(sessionId)
-          if (!seen) {
-            seen = new Set()
-            seenCompletedTools.set(sessionId, seen)
-          }
-          if (!seen.has(toolUseId)) {
-            seen.add(toolUseId)
-            // Issue #2030: a tool that arrived with an older history page isn't news — the
-            // server-side edit history already covers it; refetching it once per backfill page
-            // would cost a full edit-history request per page.
-            if (messageStore.wasBackfilled(sessionId, toolUseId)) continue
-            newlyCompleted.set(sessionId, (newlyCompleted.get(sessionId) || 0) + 1)
-          }
-        }
-        for (const sessionId of newlyCompleted.keys()) {
-          if (!entriesBySession.value.has(sessionId)) continue
-          scheduleDebouncedRefresh(sessionId)
-        }
+    messageStore.onToolCompleted((sessionId, toolUseId, toolName) => {
+      if (!['Edit', 'Write', 'Bash'].includes(toolName)) return
+      let seen = seenCompletedTools.get(sessionId)
+      if (!seen) {
+        seen = new Set()
+        seenCompletedTools.set(sessionId, seen)
       }
-    )
+      if (seen.has(toolUseId)) return
+      seen.add(toolUseId)
+      if (!entriesBySession.value.has(sessionId)) return
+      scheduleDebouncedRefresh(sessionId)
+    })
+    // Completions that happened while the stream was down arrive with the resync reload.
+    messageStore.onHistoryReloaded((sessionId) => {
+      if (entriesBySession.value.has(sessionId)) scheduleDebouncedRefresh(sessionId)
+    })
   }
 
   return {

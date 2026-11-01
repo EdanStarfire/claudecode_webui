@@ -1,6 +1,6 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest'
 import { setActivePinia } from 'pinia'
-import { nextTick, h, defineComponent } from 'vue'
+import { nextTick, h, defineComponent, shallowReactive } from 'vue'
 import { renderWithStores } from '@/test-utils/render'
 import { useMessageStore } from '@/stores/message'
 import { useSessionStore } from '@/stores/session'
@@ -40,9 +40,11 @@ function mountRow(toolIds) {
 }
 
 function seedSuffix(store, calls) {
-  const arr = calls.map(c => ({ name: 'Bash', input: {}, result: null, ...c }))
+  // Entries are shallowReactive and the Map is a shallowRef, exactly like the store's own (#2030 4b)
+  const arr = calls.map(c => shallowReactive({ name: 'Bash', input: {}, result: null, ...c }))
   const idx = new Map(arr.map((c, i) => [c.id, i]))
   store.toolCallsBySession.set(SID, arr)
+  store.toolCallsBySession = new Map(store.toolCallsBySession)
   store.toolIndexBySession.set(SID, idx)
 }
 

@@ -1,5 +1,5 @@
 import { defineStore } from 'pinia'
-import { ref, computed, readonly, watch, markRaw, toRaw } from 'vue'
+import { ref, computed, readonly, watch, markRaw, toRaw, shallowRef, shallowReactive } from 'vue'
 import { api } from '../utils/api'
 import { useSessionStore } from './session'
 import { useTaskStore } from './task'
@@ -31,11 +31,21 @@ const TOOL_STATUS_MAP = {
 export const useMessageStore = defineStore('message', () => {
   // ========== STATE ==========
 
+  // Issue #2030 stage 4 PR 4b: the loaded history is NOT deeply reactive. A deep `ref` wrapped
+  // every message and tool entry in a Proxy (Vue Dep/Link bookkeeping was ~29 % of the heap and
+  // every O(n) pass paid a proxy `get` per field). Instead: the per-session Maps are shallowRefs
+  // (every mutation path replaces the Map to notify — `x.value = new Map(x.value)` or
+  // `_installPageAndNotify`), messages are `markRaw` records that are NEVER mutated after
+  // insertion (a changed message is replaced as a whole), and tool entries are `shallowReactive`
+  // so a top-level field write (status, result, isExpanded, ...) still re-renders exactly the
+  // readers of that field. Nested values (input/result/appliedUpdates/suggestions/_orphanedInfo)
+  // are only ever REPLACED, never mutated in place. New writers must live in this store.
+
   // Messages per session (sessionId -> Message[])
-  const messagesBySession = ref(new Map())
+  const messagesBySession = shallowRef(new Map())
 
   // Tool calls per session (sessionId -> ToolCall[])
-  const toolCallsBySession = ref(new Map())
+  const toolCallsBySession = shallowRef(new Map())
 
   const permissionToToolMap = ref(new Map())
 
@@ -84,7 +94,7 @@ export const useMessageStore = defineStore('message', () => {
   //   messages, toolCalls }> — `messages`/`toolCalls` are snapshots of the raw target below
   // (re-sliced on every change so Vue sees a new array). Dropped on a history_id change, a
   // reset/clear, a new jump (replaced), or when it touches the suffix (merged into it).
-  const islandBySession = ref(new Map())
+  const islandBySession = shallowRef(new Map())
   // Non-reactive truth behind each island: { messages, messageIndex, toolCalls, toolIndex, retryIndex }.
   const _islandTargets = new Map()
   // One in-flight island request (around / before / after) per session; a new one aborts the old.
@@ -172,7 +182,9 @@ export const useMessageStore = defineStore('message', () => {
 
   // ========== COMPUTED ==========
 
-  // Current session's messages
+  // Current session's messages. NOTE (issue #2030 4b): returns the raw per-session array, whose
+  // identity survives an in-place append — do not build computeds/watchers on `.value.length`;
+  // read the store getter (loadedMessages) inside the watcher getter instead.
   const currentMessages = computed(() => {
     const sessionStore = useSessionStore()
     return messagesBySession.value.get(sessionStore.currentSessionId) || []
@@ -584,6 +596,9 @@ export const useMessageStore = defineStore('message', () => {
       _applyPageToTarget(sessionId, records, target)
     }
     _installPageAndNotify(sessionId, target)
+    // A reload/resync of an already-loaded live session may carry tool completions that happened
+    // while the stream was down (they arrive as history, not as live records).
+    if (hasLoaded && source !== 'archive') _notifyListeners(historyReloadListeners, sessionId)
     if (source === 'archive') {
       if (data.latest_init) sessionStore.storeArchiveInitData(sessionId, data.latest_init)
     } else if (data.latest_init) {
@@ -1006,10 +1021,29 @@ export const useMessageStore = defineStore('message', () => {
   function loadedToolCalls(sessionId) {
     const suffix = toolCallsBySession.value.get(sessionId) || []
     const island = islandBySession.value.get(sessionId)
-    if (!island) return suffix
+    if (!island) {
+      _loadedToolCallsCache.delete(sessionId) // do not pin a dropped island's union
+      return suffix
+    }
     const suffixIndex = toolIndexBySession.get(sessionId)
-    return island.toolCalls.filter(tool => !suffixIndex?.has(tool.id)).concat(suffix)
+    // Issue #2030 stage 4 PR 4b: this union was rebuilt (filter + concat over every tool) per call,
+    // and MessageList reads it on every reactive pass. The inputs are append-only arrays that are
+    // replaced (not edited) on a merge/trim, so identity + length of each input is a complete
+    // revision key for the cached union.
+    const cached = _loadedToolCallsCache.get(sessionId)
+    if (cached && cached.island === island.toolCalls && cached.islandLength === island.toolCalls.length &&
+        cached.suffix === suffix && cached.suffixLength === suffix.length && cached.suffixIndex === suffixIndex) {
+      return cached.result
+    }
+    const result = island.toolCalls.filter(tool => !suffixIndex?.has(tool.id)).concat(suffix)
+    _loadedToolCallsCache.set(sessionId, {
+      island: island.toolCalls, islandLength: island.toolCalls.length,
+      suffix, suffixLength: suffix.length, suffixIndex, result,
+    })
+    return result
   }
+  // sessionId -> { island, islandLength, suffix, suffixLength, suffixIndex, result } (non-reactive)
+  const _loadedToolCallsCache = new Map()
 
   /** One tool call by id from the loaded intervals (the reactive entry, so UI state written to it renders). */
   function findLoadedToolCall(sessionId, toolUseId) {
@@ -1019,6 +1053,38 @@ export const useMessageStore = defineStore('message', () => {
     const island = islandBySession.value.get(sessionId)
     const islandIdx = _islandTargets.get(sessionId)?.toolIndex.get(toolUseId)
     return island && islandIdx !== undefined ? island.toolCalls[islandIdx] : undefined
+  }
+
+  // Issue #2030 stage 4 PR 4b: subscribers of live tool completions. Fired from
+  // _applyToolCallRecord for source === 'live' records that leave the entry completed/error —
+  // history pages (load / backfill / island / resync / archive) are not news and never fire.
+  // The same tool may fire more than once (duplicate terminal updates); subscribers dedupe.
+  const toolCompletedListeners = new Set()
+  // Subscribers of `(sessionId)` when an already-loaded live session's suffix is re-fetched
+  // (resync after stream_reset/evicted, or a repeated first-load): completions that happened while
+  // the stream was down arrive as history, which onToolCompleted deliberately ignores.
+  const historyReloadListeners = new Set()
+
+  function _notifyListeners(listeners, ...args) {
+    for (const listener of listeners) {
+      try {
+        listener(...args)
+      } catch (e) {
+        console.warn('history listener failed:', e)
+      }
+    }
+  }
+
+  /** Subscribes `listener(sessionId)` to reloads of an already-loaded session; returns unsubscribe. */
+  function onHistoryReloaded(listener) {
+    historyReloadListeners.add(listener)
+    return () => historyReloadListeners.delete(listener)
+  }
+
+  /** Subscribes `listener(sessionId, toolUseId, toolName)`; returns the unsubscribe function. */
+  function onToolCompleted(listener) {
+    toolCompletedListeners.add(listener)
+    return () => toolCompletedListeners.delete(listener)
   }
 
   function _touchesCompactionHooks(record) {
@@ -1877,6 +1943,7 @@ export const useMessageStore = defineStore('message', () => {
     messageIndexBySession.delete(sessionId)
     toolIndexBySession.delete(sessionId)
     retryIndexBySession.delete(sessionId)
+    _loadedToolCallsCache.delete(sessionId)
   }
 
   /**
@@ -1960,7 +2027,7 @@ export const useMessageStore = defineStore('message', () => {
       const retryId = message.metadata.retry_message_id
       const existingIdx = retryIndex.get(retryId)
       if (existingIdx !== undefined) {
-        messages[existingIdx] = { ...messages[existingIdx], ...message }
+        messages[existingIdx] = markRaw({ ...messages[existingIdx], ...message })
         // Issue #2131 review fix: the merge above just overwrote this slot's message_id to
         // THIS attempt's own id — messageIndex must track it too (still pointing at
         // existingIdx, unchanged), or a later redelivery of this exact attempt would no
@@ -1977,7 +2044,7 @@ export const useMessageStore = defineStore('message', () => {
     }
 
     const newIndex = messages.length
-    messages.push(message)
+    messages.push(markRaw(message))
     if (dedupKey) messageIndex.set(dedupKey, newIndex)
     // Issue #2131 (AC1): gated the same as the collapse LOOKUP above (source === 'live') —
     // a stored/archived record structurally never carries retry_message_id (see the comment
@@ -2321,7 +2388,7 @@ export const useMessageStore = defineStore('message', () => {
 
       _applyTerminalResolution(newToolCall, toolCall)
       toolIndex.set(toolUseId, toolCalls.length)
-      toolCalls.push(newToolCall)
+      toolCalls.push(shallowReactive(newToolCall))
       // Populate permissionToToolMap for handlePermissionResponse correlation
       if (toolCall.request_id && toolCall.status === 'awaiting_permission') {
         permissionToToolMap.value.set(toolCall.request_id, toolUseId)
@@ -2332,6 +2399,14 @@ export const useMessageStore = defineStore('message', () => {
 
     // Trigger reactivity
     if (notify) toolCallsBySession.value = new Map(toolCallsBySession.value)
+
+    // Issue #2030 stage 4 PR 4b: live completion event (replaces editHistory's whole-store watcher)
+    if (source === 'live' && toolCompletedListeners.size) {
+      const entry = existingIndex !== -1 ? toolCalls[existingIndex] : toolCalls[toolCalls.length - 1]
+      if (entry && (entry.status === 'completed' || entry.status === 'error')) {
+        _notifyListeners(toolCompletedListeners, sessionId, toolUseId, entry.name)
+      }
+    }
 
     // Handle task tool results. Issue #2030: live records only — the Tasks panel is hydrated from
     // the server snapshot (GET /api/sessions/{id}/tasks); history replay (load / backfill / resync /
@@ -2789,6 +2864,9 @@ export const useMessageStore = defineStore('message', () => {
     deferredToolUseBySession.value.delete(sessionId)
     launchTimestampBySession.value.delete(sessionId)
     sessionStore.clearArchiveInitData(sessionId)
+    // shallowRef Maps: the deletes above do not notify on their own
+    messagesBySession.value = new Map(messagesBySession.value)
+    toolCallsBySession.value = new Map(toolCallsBySession.value)
   }
 
   // ========== HOOK CORRELATION (Issue #1350) ==========
@@ -2950,6 +3028,8 @@ export const useMessageStore = defineStore('message', () => {
     claimBackfill,
     releaseBackfill,
     wasBackfilled,
+    onToolCompleted,
+    onHistoryReloaded,
     abortBackfill,
     historyBySession: readonly(historyBySession),
     historyIndexBySession: readonly(historyIndexBySession),
