@@ -2436,12 +2436,19 @@ describe('tail-first history (issue #2030, stage 1b)', () => {
       await wrapper.vm.scrollToItemIndex(0, { align: 'start', behavior: 'auto' })
       await new Promise(r => setTimeout(r, 80))
       expect(newer).not.toHaveBeenCalled() // far from the gap
-      // the island's last rows, just above the gap row (a scroll jump counts as user scrolling)
+      // a programmatic jump next to the gap (turn navigation, a deep link) is not the user scrolling: nothing is prefetched
+      await wrapper.vm.scrollToItemIndex(12, { align: 'start', behavior: 'auto' })
+      await new Promise(r => setTimeout(r, 120))
+      expect(newer).not.toHaveBeenCalled()
+      await wrapper.vm.scrollToItemIndex(0, { align: 'start', behavior: 'auto' })
+      // the island's last rows, just above the gap row; the user's own wheel makes it a user scroll
+      await fireEvent.wheel(document.querySelector('.messages-area'))
       await wrapper.vm.scrollToItemIndex(12, { align: 'start', behavior: 'auto' })
       await new Promise(r => setTimeout(r, 120))
       expect(newer).toHaveBeenCalledWith(SESSION)
       newer.mockClear()
       // below the gap (inside the live suffix) nothing is prefetched
+      await fireEvent.wheel(document.querySelector('.messages-area'))
       await wrapper.vm.scrollToItemIndex(20, { align: 'start', behavior: 'auto' })
       await new Promise(r => setTimeout(r, 120))
       expect(newer).not.toHaveBeenCalled()
@@ -2515,6 +2522,7 @@ describe('tail-first history (issue #2030, stage 1b)', () => {
       await wrapper.vm.scrollToItemIndex(30, { align: 'start', behavior: 'auto' })
       await new Promise(r => setTimeout(r, 80))
       expect(olderIsland).not.toHaveBeenCalled() // far from the island's top
+      await fireEvent.wheel(document.querySelector('.messages-area')) // the user's own scroll (a programmatic jump does not prefetch)
       await wrapper.vm.scrollToItemIndex(0, { align: 'start', behavior: 'auto' })
       await new Promise(r => setTimeout(r, 80))
       expect(olderIsland).toHaveBeenCalledWith(SESSION)
@@ -2611,6 +2619,141 @@ describe('tail-first history (issue #2030, stage 1b)', () => {
     wrapper.vm.endTurnJump() // the one re-derivation, from the real position
     expect(setSticky).toHaveBeenCalledWith(expect.anything(), true)
     vi.restoreAllMocks()
+  })
+
+  describe('deep link ?msg=<message_id> (issue #2030, stage 3 PR 3F)', () => {
+    async function mountLinked(messageId, { session = SESSION, hasMoreBefore = true, archiveId = null, routeArchive = null } = {}) {
+      const { createFakeHistoryServer } = await import('@/stores/__tests__/helpers/historyServer')
+      const { historyBackfill } = await import('@/composables/useHistoryBackfill')
+      const query = messageId ? `?msg=${messageId}&other=1` : ''
+      const initialRoute = routeArchive ? `/session/${session}/archive/${routeArchive}${query}` : `/session/${session}${query}`
+      const rendered = renderWithStores(MessageList, {
+        initialRoute,
+        routes: [
+          { path: '/', component: { template: '<div />' } },
+          { path: '/session/:sessionId', component: { template: '<div />' } },
+          { path: '/session/:sessionId/archive/:archiveId', component: { template: '<div />' } },
+          { path: '/archive/agent/:agentId/:archiveId', component: { template: '<div />' } },
+        ],
+        provide: { viewSessionId: viewSessionIdRef, viewArchiveId: ref(archiveId) },
+        stubs: { MessageItem: MESSAGE_ITEM_STUB, TruncationBanner: true, SubagentTimeline: true },
+      })
+      const router = rendered.router
+      await router.isReady()
+      await router.push(initialRoute)
+      router.replace = vi.fn(() => Promise.resolve())
+      const route = router.currentRoute
+      const { useMessageStore } = await import('@/stores/message')
+      const messageStore = useMessageStore(rendered.pinia)
+      const all = [...messagesAt(0, 30), ...messagesAt(30, 60)]
+      const server = createFakeHistoryServer(all, { tailStart: hasMoreBefore ? 45 : 0, pageSize: 30, aroundBefore: 6, aroundAfter: 6, afterPageSize: 4 })
+      apiMock.get.mockImplementation((url) => server.handle(url))
+      stubScrollMechanics(rendered.container.querySelector('.messages-area'))
+      await messageStore.loadMessages(SESSION, null, 0, { window: 'tail', signal: new AbortController().signal })
+      await new Promise(r => setTimeout(r, 250))
+      return { ...rendered, messageStore, route, router, server, historyBackfill }
+    }
+
+    const scrolledTo = () => document.querySelector('.messages-area').scrollTop
+
+    it('a message that is not loaded opens ONE bounded around_id window and keeps the param in the URL', async () => {
+      const { historyBackfill } = await import('@/composables/useHistoryBackfill')
+      const jump = vi.spyOn(historyBackfill, 'jumpAround')
+      const { server, router, messageStore } = await mountLinked('msg-10')
+      expect(jump).toHaveBeenCalledWith(SESSION, { messageId: 'msg-10' }, { label: 'that message' })
+      expect(server.requests.filter(u => u.includes('around_id=msg-10'))).toHaveLength(1)
+      expect(messageStore.isMessageLoaded(SESSION, 'msg-10')).toBe(true)
+      expect(router.replace).not.toHaveBeenCalled()
+      expect(scrolledTo()).toBeGreaterThan(0) // scrolled to the landed row (aligned to the top)
+      vi.restoreAllMocks()
+    })
+
+    it('a message already in the loaded suffix is scrolled to without any request', async () => {
+      const { historyBackfill } = await import('@/composables/useHistoryBackfill')
+      const jump = vi.spyOn(historyBackfill, 'jumpAround')
+      const { server, router } = await mountLinked('msg-55')
+      expect(jump).not.toHaveBeenCalled()
+      expect(server.requests.some(u => u.includes('around'))).toBe(false)
+      expect(router.replace).not.toHaveBeenCalled()
+      expect(scrolledTo()).toBeGreaterThan(0) // scrolled down to the row in the loaded suffix
+      vi.restoreAllMocks()
+    })
+
+    it('an id the server does not know shows the notice and drops only the msg param', async () => {
+      const { historyBackfill } = await import('@/composables/useHistoryBackfill')
+      vi.spyOn(historyBackfill, 'jumpAround').mockImplementation(() => ({ promise: Promise.reject(Object.assign(new Error('nf'), { reason: 'not-found' })), cancel() {} }))
+      const { router } = await mountLinked('no-such-id')
+      expect(router.replace).toHaveBeenCalledWith({ query: { other: '1' } })
+      vi.restoreAllMocks()
+    })
+
+    it('with the whole history loaded an unknown id shows the notice (banner included) and drops the param', async () => {
+      const { historyBackfill } = await import('@/composables/useHistoryBackfill')
+      const notice = vi.spyOn(historyBackfill, 'showNotice')
+      const { router } = await mountLinked('no-such-id', { hasMoreBefore: false })
+      expect(notice).toHaveBeenCalledWith(SESSION, "Couldn't find that message in the history")
+      expect(router.replace).toHaveBeenCalledWith({ query: { other: '1' } })
+      expect(document.querySelector('[data-testid="history-banner"]').textContent).toContain("Couldn't find that message")
+      historyBackfill.statusBySession.value = new Map()
+      vi.restoreAllMocks()
+    })
+
+    it('on a slow link a deep link confirms once naming the window size; declining stays at the tail and drops the param', async () => {
+      const { historyBackfill } = await import('@/composables/useHistoryBackfill')
+      vi.spyOn(historyBackfill, 'getMode').mockReturnValue('manual')
+      const jump = vi.spyOn(historyBackfill, 'jumpAround')
+      const confirm = vi.spyOn(window, 'confirm').mockReturnValue(false)
+      const { router } = await mountLinked('msg-10')
+      expect(confirm).toHaveBeenCalledTimes(1)
+      expect(confirm.mock.calls[0][0]).toMatch(/MB of history/)
+      expect(jump).not.toHaveBeenCalled()
+      expect(router.replace).toHaveBeenCalledWith({ query: { other: '1' } })
+      vi.restoreAllMocks()
+    })
+
+    it('ignores a link for another session, another archive, or no link at all', async () => {
+      const { historyBackfill } = await import('@/composables/useHistoryBackfill')
+      const jump = vi.spyOn(historyBackfill, 'jumpAround')
+      await mountLinked('msg-10', { session: 'other-session' })
+      expect(jump).not.toHaveBeenCalled()
+      document.body.innerHTML = ''
+      await mountLinked('msg-10', { routeArchive: 'arch-1', archiveId: null })
+      expect(jump).not.toHaveBeenCalled()
+      document.body.innerHTML = ''
+      await mountLinked(null)
+      expect(jump).not.toHaveBeenCalled()
+      vi.restoreAllMocks()
+    })
+
+    it('pasting the same link again after the param was dropped lands again', async () => {
+      const { router } = await mountLinked('msg-55')
+      const area = document.querySelector('.messages-area')
+      expect(scrolledTo()).toBeGreaterThan(0)
+      await router.push('/session/sess-1') // the param dropped (a turn jump / navigation)
+      await new Promise(r => setTimeout(r, 60))
+      area.scrollTop = 0
+      await router.push('/session/sess-1?msg=msg-55') // the same link pasted again
+      await new Promise(r => setTimeout(r, 500))
+      expect(scrolledTo()).toBeGreaterThan(0)
+    })
+
+    it('handles the deleted-agent archive route (params.agentId)', async () => {
+      const { historyBackfill } = await import('@/composables/useHistoryBackfill')
+      const jump = vi.spyOn(historyBackfill, 'jumpAround').mockImplementation(() => ({ promise: Promise.resolve({ status: 'island' }), cancel() {} }))
+      const { router } = await mountLinked(null, { archiveId: 'arch-9' })
+      await router.push({ path: `/archive/agent/${SESSION}/arch-9`, query: { msg: 'msg-10' } })
+      await new Promise(r => setTimeout(r, 400))
+      expect(jump).toHaveBeenCalledWith(SESSION, { messageId: 'msg-10' }, { label: 'that message' })
+      vi.restoreAllMocks()
+    })
+
+    it('a deliberate navigation (a turn jump) drops the msg param so the URL never points at a place the view left', async () => {
+      const { router, wrapper } = await mountLinked('msg-55')
+      expect(router.replace).not.toHaveBeenCalled()
+      wrapper.vm.beginTurnJump()
+      expect(router.replace).toHaveBeenCalledWith({ query: { other: '1' } })
+      wrapper.vm.endTurnJump()
+    })
   })
 
   describe('lanes of legs launched before the loaded history (stage 3 PR 3C-2)', () => {

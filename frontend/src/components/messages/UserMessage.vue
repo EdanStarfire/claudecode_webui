@@ -19,6 +19,7 @@
       <div class="msg-meta">
         <span class="msg-role">user</span>
         <span class="msg-time">{{ formattedTimestamp }}</span>
+        <CopyLinkButton v-if="messageId" :message-id="messageId" />
       </div>
 
       <!-- Content (attachment section stripped from rendered markdown) -->
@@ -94,6 +95,7 @@ import AttachmentChip from '@/components/common/AttachmentChip.vue'
 import CommCard from '@/components/common/CommCard.vue'
 import MarkdownView from '@/components/common/MarkdownView.vue'
 import HookPillStrip from './HookPillStrip.vue'
+import CopyLinkButton from './CopyLinkButton.vue'
 
 const props = defineProps({
   message: {
@@ -106,6 +108,7 @@ const formattedTimestamp = computed(() => {
   return formatTimestamp(props.message.timestamp)
 })
 
+const messageId = computed(() => props.message.message_id || props.message.id || null)
 const isComm = computed(() => !!props.message.metadata?.comm)
 const commSenderName = computed(() => props.message.metadata?.comm?.from_display_name || 'agent')
 

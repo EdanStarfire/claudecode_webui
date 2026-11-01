@@ -177,6 +177,7 @@
 </template>
 
 <script setup>
+import { routeLocationKey, routerKey } from 'vue-router'
 import { computed, inject, onActivated, onDeactivated, onMounted, onUnmounted, provide, ref, watch, nextTick } from 'vue'
 import { useVirtualizer } from '@tanstack/vue-virtual'
 import { useMessageStore } from '@/stores/message'
@@ -208,6 +209,7 @@ import { AROUND_WINDOW_FILE_BYTES, islandIsFull } from '@/utils/historyIntervals
 import { scrollWithSizerGuard, shouldAdjustForItemSizeChange } from '@/utils/virtualScroll'
 import { nextScrollSpeed, prefetchDistancePx } from '@/utils/scrollPrefetch'
 import { anchorCorrection, captureMessageAnchor } from '@/utils/prependAnchor'
+import { MESSAGE_LINK_PARAM } from '@/utils/messageLink'
 
 const messageStore = useMessageStore()
 const sessionStore = useSessionStore()
@@ -218,6 +220,10 @@ const pollingStore = usePollingStore()
 // Every computed in this component reads from this id, not the global currentSessionId,
 // so cached instances under KeepAlive never display another session's data.
 const viewSessionId = inject('viewSessionId', ref(null))
+const viewArchiveId = inject('viewArchiveId', ref(null))
+// Optional: MessageList also mounts without a router (tests); the deep link then never matches.
+const route = inject(routeLocationKey, null)
+const router = inject(routerKey, null)
 
 // Issue #2035: session data-hydration stage visibility for the empty-state area.
 const { hydrationStage, isHydrationLoading, hydrationErrorMessage, resyncStall } = useHydrationStage(viewSessionId)
@@ -425,12 +431,14 @@ const visibleIndexRange = computed(() => {
 const historyStatus = computed(() => historyBackfill.statusBySession.value.get(viewSessionId.value) || null)
 const historyBanner = computed(() => {
   const sessionId = viewSessionId.value
-  if (!sessionId || messageStore.isHistoryComplete(sessionId)) return null
+  if (!sessionId) return null
   const status = historyStatus.value
+  // A notice (a failed jump, a link to a message that is not there) shows even with the whole history loaded.
+  if (status?.jumpError) return { kind: 'jump-error', text: status.jumpError }
+  if (messageStore.isHistoryComplete(sessionId)) return null
   const fraction = messageStore.historyProgress(sessionId)?.fraction
   const percent = fraction != null ? ` ${Math.round(fraction * 100)} %` : ''
   if (status?.error) return { kind: 'error', text: `Couldn't load older history: ${status.error}` }
-  if (status?.jumpError) return { kind: 'jump-error', text: status.jumpError }
   if (status?.jump) {
     return { kind: 'jump', text: `Loading ${status.jump.label || `turn ${status.jump.ordinal}`}…` }
   }
@@ -547,6 +555,7 @@ function loadFullHistory() {
 // (measured page latency x recent scroll speed) so a fast scroll does not reach the edge first.
 const PREFETCH_USER_ACTIVE_MS = 2000 // how long after the last wheel / touch / key a scroll still counts as the user's
 let lastUserInputAt = -Infinity
+let programmaticUntil = 0 // the gesture window a programmatic jump opens (for the sticky logic) is not the user scrolling
 let scrollSampleTop = 0
 let scrollSampleAt = 0
 let scrollSpeedPxPerMs = 0 // signed: negative while scrolling up
@@ -583,10 +592,12 @@ function evaluateHistoryEdges() {
   const upDistance = prefetchDistancePx(ch, -scrollSpeedPxPerMs, historyBackfill.getPageLatencyMs(sessionId, { island: !!island }))
   const nearTop = top <= upDistance // the next page is needed soon: apply it even mid-gesture (the anchored prepend keeps the place)
   historyBackfill.setScrollInteraction(sessionId, { gestureActive: userGestureActive.value, nearTop })
-  if (isInitialLoad.value || messageStore.isHistoryComplete(sessionId)) return
+  if (isInitialLoad.value || messageStore.isHistoryComplete(sessionId) || turnJumpsOpen > 0) return
   // Only a user who is (or just was) scrolling asks for a page: an idle list is extended by the
   // background loop (or, in slow-link mode / with auto-load off, not at all — nothing loads unrequested).
-  if (!userGestureActive.value && !pointerDown && performance.now() - lastUserInputAt > PREFETCH_USER_ACTIVE_MS) return
+  const nowMs = performance.now()
+  const userActive = (userGestureActive.value && nowMs > programmaticUntil) || pointerDown || nowMs - lastUserInputAt <= PREFETCH_USER_ACTIVE_MS
+  if (!userActive) return
   // A failed fetch waits for the banner's Retry / the error to clear instead of retrying on every scroll event.
   const status = historyStatus.value
   if (status?.error) return
@@ -698,9 +709,10 @@ const findNextTurn = () => planTurn('next')
 // sticky-to-bottom pin up front (otherwise the prepended page's relayout snaps the list back to
 // the bottom before the jump lands) and re-derive it from the real position when the jump ends.
 let turnJumpsOpen = 0
-function beginTurnJump() {
+function beginTurnJump(keepLinkParam = false) {
+  if (!keepLinkParam) clearLinkedMessageParam() // a new deliberate navigation: the URL must not point at a place the view left
   turnJumpsOpen++
-  renewGestureWindow()
+  markProgrammaticScroll() // starting a jump is not the user scrolling
   stickyToBottom.value = false
   uiStore.setStickyToBottom(viewSessionId.value, false)
 }
@@ -710,6 +722,7 @@ function endTurnJump() {
   if (turnJumpsOpen > 0) turnJumpsOpen--
   if (turnJumpsOpen > 0) return
   if (messagesArea.value) recomputeStickyFromScroll(messagesArea.value)
+  scheduleEdgeEvaluation() // a real scroll that arrived while the jump was open was not evaluated
 }
 
 // Scroll to a loaded turn by message id (after a jump loaded it). Resolves false when the row
@@ -785,15 +798,18 @@ function clampedLegRow(leg, spans) {
 // The lane chip of a leg launched before the loaded intervals: one bounded window around its
 // launching message (around_id=<tool_use_id>), through the same island path as every other jump.
 // A slow link confirms first (it names the window size); failures surface in the history banner.
+// A slow link confirms before a jump that loads a window (it names the size); true = the user declined.
+function declinedWindowJump(sessionId, what) {
+  return jumpNeedsConfirm({ slowLink: historyBackfill.getMode(sessionId) === 'manual' }) &&
+    typeof window !== 'undefined' && typeof window.confirm === 'function' &&
+    !window.confirm(`${what}? Loads about ${formatJumpSize(AROUND_WINDOW_FILE_BYTES)} of history`)
+}
+
 async function jumpToLaunch(lane) {
   const sessionId = viewSessionId.value
   const toolUseId = messageStore.getTaskLegEntry(lane.taskId)?.legs?.[lane.legIndex]?.tool_use_id
   if (!sessionId || !toolUseId) return
-  if (jumpNeedsConfirm({ slowLink: historyBackfill.getMode(sessionId) === 'manual' }) &&
-      typeof window !== 'undefined' && typeof window.confirm === 'function' &&
-      !window.confirm(`Jump to the launching message? Loads about ${formatJumpSize(AROUND_WINDOW_FILE_BYTES)} of history`)) {
-    return
-  }
+  if (declinedWindowJump(sessionId, 'Jump to the launching message')) return
   beginTurnJump()
   try {
     const jump = historyBackfill.jumpAround(sessionId, { toolUseId }, { label: 'the launching message', expectParent: true })
@@ -867,6 +883,108 @@ function pulseLaunchCard(card) {
   )
   if (animation) launchPulse = { card, animation, timer: setTimeout(stopLaunchPulse, LAUNCH_PULSE_MS) }
 }
+
+// Issue #2030 (stage 3 PR 3F): deep link `?msg=<message_id>` on the session and archive routes. The
+// message is resolved through the same bounded `around_id` island as every other jump (or just scrolled
+// to when it is already loaded: the live suffix), aligned to the top and pulsed like the launch card.
+// The param stays in the URL (a refresh re-lands) until the user starts another navigation; a message
+// that is not there (unknown id, expired history, hidden/compacted row) shows a notice and keeps the tail.
+const linkedMessageId = computed(() => {
+  if (!route) return null
+  const id = route.query?.[MESSAGE_LINK_PARAM]
+  const sessionId = route.params?.sessionId || route.params?.agentId
+  const archiveId = route.params?.archiveId || null
+  if (typeof id !== 'string' || !id || sessionId !== viewSessionId.value) return null
+  return archiveId === (viewArchiveId.value || null) ? id : null
+})
+
+let handledLink = null
+let linkSeq = 0
+
+function clearLinkedMessageParam() {
+  if (!router || !route || route.query?.[MESSAGE_LINK_PARAM] === undefined || linkedMessageId.value == null) return
+  const { [MESSAGE_LINK_PARAM]: _dropped, ...rest } = route.query
+  router.replace({ query: rest }).catch(() => {})
+}
+
+function rowOfLinkedMessage(id) {
+  return indexMaps.value.messageIdIndex.get(id) ?? indexMaps.value.toolUseIndex.get(id) ?? null
+}
+
+function linkNotFound(sessionId) {
+  historyBackfill.showNotice(sessionId, "Couldn't find that message in the history")
+  clearLinkedMessageParam()
+}
+
+async function landOnLinkedMessage(id) {
+  const sessionId = viewSessionId.value
+  const seq = ++linkSeq
+  let index = rowOfLinkedMessage(id)
+  let jumping = false
+  try {
+    if (index == null) {
+      const history = messageStore.getHistoryState(sessionId)
+      if (!history?.hasMoreBefore || messageStore.isMessageLoaded(sessionId, id)) { linkNotFound(sessionId); return }
+      if (declinedWindowJump(sessionId, 'Open the linked message')) {
+        clearLinkedMessageParam()
+        return
+      }
+      beginTurnJump(true)
+      jumping = true
+      try {
+        await historyBackfill.jumpAround(sessionId, { messageId: id }, { label: 'that message' }).promise
+      } catch (err) {
+        if (err?.reason === 'not-found') clearLinkedMessageParam() // jumpAround already published the notice
+        return
+      }
+      if (seq !== linkSeq) return
+      // The window just landed above the suffix and the banner changed height: let the list settle first.
+      await nextTick()
+      for (let frame = 0; frame < 4; frame++) await nextFrame()
+      index = rowOfLinkedMessage(id)
+      if (index == null) { linkNotFound(sessionId); return }
+    }
+    if (!jumping) { beginTurnJump(true); jumping = true }
+    if (await scrollToItemIndexTrusted(index, { align: 'start', behavior: 'auto' }) && seq === linkSeq) {
+      await pulseLinkedRow(index, seq)
+    }
+  } finally {
+    if (jumping) endTurnJump()
+  }
+}
+
+// Waits until the virtualizer stopped correcting the landing position (rows around the target get
+// measured), then pulses the whole row (a merged run pulses as one, whichever segment was linked).
+async function pulseLinkedRow(index, seq) {
+  const area = messagesArea.value
+  if (!area) return
+  // Stable = the linked row stopped moving in the viewport (older pages anchoring above it change
+  // scrollTop while the row stays put, so scrollTop itself is not the signal).
+  let last = null
+  let stable = 0
+  for (let frame = 0; frame < 40 && stable < 5; frame++) {
+    await nextFrame()
+    const top = area.querySelector(`[data-index="${index}"]`)?.getBoundingClientRect().top ?? null
+    stable = top != null && last != null && Math.abs(top - last) < 1 ? stable + 1 : 0
+    last = top
+  }
+  if (stable < 5 || turnJumpsOpen > 1 || seq !== linkSeq) return
+  const row = area.querySelector(`[data-index="${index}"]`)
+  const target = row?.querySelector('.msg-wrapper') || row
+  if (target) pulseLaunchCard(target)
+}
+
+// Land once per route entry: on the first render with rows (a cold load: after the newest window),
+// again when the link changes, and again when the cached view is re-entered.
+const deepLinkReady = computed(() => !!linkedMessageId.value && displayableItems.value.length > 0 && !isInitialLoad.value)
+watch([linkedMessageId, deepLinkReady], ([id, ready]) => {
+  if (!id) { handledLink = null; return } // the same link pasted again later must land again
+  if (!ready) return
+  const key = `${viewSessionId.value}|${viewArchiveId.value || ''}|${id}`
+  if (handledLink === key) return
+  handledLink = key
+  landOnLinkedMessage(id)
+}, { immediate: true, flush: 'post' })
 
 // One animation frame, but never stuck in a hidden tab (rAF does not fire there).
 function nextFrame() {
@@ -979,7 +1097,7 @@ const laneOffsets = computed(() => {
 // recompute entirely (trusted as "this component's own bookkeeping write"), whereas a jump needs
 // the opposite — a real recompute against wherever it actually landed.
 function scrollToItemIndexTrusted(index, opts) {
-  renewGestureWindow()
+  markProgrammaticScroll() // a programmatic jump is not the user scrolling: it must not trigger prefetching (slow-link mode loads nothing unrequested)
   return virtualNav.scrollToItemIndex(index, opts)
 }
 
@@ -1060,7 +1178,7 @@ function cancelSearchJump() {
 watch(() => messageSearch.isOpen.value, (open) => {
   if (!open) { navigationSeq++; cancelSearchJump(); stopKeeper() }
 })
-watch(viewSessionId, () => { navigationSeq++; cancelSearchJump(); stopKeeper(); stopLaunchPulse() })
+watch(viewSessionId, () => { navigationSeq++; handledLink = null; linkSeq++; cancelSearchJump(); stopKeeper(); stopLaunchPulse() })
 watch(() => messageSearch.query.value, () => { stopKeeper(); clearActiveHighlight() })
 
 function isUnloadedHit(match) {
@@ -1073,11 +1191,7 @@ function isUnloadedHit(match) {
 // `began` (set once the jump really started, i.e. after the confirm) tells the caller whether it owes an endTurnJump().
 async function jumpToUnloadedHit(match, began) {
   const sessionId = viewSessionId.value
-  if (jumpNeedsConfirm({ slowLink: historyBackfill.getMode(sessionId) === 'manual' }) &&
-      typeof window !== 'undefined' && typeof window.confirm === 'function' &&
-      !window.confirm(`Jump to search result? Loads about ${formatJumpSize(AROUND_WINDOW_FILE_BYTES)} of history`)) {
-    return 'declined'
-  }
+  if (declinedWindowJump(sessionId, 'Jump to search result')) return 'declined'
   beginTurnJump()
   began.value = true
   const jump = historyBackfill.jumpAround(
@@ -1425,6 +1539,15 @@ function scheduleStickyScroll() {
 // in onScroll below — all of them just need "stay active, decaying after GESTURE_WINDOW_MS of
 // silence." The expiry check defers to `touchDown` so the window never closes while a finger is
 // physically still on the screen, even if GESTURE_WINDOW_MS elapses without a touchmove.
+// Opens the gesture window the sticky-to-bottom logic needs for a programmatic scroll WITHOUT counting it as
+// the user scrolling (the prefetch rule reads lastUserInputAt / programmaticUntil).
+function markProgrammaticScroll() {
+  const lastInput = lastUserInputAt
+  renewGestureWindow()
+  programmaticUntil = performance.now() + 600
+  lastUserInputAt = lastInput
+}
+
 function renewGestureWindow() {
   lastUserInputAt = performance.now()
   userGestureActive.value = true
@@ -1600,6 +1723,8 @@ onUnmounted(() => {
 })
 
 onActivated(async () => {
+  handledLink = null // the view's own scroll restore below would undo a landing that raced it: land again once settled
+  linkSeq++
   lastSeenMessageCount.value = sessionMessages.value.length
   ttsInitialized.value = false
 
@@ -1637,6 +1762,9 @@ onActivated(async () => {
 // (plan §8). useVirtualizer() disposes its own internal observers via onScopeDispose on real
 // unmount; no manual teardown is needed for either case.
 onDeactivated(() => {
+  handledLink = null // re-entering the view with a link lands again
+  linkSeq++
+  stopLaunchPulse()
   if (viewSessionId.value) {
     sessionStore.saveScrollPosition(viewSessionId.value, computeTopmostVisiblePosition())
   }

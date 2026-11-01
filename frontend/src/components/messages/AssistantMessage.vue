@@ -15,6 +15,7 @@
       <div v-if="!isMessageIdContinuation" class="msg-meta">
         <span class="msg-role">assistant</span>
         <span class="msg-time">{{ formattedTimestamp }}</span>
+        <CopyLinkButton v-if="segmentViews[0]?.seg.message_id" :message-id="segmentViews[0].seg.message_id" />
       </div>
 
       <!-- Issue #1746 (stage: layout): consecutive assistant turns merge into one row —
@@ -27,6 +28,7 @@
         <!-- Subsequent segments get a timestamp-only header + trailing rule instead of the full msg-meta -->
         <div v-if="!sv.isFirst" class="turn-meta">
           <span class="turn-meta-time">{{ sv.formattedTimestamp }}</span>
+          <CopyLinkButton v-if="sv.seg.message_id" :message-id="sv.seg.message_id" />
           <span class="turn-meta-rule"></span>
         </div>
 
@@ -110,6 +112,7 @@ import ActivityTimeline from './tools/ActivityTimeline.vue'
 import SubagentTimeline from './SubagentTimeline.vue'
 import SendCommToolHandler from '@/components/tools/SendCommToolHandler.vue'
 import HookPillStrip from './HookPillStrip.vue'
+import CopyLinkButton from './CopyLinkButton.vue'
 
 const props = defineProps({
   message: {

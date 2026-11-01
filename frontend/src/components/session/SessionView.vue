@@ -202,15 +202,32 @@ const isEphemeralIdle = computed(() => {
     (session.state === 'created' || session.state === 'terminated')
 })
 
+const resolveProjectId = () => sessionStore.getSession(props.sessionId)?.project_id || sessionStore.ghostAgents.get(props.sessionId)?.projectId
+
+let cancelProjectWait = null
+let archiveLoadToken = 0
+
+function waitForProjectId(timeoutMs = 20000) {
+  const known = resolveProjectId()
+  if (known) return Promise.resolve(known)
+  return new Promise((resolve) => {
+    let stop = null
+    const finish = (id) => { clearTimeout(timer); stop?.(); cancelProjectWait = null; resolve(id) }
+    const timer = setTimeout(() => finish(null), timeoutMs)
+    cancelProjectWait = () => finish(null) // leaving the view ends the wait
+    stop = watch(resolveProjectId, (id) => { if (id) finish(id) })
+  })
+}
+
 async function loadArchiveMessages() {
   const archiveId = effectiveArchiveId.value
   if (!archiveId) return
 
-  // Find project ID for this session
-  const session = sessionStore.getSession(props.sessionId)
-  const ghost = sessionStore.ghostAgents.get(props.sessionId)
-  const pid = session?.project_id || ghost?.projectId
-  if (!pid) return
+  // Find project ID for this session (a cold load of the archive route — a deep link — gets here
+  // before the session list arrived: wait for it instead of silently showing nothing)
+  const loadToken = ++archiveLoadToken
+  const pid = await waitForProjectId()
+  if (!pid || loadToken !== archiveLoadToken) return // timed out, or the view was left / re-entered meanwhile
 
   uiStore.showLoading('Loading archived session...')
   try {
@@ -271,6 +288,8 @@ onActivated(async () => {
 // Clear archive data on deactivation so regular-session instances for the same sessionId
 // do not inherit stale archive messages from messagesBySession when reactivated.
 onDeactivated(() => {
+  archiveLoadToken++
+  cancelProjectWait?.()
   if (isArchiveMode.value) {
     messageStore.clearArchiveMessages(props.sessionId)
     resourceStore.clearResources(props.sessionId)
@@ -300,6 +319,8 @@ watch(
 
 // Safety-net cleanup for LRU eviction (onDeactivated already handles the normal navigation case).
 onUnmounted(() => {
+  archiveLoadToken++
+  cancelProjectWait?.()
   if (isArchiveMode.value) {
     messageStore.clearArchiveMessages(props.sessionId)
     resourceStore.clearResources(props.sessionId)

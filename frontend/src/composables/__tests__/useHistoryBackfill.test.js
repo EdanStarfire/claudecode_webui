@@ -182,6 +182,16 @@ describe('history backfill scheduler (issue #2030, minimum pacing rules)', () =>
     expect(calls).toEqual(['theirs', 'theirs'])
   })
 
+  it('showNotice publishes a short banner notice that expires on its own (stage 3 PR 3F)', async () => {
+    vi.useFakeTimers()
+    const t = setup({ pages: 1, slow: () => true })
+    t.scheduler.showNotice(SID, "Couldn't find that message in the history")
+    expect(t.scheduler.statusBySession.value.get(SID).jumpError).toBe("Couldn't find that message in the history")
+    await vi.advanceTimersByTimeAsync(8100)
+    expect(t.scheduler.statusBySession.value.get(SID).jumpError).toBeNull()
+    vi.useRealTimers()
+  })
+
   it('pure sizing/gap functions', () => {
     expect(nextPageBudget(PAGE_BUDGET_BYTES, 100)).toBe(2 * PAGE_BUDGET_BYTES)
     expect(nextPageBudget(MAX_PAGE_BUDGET_BYTES, 100)).toBe(MAX_PAGE_BUDGET_BYTES)
