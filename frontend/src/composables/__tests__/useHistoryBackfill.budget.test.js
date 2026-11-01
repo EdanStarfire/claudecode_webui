@@ -6,7 +6,7 @@ import { TRIM_MIN_INTERVAL_MS, TRIM_RETRY_MS } from '@/utils/historyBudget'
 
 // Issue #2030 stage 4 PR 4d: the scheduler against the REAL message store and the in-memory history
 // server (cursor `b:<record index>`, total_bytes = record count, so budgets here are record counts):
-// the 'budget' pause, demand pages past it, the idle trim and its anti-thrash rules, the phone settle,
+// demand pages past the budget, the idle trim and its anti-thrash rules, the phone settle,
 // and the background keep-bytes hook. Time is a virtual clock; timers are vitest fake timers.
 
 const apiMock = vi.hoisted(() => ({
@@ -69,7 +69,6 @@ async function setup({ budget = 300, turns = 400, tail = 30, pageSize = 15, sess
     sleep: async (ms) => { clock += ms; await new Promise(r => setTimeout(r, 0)) },
     idleSlot: async () => {},
     mutationsInFlight: () => 0,
-    autoBackfillEnabled: () => true,
     isHidden: () => hidden,
     isSlowLink: () => false,
     budgetBytes: () => budget,
@@ -85,6 +84,13 @@ const beforeFetches = (sid = A) => servers[sid].requests.filter(u => String(u).i
 async function settle(scheduler, sid = A, ticks = 4000) {
   for (let i = 0; i < ticks && scheduler.isRunning(sid); i++) await new Promise(r => setTimeout(r, 1))
 }
+// What a user scrolling up does: one demand page after another until `bytes` are loaded (or the history is complete).
+async function loadTo(scheduler, sid, bytes) {
+  for (let i = 0; i < 600 && loaded(sid) < bytes && !store.isHistoryComplete(sid); i++) {
+    scheduler.requestOlder(sid, { urgent: false })
+    await settle(scheduler, sid)
+  }
+}
 
 beforeEach(() => {
   apiMock.get.mockReset()
@@ -97,75 +103,41 @@ afterEach(() => {
   vi.useRealTimers()
 })
 
-describe("background loop: the 'budget' pause", () => {
-  it('loads up to the budget (+ one page), ends with paused: budget and never restarts on its own', async () => {
+describe('demand pages are never refused by the budget', () => {
+  it('keeps loading on demand far past the budget; an idle list then fetches nothing and keeps no timers', async () => {
     const scheduler = await setup({ budget: 300 })
-    scheduler.start(A)
-    await settle(scheduler)
+    await loadTo(scheduler, A, 400)
+    expect(loaded()).toBeGreaterThanOrEqual(400)
     expect(scheduler.isRunning(A)).toBe(false)
-    expect(scheduler.statusBySession.value.get(A)).toMatchObject({ paused: 'budget', loading: false })
-    expect(loaded()).toBeGreaterThanOrEqual(300)
-    expect(loaded()).toBeLessThan(300 + 15 + 1)
     const fetches = beforeFetches()
-    for (let i = 0; i < 20; i++) { clock += 60_000; await new Promise(r => setTimeout(r, 1)) }
     scheduler.start(A) // e.g. the session view re-entering
-    await settle(scheduler)
+    for (let i = 0; i < 20; i++) { clock += 60_000; await new Promise(r => setTimeout(r, 1)) }
     expect(beforeFetches()).toBe(fetches)
-    expect(scheduler.statusBySession.value.get(A)).toMatchObject({ paused: 'budget' })
-  })
-
-  it('a demand page goes past the budget, then the loop ends again', async () => {
-    const scheduler = await setup({ budget: 300 })
-    scheduler.start(A)
-    await settle(scheduler)
-    const before = loaded()
-    scheduler.requestOlder(A)
-    await settle(scheduler)
-    expect(loaded()).toBeGreaterThan(before)
-    expect(scheduler.statusBySession.value.get(A)).toMatchObject({ paused: 'budget' })
-    expect(beforeFetches()).toBeGreaterThan(0)
-  })
-
-  it("'Load full history' (forced auto) is not refused by the budget", async () => {
-    const scheduler = await setup({ budget: 100, turns: 100 })
-    scheduler.start(A)
-    await settle(scheduler)
-    expect(store.isHistoryComplete(A)).toBe(false)
-    scheduler.loadAll(A)
-    scheduler.start(A)
-    await settle(scheduler)
-    expect(store.isHistoryComplete(A)).toBe(true)
+    vi.useFakeTimers()
+    expect(vi.getTimerCount()).toBe(0)
   })
 
   it('Retry after repeated failures fetches the page the user waits for even past the budget', async () => {
     const scheduler = await setup({ budget: 300 })
-    scheduler.start(A)
-    await settle(scheduler)
+    await loadTo(scheduler, A, 300)
     const before = loaded()
     scheduler.retry(A)
     await settle(scheduler)
     expect(loaded()).toBeGreaterThan(before)
   })
 
-  it('a history that fits the budget loads completely as before', async () => {
+  it('a history that fits the budget loads completely on demand', async () => {
     const scheduler = await setup({ budget: 10_000, turns: 100 })
-    scheduler.start(A)
-    await settle(scheduler)
+    await loadTo(scheduler, A, 10_000)
     expect(store.isHistoryComplete(A)).toBe(true)
   })
 
-  it('phone profile: a long history settles at the budget and the loop is idle (no timers, no fetches)', async () => {
-    const scheduler = await setup({ budget: 160, turns: 2000, pageSize: 20 }) // 6000 records, slow-apply sized pages
+  it('a long history is not loaded at all until it is asked for', async () => {
+    const scheduler = await setup({ budget: 160, turns: 2000, pageSize: 20 })
     scheduler.start(A)
     await settle(scheduler)
-    expect(loaded()).toBeLessThanOrEqual(160 + 20)
+    expect(beforeFetches()).toBe(0)
     expect(scheduler.isRunning(A)).toBe(false)
-    const fetches = beforeFetches()
-    vi.useFakeTimers()
-    expect(vi.getTimerCount()).toBe(0)
-    vi.advanceTimersByTime(120_000)
-    expect(beforeFetches()).toBe(fetches)
-    expect(vi.getTimerCount()).toBe(0)
   })
 })
 
@@ -176,9 +148,7 @@ describe('idle trim', () => {
   async function overBudget(budget = 300) {
     const scheduler = await setup({ budget })
     scheduler.setTrimGuard(A, atBottom())
-    scheduler.start(A)
-    await settle(scheduler)
-    for (let i = 0; i < 6; i++) { scheduler.requestOlder(A); await settle(scheduler) }
+    await loadTo(scheduler, A, budget + 60)
     expect(loaded()).toBeGreaterThan(budget)
     scheduler.stop(A) // drops the real-timer trim checks armed while loading
     return scheduler
@@ -195,7 +165,7 @@ describe('idle trim', () => {
     const fetches = beforeFetches()
     scheduler.start(A)
     await vi.advanceTimersByTimeAsync(120_000)
-    expect(beforeFetches()).toBe(fetches) // the paced loop stays off
+    expect(beforeFetches()).toBe(fetches) // nothing refetches on its own
   })
 
   it('waits while a gesture is active, while hidden, and while the guard allows nothing', async () => {
@@ -260,22 +230,23 @@ describe('idle trim', () => {
     expect(store.getHistoryState(A).budgetReached).toBe(true)
   })
 
-  it("'Load full history' is never trimmed afterwards (an explicit request for everything)", async () => {
-    const scheduler = await setup({ budget: 100, turns: 100 })
-    scheduler.setTrimGuard(A, atBottom())
-    scheduler.loadAll(A)
-    await settle(scheduler)
-    expect(store.isHistoryComplete(A)).toBe(true)
-    expect(loaded()).toBeGreaterThan(100)
-    scheduler.stop(A)
+  it('after a trim, scrolling up refetches the released page and the status shows loading', async () => {
+    const scheduler = await overBudget(300)
     vi.useFakeTimers()
     scheduler.requestTrimCheck(A)
-    await vi.advanceTimersByTimeAsync(20_000)
-    expect(store.isHistoryComplete(A)).toBe(true)
-    scheduler.stopForced(A)
-    scheduler.requestTrimCheck(A)
-    await vi.advanceTimersByTimeAsync(20_000)
-    expect(store.isHistoryComplete(A)).toBe(false) // after Stop the budget applies again
+    await vi.advanceTimersByTimeAsync(2500)
+    expect(store.getHistoryState(A).trimmedBytes).toBeGreaterThan(0)
+    const before = loaded()
+    const fetches = beforeFetches()
+    const realFetch = store.fetchOlderPage
+    const loadingDuringFetch = []
+    store.fetchOlderPage = (...args) => { loadingDuringFetch.push(scheduler.statusBySession.value.get(A).loading); return realFetch(...args) }
+    scheduler.requestOlder(A, { urgent: false })
+    await vi.advanceTimersByTimeAsync(1000)
+    expect(loadingDuringFetch).toEqual([true])
+    expect(beforeFetches()).toBe(fetches + 1)
+    expect(loaded()).toBeGreaterThan(before)
+    expect(scheduler.statusBySession.value.get(A).loading).toBe(false)
   })
 
   it('simulated viewport: prefetch near the old edge never fetches a page the trim just released', async () => {
@@ -304,8 +275,7 @@ describe('idle trim', () => {
 describe('background sessions (LRU keep-bytes)', () => {
   it('a session that is no longer current keeps only its newest min(8 MiB, budget/4); live records survive', async () => {
     const scheduler = await setup({ budget: 400, sessions: [A, B] })
-    scheduler.start(A)
-    await settle(scheduler)
+    await loadTo(scheduler, A, 400)
     expect(loaded(A)).toBeGreaterThanOrEqual(400)
     polling.currentSessionId = B
     store.applyRecord(A, { type: 'assistant', message_id: 'live-bg', content: 'x', timestamp: 9000, metadata: {} }, 'live')
@@ -319,10 +289,9 @@ describe('background sessions (LRU keep-bytes)', () => {
     expect(store.getHistoryState(A).budgetReached).toBe(false)
   })
 
-  it('re-entry resumes the budgeted backfill from the kept tail', async () => {
+  it('re-entry loads on demand from the kept tail', async () => {
     const scheduler = await setup({ budget: 400, sessions: [A, B] })
-    scheduler.start(A)
-    await settle(scheduler)
+    await loadTo(scheduler, A, 400)
     polling.currentSessionId = B
     vi.useFakeTimers()
     scheduler.onSessionSwitch(A, B)
@@ -331,16 +300,14 @@ describe('background sessions (LRU keep-bytes)', () => {
     expect(loaded(A)).toBeLessThanOrEqual(100 + 15)
     polling.currentSessionId = A
     scheduler.onSessionSwitch(B, A)
-    scheduler.start(A)
-    await settle(scheduler)
+    await loadTo(scheduler, A, 400)
     expect(loaded(A)).toBeGreaterThanOrEqual(400)
     expect(loaded(A)).toBeLessThan(400 + 16)
   })
 
   it('coming back before the delay cancels the pending background trim', async () => {
     const scheduler = await setup({ budget: 400, sessions: [A, B] })
-    scheduler.start(A)
-    await settle(scheduler)
+    await loadTo(scheduler, A, 400)
     const start = loaded(A)
     vi.useFakeTimers()
     polling.currentSessionId = B
@@ -354,8 +321,7 @@ describe('background sessions (LRU keep-bytes)', () => {
   it('a list scrolled up (not following the live end) is left alone', async () => {
     const scheduler = await setup({ budget: 400, sessions: [A, B] })
     notSticky.add(A) // the list was scrolled up when the user left
-    scheduler.start(A)
-    await settle(scheduler)
+    await loadTo(scheduler, A, 400)
     const start = loaded(A)
     polling.currentSessionId = B
     vi.useFakeTimers()

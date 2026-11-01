@@ -290,7 +290,7 @@ const nextTurn = computed(() => props.virtualNav?.findNextTurn?.() ?? null)
 // An 'idle' index (not requested) is fetched automatically on a normal link, so Prev waits for it
 // like for a loading one; on a slow link nothing loads unrequested, so Prev stays enabled and
 // pressing it fetches the index.
-const slowLink = computed(() => historyBackfill.statusBySession.value.get(props.sessionId)?.mode === 'manual')
+const slowLink = computed(() => historyBackfill.getMode(props.sessionId) === 'manual')
 // Old server / failed index: the stage-1 behaviour — both buttons locked until the history is complete.
 const indexUnavailable = computed(() =>
   !messageStore.isHistoryComplete(props.sessionId) && messageStore.getHistoryIndex(props.sessionId)?.status === 'unavailable')

@@ -2,15 +2,15 @@ import { describe, it, expect, vi } from 'vitest'
 import {
   createHistoryBackfill, detectSlowLink,
   QUIET_MS, CATCHUP_EVENT_COUNT, SLOW_LINK_BPS, PAGE_BUDGET_BYTES, MIN_PAGE_BUDGET_BYTES, MAX_PAGE_BUDGET_BYTES,
-  MAX_PAGE_RECORDS, MAX_GAP_MS, GAP_FACTOR, nextPageBudget, backfillGapMs, APPLY_OK_MS, APPLY_SLOW_MS,
+  MAX_PAGE_RECORDS, nextPageBudget, APPLY_OK_MS, APPLY_SLOW_MS,
 } from '../useHistoryBackfill'
 
-// Issue #2030 (stage 1b): backfill scheduler pacing matrix. Time is virtual: every sleep()
+// Issue #2030 (stage 1b) / #2331: on-demand history page scheduler. Time is virtual: every sleep()
 // advances the clock instantly, so ordering and gaps are asserted without real timers.
 
 const SID = 'sess-1'
 
-function setup({ pages = 5, pageMs = 100, history = {}, polling = {}, hidden = () => false, slow = () => false, mutations = () => 0, autoBackfill = () => true, onSleep } = {}) {
+function setup({ pages = 5, pageMs = 100, history = {}, polling = {}, hidden = () => false, slow = () => false, mutations = () => 0, onSleep } = {}) {
   let clock = 1_000_000
   const state = { remaining: pages, applied: [], fetched: [], aborts: [], restarts: [], sleeps: [] }
   const pollingStore = { currentSessionId: SID, sessionState: 'connected', getLastBatchInfo: () => null, ...polling }
@@ -41,7 +41,6 @@ function setup({ pages = 5, pageMs = 100, history = {}, polling = {}, hidden = (
     sleep: async (ms) => { state.sleeps.push(ms); clock += ms; onSleep?.(state, ms); await new Promise(r => setTimeout(r, 0)) },
     idleSlot: async () => {},
     mutationsInFlight: mutations,
-    autoBackfillEnabled: autoBackfill,
     isHidden: hidden,
     isSlowLink: slow,
   })
@@ -52,27 +51,83 @@ async function settle(scheduler, ticks = 200) {
   for (let i = 0; i < ticks && scheduler.isRunning(SID); i++) await new Promise(r => setTimeout(r, 1))
 }
 
-describe('history backfill scheduler (issue #2030, minimum pacing rules)', () => {
-  it('runs to completion with no ceiling', async () => {
-    const t = setup({ pages: 300, pageMs: 10 })
-    t.scheduler.start(SID)
-    await settle(t.scheduler, 20000)
-    expect(t.state.applied).toHaveLength(300)
+// Chained demand: request one older page at a time until the history is exhausted (what a user
+// scrolling to the top does). `urgent: false` = scroll prefetch (adaptive page budget).
+async function drain(t, { urgent = true, max = 1000 } = {}) {
+  for (let i = 0; i < max && t.state.remaining > 0; i++) {
+    t.scheduler.requestOlder(SID, { urgent })
+    await settle(t.scheduler, 400)
+    if (t.state.applied.length === i) break
+  }
+}
+
+describe('history page scheduler (issue #2331: on-demand only)', () => {
+  it('fetches nothing without a demand and keeps no timers while idle', async () => {
+    vi.useFakeTimers()
+    try {
+      const t = setup({ pages: 5 })
+      t.scheduler.start(SID)
+      await vi.advanceTimersByTimeAsync(60000)
+      expect(t.state.fetched).toHaveLength(0)
+      expect(t.state.sleeps).toHaveLength(0)
+      expect(vi.getTimerCount()).toBe(0)
+      expect(t.scheduler.isRunning(SID)).toBe(false)
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('requestOlder loads exactly one page and then the loop ends', async () => {
+    const t = setup({ pages: 5 })
+    t.scheduler.requestOlder(SID)
+    await settle(t.scheduler)
+    expect(t.state.applied).toHaveLength(1)
     expect(t.scheduler.isRunning(SID)).toBe(false)
+    await new Promise(r => setTimeout(r, 30))
+    expect(t.state.fetched).toHaveLength(1)
+    expect(t.scheduler.statusBySession.value.get(SID).loading).toBe(false)
+  })
+
+  it('chained demands reach the end of the history and clear the status', async () => {
+    const t = setup({ pages: 60, pageMs: 10 })
+    await drain(t)
+    expect(t.state.applied).toHaveLength(60)
+    expect(t.scheduler.isRunning(SID)).toBe(false)
+    expect(t.scheduler.statusBySession.value.has(SID)).toBe(false)
+  })
+
+  it('publishes loading while a page is in flight and clears it afterwards', async () => {
+    const t = setup({ pages: 2 })
+    const seen = []
+    const real = t.messageStore.fetchOlderPage.getMockImplementation()
+    t.messageStore.fetchOlderPage.mockImplementation(async (...a) => { seen.push(t.scheduler.statusBySession.value.get(SID).loading); return real(...a) })
+    t.scheduler.requestOlder(SID)
+    await settle(t.scheduler)
+    expect(seen).toEqual([true])
+    expect(t.scheduler.statusBySession.value.get(SID).loading).toBe(false)
+  })
+
+  it('stop() clears loading / jump / island at once, without waiting for the aborted request', async () => {
+    const t = setup({ pages: 3 })
+    t.messageStore.fetchOlderPage.mockImplementation(() => new Promise(() => {})) // never settles
+    t.scheduler.requestOlder(SID)
+    await new Promise(r => setTimeout(r, 5))
+    expect(t.scheduler.statusBySession.value.get(SID).loading).toBe(true)
+    t.scheduler.stop(SID)
+    expect(t.scheduler.statusBySession.value.get(SID).loading).toBe(false)
   })
 
   it('starts at the base page budget and asks for the server\'s record cap', async () => {
     const t = setup({ pages: 2 })
-    t.scheduler.start(SID)
+    t.scheduler.requestOlder(SID)
     await settle(t.scheduler)
     expect(t.state.fetched[0].opts.maxBytes).toBe(PAGE_BUDGET_BYTES)
     expect(t.state.fetched[0].opts.maxRecords).toBe(MAX_PAGE_RECORDS)
   })
 
-  it('doubles the page budget while pages are fast, up to the server cap', async () => {
+  it('doubles the page budget while prefetch pages are fast, up to the server cap (the estimate outlives each loop)', async () => {
     const t = setup({ pages: 12, pageMs: 50 })
-    t.scheduler.start(SID)
-    await settle(t.scheduler, 2000)
+    await drain(t, { urgent: false })
     const budgets = t.state.fetched.map(f => f.opts.maxBytes)
     expect(budgets.slice(0, 5)).toEqual([256, 512, 1024, 2048, 4096].map(k => k * 1024))
     expect(Math.max(...budgets)).toBe(MAX_PAGE_BUDGET_BYTES)
@@ -81,15 +136,15 @@ describe('history backfill scheduler (issue #2030, minimum pacing rules)', () =>
 
   it('halves the page budget when pages are slow, down to the minimum, and keeps it for mid-speed pages', async () => {
     const slow = setup({ pages: 6, pageMs: 3000 })
-    slow.scheduler.start(SID)
-    await settle(slow.scheduler, 2000)
-    const budgets = slow.state.fetched.map(f => f.opts.maxBytes)
-    expect(budgets.slice(0, 3)).toEqual([256, 128, 64].map(k => k * 1024))
-    expect(Math.min(...budgets)).toBe(MIN_PAGE_BUDGET_BYTES)
+    await drain(slow, { urgent: false })
+    // a prefetch never goes below the base budget (a smaller page only costs another round trip)
+    expect(new Set(slow.state.fetched.map(f => f.opts.maxBytes))).toEqual(new Set([PAGE_BUDGET_BYTES]))
+    expect(nextPageBudget(PAGE_BUDGET_BYTES, 3000)).toBe(PAGE_BUDGET_BYTES / 2)
+    expect(nextPageBudget(MIN_PAGE_BUDGET_BYTES, 3000)).toBe(MIN_PAGE_BUDGET_BYTES)
+    expect(nextPageBudget(PAGE_BUDGET_BYTES, 1000)).toBe(PAGE_BUDGET_BYTES)
 
     const mid = setup({ pages: 4, pageMs: 1000 })
-    mid.scheduler.start(SID)
-    await settle(mid.scheduler, 2000)
+    await drain(mid, { urgent: false })
     expect(new Set(mid.state.fetched.map(f => f.opts.maxBytes))).toEqual(new Set([PAGE_BUDGET_BYTES]))
   })
 
@@ -99,20 +154,12 @@ describe('history backfill scheduler (issue #2030, minimum pacing rules)', () =>
     expect(nextPageBudget(PAGE_BUDGET_BYTES, 100, APPLY_OK_MS)).toBe(PAGE_BUDGET_BYTES * 2)
   })
 
-  it('a failed page shrinks the budget and a history restart resets it', async () => {
-    const t = setup({ pages: 6, pageMs: 50 })
-    t.scheduler.start(SID)
-    await settle(t.scheduler, 4)
-    await settle(t.scheduler, 2000)
-    const grown = Math.max(...t.state.fetched.map(f => f.opts.maxBytes))
-    expect(grown).toBeGreaterThan(PAGE_BUDGET_BYTES)
-
+  it('a failed page shrinks the budget', async () => {
     const e = setup({ pages: 4, pageMs: 50 })
     let calls = 0
     const real = e.messageStore.fetchOlderPage.getMockImplementation()
     e.messageStore.fetchOlderPage.mockImplementation(async (...a) => { calls++; if (calls === 3) throw new Error('timeout'); return real(...a) })
-    e.scheduler.start(SID)
-    await settle(e.scheduler, 2000)
+    await drain(e, { urgent: false })
     const sizes = e.state.fetched.map(f => f.opts.maxBytes)
     // 256K -> 512K -> (3rd call fails, no fetched entry) -> retried at half of the grown 1M budget
     expect(sizes[0]).toBe(PAGE_BUDGET_BYTES)
@@ -120,18 +167,15 @@ describe('history backfill scheduler (issue #2030, minimum pacing rules)', () =>
     expect(sizes[2]).toBe(PAGE_BUDGET_BYTES * 2) // 1 MiB halved after the failure
   })
 
-  it('an on-demand page always uses the base budget even after the budget has grown', async () => {
+  it('an urgent page always uses the base budget even after the budget has grown', async () => {
     const t = setup({ pages: 8, pageMs: 50, slow: () => true })
-    t.scheduler.start(SID)
     for (let i = 0; i < 5; i++) { t.scheduler.requestOlder(SID); await settle(t.scheduler, 30) }
     expect(t.state.fetched.length).toBeGreaterThanOrEqual(3)
     expect(new Set(t.state.fetched.map(f => f.opts.maxBytes))).toEqual(new Set([PAGE_BUDGET_BYTES]))
-    t.scheduler.stop(SID)
   })
 
   it('a prefetch (not urgent) uses the adaptive budget, an urgent request the base budget (stage 3 PR 3D)', async () => {
     const t = setup({ pages: 8, pageMs: 50, slow: () => true })
-    t.scheduler.start(SID)
     for (let i = 0; i < 4; i++) { t.scheduler.requestOlder(SID, { urgent: false }); await settle(t.scheduler, 30) }
     const budgets = t.state.fetched.map(f => f.opts.maxBytes)
     expect(budgets[0]).toBe(PAGE_BUDGET_BYTES)
@@ -140,31 +184,26 @@ describe('history backfill scheduler (issue #2030, minimum pacing rules)', () =>
     t.scheduler.requestOlder(SID, { urgent: true })
     await settle(t.scheduler, 30)
     expect(t.state.fetched[before].opts.maxBytes).toBe(PAGE_BUDGET_BYTES)
-    t.scheduler.stop(SID)
   })
 
   it('a prefetch never uses less than the base budget even when pages are slow', async () => {
     const t = setup({ pages: 6, pageMs: 3000, slow: () => true })
-    t.scheduler.start(SID)
     for (let i = 0; i < 4; i++) { t.scheduler.requestOlder(SID, { urgent: false }); await settle(t.scheduler, 30) }
     expect(t.state.fetched.length).toBeGreaterThanOrEqual(3)
     expect(Math.min(...t.state.fetched.map(f => f.opts.maxBytes))).toBe(PAGE_BUDGET_BYTES)
-    t.scheduler.stop(SID)
   })
 
   it('runs the view hook right before an older page is applied and its returned function right after; a failing hook never fails the page (stage 3 PR 3D)', async () => {
     const t = setup({ pages: 2 })
     const order = []
-    t.messageStore.applyFetchedOlderPage = vi.fn(() => { order.push('apply'); t.state.remaining--; return true })
+    t.messageStore.applyFetchedOlderPage = vi.fn(() => { order.push('apply'); t.state.remaining--; t.state.applied.push(1); return true })
     t.scheduler.setPageApplyHook(SID, () => { order.push('before'); return () => order.push('after') })
-    t.scheduler.start(SID)
-    await settle(t.scheduler)
+    await drain(t)
     expect(order).toEqual(['before', 'apply', 'after', 'before', 'apply', 'after'])
     const t2 = setup({ pages: 1 })
     const failing = () => { throw new Error('boom') }
     t2.scheduler.setPageApplyHook(SID, failing)
-    t2.scheduler.start(SID)
-    await settle(t2.scheduler)
+    await drain(t2)
     expect(t2.state.applied).toHaveLength(1)
     t2.scheduler.clearPageApplyHook(SID, failing)
   })
@@ -177,12 +216,11 @@ describe('history backfill scheduler (issue #2030, minimum pacing rules)', () =>
     t.scheduler.setPageApplyHook(SID, mine)
     t.scheduler.setPageApplyHook(SID, theirs) // another list instance replaced it
     t.scheduler.clearPageApplyHook(SID, mine) // the first instance unmounting must not remove the replacement
-    t.scheduler.start(SID)
-    await settle(t.scheduler)
+    await drain(t)
     expect(calls).toEqual(['theirs', 'theirs'])
   })
 
-  it('showNotice publishes a short banner notice that expires on its own (stage 3 PR 3F)', async () => {
+  it('showNotice publishes a short notice that expires on its own (stage 3 PR 3F)', async () => {
     vi.useFakeTimers()
     const t = setup({ pages: 1, slow: () => true })
     t.scheduler.showNotice(SID, "Couldn't find that message in the history")
@@ -192,41 +230,25 @@ describe('history backfill scheduler (issue #2030, minimum pacing rules)', () =>
     vi.useRealTimers()
   })
 
-  it('pure sizing/gap functions', () => {
+  it('pure sizing function', () => {
     expect(nextPageBudget(PAGE_BUDGET_BYTES, 100)).toBe(2 * PAGE_BUDGET_BYTES)
     expect(nextPageBudget(MAX_PAGE_BUDGET_BYTES, 100)).toBe(MAX_PAGE_BUDGET_BYTES)
     expect(nextPageBudget(MIN_PAGE_BUDGET_BYTES, 9999)).toBe(MIN_PAGE_BUDGET_BYTES)
-    expect(backfillGapMs(0)).toBe(0)
-    expect(backfillGapMs(100)).toBe(100 * GAP_FACTOR)
-    expect(backfillGapMs(60000)).toBe(MAX_GAP_MS)
-  })
-
-  it('leaves (almost) no gap between fast pages and a gap proportional to the page time for slow ones', async () => {
-    const fast = setup({ pages: 3, pageMs: 40 })
-    fast.scheduler.start(SID)
-    await settle(fast.scheduler)
-    expect(fast.state.fetched[1].at - fast.state.applied[0]).toBeLessThanOrEqual(GAP_FACTOR * 40 + 1)
-
-    const slow = setup({ pages: 3, pageMs: 1200 })
-    slow.scheduler.start(SID)
-    await settle(slow.scheduler)
-    expect(slow.state.fetched[1].at - slow.state.applied[0]).toBeGreaterThanOrEqual(GAP_FACTOR * 1200)
-    expect(slow.state.fetched[1].at - slow.state.applied[0]).toBeLessThanOrEqual(MAX_GAP_MS + 1)
   })
 
   it('does not fetch while the tab is hidden and resumes when visible', async () => {
     let hidden = true
     const t = setup({ pages: 2, hidden: () => hidden, onSleep: (state) => { if (state.sleeps.length === 5) hidden = false } })
-    t.scheduler.start(SID)
+    t.scheduler.requestOlder(SID)
     await settle(t.scheduler)
     expect(t.state.sleeps.length).toBeGreaterThanOrEqual(5)
     expect(t.state.fetched[0].at).toBeGreaterThan(1_000_000) // nothing fetched before it became visible
-    expect(t.state.applied).toHaveLength(2)
+    expect(t.state.applied).toHaveLength(1)
   })
 
   it.each(['connecting', 'resyncing', 'backoff', 'unreachable'])('pauses while the connection is %s', async (connState) => {
     const t = setup({ pages: 1, polling: { sessionState: connState }, onSleep: (state) => { if (state.sleeps.length === 3) t.pollingStore.sessionState = 'connected' } })
-    t.scheduler.start(SID)
+    t.scheduler.requestOlder(SID)
     await settle(t.scheduler)
     expect(t.state.sleeps.length).toBeGreaterThanOrEqual(3)
     expect(t.state.applied).toHaveLength(1)
@@ -236,7 +258,7 @@ describe('history backfill scheduler (issue #2030, minimum pacing rules)', () =>
     const t = setup({ pages: 1 })
     const burstAt = t.clock()
     t.pollingStore.getLastBatchInfo = () => ({ at: burstAt, count: CATCHUP_EVENT_COUNT })
-    t.scheduler.start(SID)
+    t.scheduler.requestOlder(SID)
     await settle(t.scheduler, 5)
     expect(t.state.fetched).toHaveLength(0) // still inside QUIET_MS
     t.advance(QUIET_MS + 1)
@@ -245,14 +267,10 @@ describe('history backfill scheduler (issue #2030, minimum pacing rules)', () =>
     expect(t.state.applied).toHaveLength(1)
   })
 
-  it('waits for a quiet window after any live batch', async () => {
+  it('a small live batch does not hold a requested page back', async () => {
     const t = setup({ pages: 1 })
-    const at = t.clock()
-    t.pollingStore.getLastBatchInfo = () => ({ at, count: 1 })
-    t.scheduler.start(SID)
-    await settle(t.scheduler, 5)
-    expect(t.state.fetched).toHaveLength(0)
-    t.advance(QUIET_MS + 1)
+    t.pollingStore.getLastBatchInfo = () => ({ at: t.clock(), count: 1 })
+    t.scheduler.requestOlder(SID)
     await settle(t.scheduler)
     expect(t.state.applied).toHaveLength(1)
   })
@@ -260,78 +278,18 @@ describe('history backfill scheduler (issue #2030, minimum pacing rules)', () =>
   it('pauses while a user REST action is in flight', async () => {
     let inFlight = 1
     const t = setup({ pages: 1, mutations: () => inFlight, onSleep: (state) => { if (state.sleeps.length === 3) inFlight = 0 } })
-    t.scheduler.start(SID)
+    t.scheduler.requestOlder(SID)
     await settle(t.scheduler)
     expect(t.state.sleeps.length).toBeGreaterThanOrEqual(3)
     expect(t.state.applied).toHaveLength(1)
   })
 
-  it('the autoBackfill setting off stops the background loop, on-demand pages still load, and turning it on resumes (issue #2030 stage 3 PR 3D)', async () => {
-    let on = false
-    const t = setup({ pages: 4, autoBackfill: () => on })
-    t.scheduler.start(SID)
-    await new Promise(r => setTimeout(r, 20))
-    expect(t.state.fetched).toHaveLength(0)
-    expect(t.scheduler.statusBySession.value.get(SID).paused).toBe('auto-off')
-    // an on-demand page (scroll toward the edge) is user priority: it loads although auto-load is off
-    t.scheduler.requestOlder(SID)
-    await new Promise(r => setTimeout(r, 20))
-    expect(t.state.fetched).toHaveLength(1)
-    expect(t.state.fetched[0].opts.maxBytes).toBe(PAGE_BUDGET_BYTES)
-    // setting back on: the remaining pages follow
-    on = true
-    await settle(t.scheduler, 400)
-    expect(t.state.applied).toHaveLength(4)
-  })
-
-  it('stopForced ends a "Load full history" override so the autoBackfill setting applies again', async () => {
-    const t = setup({ pages: 50, pageMs: 5, autoBackfill: () => false })
-    t.scheduler.start(SID)
-    t.scheduler.loadAll(SID)
-    expect(t.scheduler.statusBySession.value.get(SID).forced).toBe(true)
-    await new Promise(r => setTimeout(r, 15))
-    t.scheduler.stopForced(SID)
-    expect(t.scheduler.statusBySession.value.get(SID).forced).toBe(false)
-    await new Promise(r => setTimeout(r, 15))
-    const fetchedAtStop = t.state.fetched.length
-    await new Promise(r => setTimeout(r, 30))
-    expect(t.state.fetched.length).toBe(fetchedAtStop)
-    t.scheduler.stop(SID)
-  })
-
-  it('"Load full history" overrides the autoBackfill setting', async () => {
-    const t = setup({ pages: 3, autoBackfill: () => false })
-    t.scheduler.start(SID)
-    await new Promise(r => setTimeout(r, 10))
-    expect(t.state.fetched).toHaveLength(0)
-    t.scheduler.loadAll(SID)
-    await settle(t.scheduler)
-    expect(t.state.applied).toHaveLength(3)
-  })
-
-  it('the background loop yields to a user-driven island fetch and resumes after it', async () => {
-    const t = setup({ pages: 2 })
-    let release
-    t.messageStore.getIsland = () => ({ hasMoreBefore: true, hasMoreAfter: false })
-    t.messageStore.fetchIslandPage = vi.fn(() => new Promise(resolve => { release = () => resolve({ edge: 'before', records: [] }) }))
-    t.messageStore.applyIslandPage = vi.fn(() => true)
-    const island = t.scheduler.requestIslandOlder(SID)
-    t.scheduler.start(SID)
-    await new Promise(r => setTimeout(r, 20))
-    expect(t.state.fetched).toHaveLength(0)
-    expect(t.scheduler.statusBySession.value.get(SID).paused).toBe('user-fetch')
-    release()
-    await island
-    await settle(t.scheduler)
-    expect(t.state.applied).toHaveLength(2)
-  })
-
-  it('reports the measured page latency of the suffix loop and of the island', async () => {
+  it('reports the measured page latency of the suffix pages and of the island, also between loops', async () => {
     const t = setup({ pages: 2, pageMs: 300, slow: () => true })
     expect(t.scheduler.getPageLatencyMs(SID)).toBe(0)
-    t.scheduler.start(SID)
     t.scheduler.requestOlder(SID)
-    await new Promise(r => setTimeout(r, 20))
+    await settle(t.scheduler)
+    expect(t.scheduler.isRunning(SID)).toBe(false)
     expect(t.scheduler.getPageLatencyMs(SID)).toBeGreaterThanOrEqual(300)
     t.messageStore.getIsland = () => ({ hasMoreBefore: true, hasMoreAfter: false })
     t.messageStore.fetchIslandPage = vi.fn(async () => { t.advance(120); return { edge: 'before', records: [] } })
@@ -342,103 +300,112 @@ describe('history backfill scheduler (issue #2030, minimum pacing rules)', () =>
 
   it('never throttles an archive view on a live connection state', async () => {
     const t = setup({ pages: 1, history: { source: 'archive' }, polling: { sessionState: 'archived' } })
-    t.scheduler.start(SID)
+    t.scheduler.requestOlder(SID)
     await settle(t.scheduler)
     expect(t.state.applied).toHaveLength(1)
   })
 
   it('stops (and aborts the in-flight page) when the session is no longer current', async () => {
     const t = setup({ pages: 50 })
-    t.scheduler.start(SID)
+    t.pollingStore.sessionState = 'connecting' // hold the request so the session can change under it
+    t.scheduler.requestOlder(SID)
     await settle(t.scheduler, 3)
     t.pollingStore.currentSessionId = 'other'
     await settle(t.scheduler)
     expect(t.scheduler.isRunning(SID)).toBe(false)
-    expect(t.state.applied.length).toBeLessThan(50)
+    expect(t.state.applied).toHaveLength(0)
     t.scheduler.stop(SID)
     expect(t.state.aborts.every(c => c.signal.aborted)).toBe(true)
   })
 
-  it('keeps a single loop per session (rapid restart is a no-op while running)', async () => {
+  it('keeps a single loop per session (rapid requests share it)', async () => {
     const t = setup({ pages: 3 })
-    t.scheduler.start(SID)
-    t.scheduler.start(SID)
-    t.scheduler.start(SID)
+    t.scheduler.requestOlder(SID)
+    t.scheduler.requestOlder(SID)
+    t.scheduler.requestOlder(SID)
     await settle(t.scheduler)
-    expect(t.state.applied).toHaveLength(3)
-    expect(t.messageStore.fetchOlderPage).toHaveBeenCalledTimes(3)
+    expect(t.state.applied).toHaveLength(1)
+    expect(t.messageStore.fetchOlderPage).toHaveBeenCalledTimes(1)
   })
 
   it('restarts from the tail when the server says the cursor/history is no longer valid', async () => {
     const t = setup({ pages: 2 })
     t.state.failNext = true
-    t.scheduler.start(SID)
+    t.scheduler.requestOlder(SID)
     await settle(t.scheduler)
     expect(t.state.restarts).toHaveLength(1)
     expect(t.state.restarts[0][3]).toMatchObject({ window: 'tail', baseUrl: '/x' })
-    expect(t.state.applied).toHaveLength(2)
+    expect(t.state.applied).toHaveLength(1) // the requested page still lands after the restart
   })
 
   it('a failing tail restart counts as an ordinary failure (no unhandled rejection) and an archive restart owns its signal', async () => {
     const t = setup({ pages: 2, history: { source: 'archive' }, polling: { sessionState: 'archived' } })
     t.state.failNext = true
     t.messageStore.loadMessages.mockRejectedValueOnce(new Error('offline'))
-    t.scheduler.start(SID)
+    t.scheduler.requestOlder(SID)
     await settle(t.scheduler)
     expect(t.messageStore.loadMessages).toHaveBeenCalledTimes(1)
     expect(t.messageStore.loadMessages.mock.calls[0][3].signal).toBeInstanceOf(AbortSignal) // archive views never claim the live tracker
-    expect(t.state.applied).toHaveLength(2) // recovered after the counted failure
+    expect(t.state.applied).toHaveLength(1) // recovered after the counted failure
   })
 
   it('holds an applied page back during a scroll gesture unless the viewport is near the top', async () => {
     const t = setup({ pages: 1, onSleep: (state) => { if (state.sleeps.length === 4) t.scheduler.setScrollInteraction(SID, { gestureActive: false, nearTop: false }) } })
     t.scheduler.setScrollInteraction(SID, { gestureActive: true, nearTop: false })
-    t.scheduler.start(SID)
+    t.scheduler.requestOlder(SID)
     await settle(t.scheduler)
     expect(t.state.sleeps.length).toBeGreaterThanOrEqual(4)
     expect(t.state.applied).toHaveLength(1)
 
     const nearTop = setup({ pages: 1 })
     nearTop.scheduler.setScrollInteraction(SID, { gestureActive: true, nearTop: true })
-    nearTop.scheduler.start(SID)
+    nearTop.scheduler.requestOlder(SID)
     await settle(nearTop.scheduler)
     expect(nearTop.state.applied).toHaveLength(1)
   })
 
+  it('a page held back (connection backoff) is reported as paused while pending; clearError drops a stale load error', async () => {
+    const t = setup({ pages: 1, polling: { sessionState: 'backoff' } })
+    t.scheduler.requestOlder(SID)
+    await new Promise(r => setTimeout(r, 20))
+    expect(t.scheduler.statusBySession.value.get(SID).paused).toBe('connection-backoff')
+    t.pollingStore.sessionState = 'connected'
+    await settle(t.scheduler)
+    expect(t.state.applied).toHaveLength(1)
+    t.scheduler.statusBySession.value = new Map([[SID, { mode: 'auto', paused: null, loading: false, error: 'boom' }]])
+    t.scheduler.clearError(SID)
+    expect(t.scheduler.statusBySession.value.get(SID).error).toBeNull()
+  })
+
+  it('the last older page ending the loop does not wipe the status of a jump still in flight', async () => {
+    const t = setup({ pages: 1 })
+    t.messageStore.loadAround = vi.fn(() => new Promise(() => {}))
+    t.messageStore.getIsland = () => null
+    t.scheduler.requestOlder(SID)
+    t.scheduler.jumpAround(SID, { cursor: 'b:5' }, { label: 'turn 4' })
+    await settle(t.scheduler)
+    expect(t.scheduler.statusBySession.value.get(SID)?.jump).toMatchObject({ label: 'turn 4' })
+    t.scheduler.stop(SID)
+  })
+
   describe('slow-link mode', () => {
-    it('performs no automatic backfill', async () => {
+    it('reports manual mode but still loads exactly one page per request', async () => {
       const t = setup({ pages: 5, slow: () => true })
       t.scheduler.start(SID)
       await settle(t.scheduler, 30)
       expect(t.state.fetched).toHaveLength(0)
-      expect(t.scheduler.statusBySession.value.get(SID).mode).toBe('manual')
-      t.scheduler.stop(SID)
-    })
-
-    it('loads exactly one page per on-demand request', async () => {
-      const t = setup({ pages: 5, slow: () => true })
-      t.scheduler.start(SID)
+      expect(t.scheduler.getMode(SID)).toBe('manual')
       t.scheduler.requestOlder(SID)
       await settle(t.scheduler, 30)
       expect(t.state.applied).toHaveLength(1)
       t.scheduler.requestOlder(SID)
       await settle(t.scheduler, 30)
       expect(t.state.applied).toHaveLength(2)
-      t.scheduler.stop(SID)
-    })
-
-    it('"Load full history" switches the session to paced automatic backfill', async () => {
-      const t = setup({ pages: 4, slow: () => true })
-      t.scheduler.start(SID)
-      t.scheduler.loadAll(SID)
-      await settle(t.scheduler, 500)
-      expect(t.state.applied).toHaveLength(4)
     })
   })
 
-  it('an on-demand page bypasses the inter-page gap but not the catch-up pause', async () => {
+  it('a requested page does not bypass the catch-up pause', async () => {
     const t = setup({ pages: 2, slow: () => true })
-    t.scheduler.start(SID)
     const burstAt = t.clock()
     t.pollingStore.getLastBatchInfo = () => ({ at: burstAt, count: CATCHUP_EVENT_COUNT })
     t.scheduler.requestOlder(SID)
@@ -447,16 +414,22 @@ describe('history backfill scheduler (issue #2030, minimum pacing rules)', () =>
     t.pollingStore.getLastBatchInfo = () => null
     await settle(t.scheduler, 30)
     expect(t.state.applied).toHaveLength(1)
-    t.scheduler.stop(SID)
   })
 
-  it('gives up with an error status after repeated failures and can be retried', async () => {
+  it('gives up with an error status after repeated failures and Retry resumes', async () => {
     const t = setup({ pages: 1 })
     t.messageStore.fetchOlderPage.mockRejectedValue(new Error('boom'))
-    t.scheduler.start(SID)
+    t.scheduler.requestOlder(SID)
     await settle(t.scheduler, 500)
-    expect(t.scheduler.statusBySession.value.get(SID).error).toBe('boom')
+    const status = t.scheduler.statusBySession.value.get(SID)
+    expect(status.error).toBe('boom')
+    expect(status.loading).toBe(false)
     expect(t.scheduler.isRunning(SID)).toBe(false)
+    t.messageStore.fetchOlderPage.mockImplementation(async () => ({ records: [], hasMoreBefore: false }))
+    t.scheduler.retry(SID)
+    await settle(t.scheduler, 200)
+    expect(t.state.applied).toHaveLength(1)
+    expect(t.scheduler.statusBySession.value.get(SID)?.error ?? null).toBeNull()
   })
 })
 
@@ -555,6 +528,30 @@ describe('jumpAround / island pages (issue #2030 stage 3 PR 3C-1)', () => {
     expect(calls.loadAround[0].opts.signal.aborted).toBe(true)
     calls.resolve()
     await expect(second.promise).resolves.toBeTruthy()
+  })
+
+  it('the spinner state never sticks: a superseded jump hands over to the new one, which then clears it; stop() (session switch) clears at once', async () => {
+    const t = setup({ pages: 3, slow: () => true })
+    const calls = withIsland(t)
+    const status = () => t.scheduler.statusBySession.value.get(SID)
+    const first = t.scheduler.jumpAround(SID, { cursor: 'b:5' }, { label: 'one' })
+    const second = t.scheduler.jumpAround(SID, { cursor: 'b:9' }, { label: 'two' })
+    await expect(first.promise).rejects.toMatchObject({ reason: 'aborted' })
+    expect(status().jump).toMatchObject({ label: 'two' }) // the aborted first must not clear the second's
+    calls.resolve()
+    await second.promise
+    expect(status()?.jump ?? null).toBeNull()
+    // an island page in flight and a jump in flight are both cleared by stop() without waiting for the requests
+    t.messageStore.fetchIslandPage = vi.fn(() => new Promise(() => {}))
+    void t.scheduler.requestIslandOlder(SID)
+    await new Promise(r => setTimeout(r, 5))
+    expect(status().island).toMatchObject({ loading: 'before' })
+    t.scheduler.stop(SID)
+    expect(status().island ?? null).toBeNull()
+    const third = t.scheduler.jumpAround(SID, { cursor: 'b:7' }, { label: 'three' })
+    t.scheduler.stop(SID)
+    expect(status().jump ?? null).toBeNull()
+    await expect(third.promise).rejects.toMatchObject({ reason: 'aborted' })
   })
 
   it('works in slow-link (manual) mode and needs no backfill loop', async () => {

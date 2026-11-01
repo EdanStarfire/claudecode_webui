@@ -1853,78 +1853,152 @@ describe('tail-first history (issue #2030, stage 1b)', () => {
     return all
   }
 
-  it('shows a non-blocking "loading older history" banner while the history is incomplete, and removes it when complete', async () => {
+  const spinner = () => document.querySelector('[data-testid="history-loading-spinner"]')
+  const notice = () => document.querySelector('[data-testid="history-notice"]')
+
+  it('opens a long session with neither a spinner nor a notice nor a banner (nothing loads unrequested)', async () => {
+    const { historyBackfill } = await import('@/composables/useHistoryBackfill')
     const { messageStore } = await mountWithStore()
     await installTail(messageStore, messagesAt(30, 60))
-    await new Promise(r => setTimeout(r, 50))
-
-    const banner = document.querySelector('[data-testid="history-banner"]')
-    expect(banner).toBeTruthy()
-    expect(banner.textContent).toContain('Loading older history')
-    // The banner sits outside the scroll container, so it can never shift scroll coordinates.
-    expect(document.querySelector('.messages-area').contains(banner)).toBe(false)
-
-    messageStore.applyFetchedOlderPage(SESSION, await messageStore.fetchOlderPage(SESSION, { signal: new AbortController().signal }))
-    await new Promise(r => setTimeout(r, 50))
+    await new Promise(r => setTimeout(r, 100))
+    expect(spinner()).toBeFalsy()
+    expect(notice()).toBeFalsy()
     expect(document.querySelector('[data-testid="history-banner"]')).toBeFalsy()
+    expect(document.querySelector('.history-banner-btn')).toBeFalsy()
+    expect(historyBackfill.isRunning(SESSION)).toBe(false)
   })
 
-  it('shows the memory-budget banner (and its buttons) once the loop paused at the budget or a trim released the old end (stage 4 PR 4d)', async () => {
+  it('shows the spinner for a page load, a jump and an island page, and nothing otherwise; it is a labelled status', async () => {
     const { historyBackfill } = await import('@/composables/useHistoryBackfill')
     const { messageStore } = await mountWithStore()
     await installTail(messageStore, messagesAt(30, 60))
-    await new Promise(r => setTimeout(r, 50))
-    const banner = () => document.querySelector('[data-testid="history-banner"]')
-    expect(banner().textContent).toContain('Loading older history')
-    historyBackfill.statusBySession.value = new Map([[SESSION, { mode: 'auto', paused: 'budget', loading: false, error: null }]])
-    await new Promise(r => setTimeout(r, 30))
-    expect(banner().textContent).toContain('Older history is not loaded to save memory — scroll up or Load older')
-    expect(document.querySelector('[data-testid="history-load-older"]')).toBeTruthy()
-    expect(document.querySelector('[data-testid="history-load-full"]')).toBeTruthy()
-    const requestOlder = vi.spyOn(historyBackfill, 'requestOlder').mockImplementation(() => {})
-    await fireEvent.click(document.querySelector('[data-testid="history-load-older"]'))
-    expect(requestOlder).toHaveBeenCalledWith(SESSION)
-    // "Load full history" is running (between two pages nothing is in flight): the loading banner with Stop, not the budget copy
-    historyBackfill.statusBySession.value = new Map([[SESSION, { mode: 'auto', paused: 'budget', loading: false, error: null, forced: true }]])
-    await new Promise(r => setTimeout(r, 30))
-    expect(banner().textContent).toContain('Loading older history')
-    expect(document.querySelector('[data-testid="history-autoload-off"]')).toBeTruthy()
-    historyBackfill.statusBySession.value = new Map()
-    await new Promise(r => setTimeout(r, 30))
-    expect(banner().textContent).toContain('Loading older history')
+    const set = async (patch) => {
+      historyBackfill.statusBySession.value = patch ? new Map([[SESSION, { mode: 'auto', paused: null, loading: false, error: null, ...patch }]]) : new Map()
+      await new Promise(r => setTimeout(r, 30))
+    }
+    await set({})
+    expect(spinner()).toBeFalsy()
+    await set({ loading: true })
+    expect(spinner()).toBeTruthy()
+    expect(spinner().getAttribute('role')).toBe('status')
+    expect(spinner().textContent).toContain('Loading history')
+    // outside the scroll container: it can never shift scroll coordinates
+    expect(document.querySelector('.messages-area').contains(spinner())).toBe(false)
+    await set({ paused: 'connection-backoff' })
+    expect(spinner()).toBeTruthy() // a requested page held back is still pending
+    await set({ jump: { label: 'turn 4' } })
+    expect(spinner()).toBeTruthy()
+    await set({ island: { loading: 'before', error: null } })
+    expect(spinner()).toBeTruthy()
+    await set({ island: { loading: null, error: null } })
+    await new Promise(r => setTimeout(r, 330)) // the 250 ms anti-blink hold
+    expect(spinner()).toBeFalsy()
+    await set(null)
+    expect(spinner()).toBeFalsy()
   })
 
-  it('the loading banner can stop the background loading, and the off banner turns it back on or loads everything (stage 3 PR 3D)', async () => {
+  it('holds the spinner 250 ms after a load ends so chained pages do not blink; a session switch drops it at once', async () => {
     const { historyBackfill } = await import('@/composables/useHistoryBackfill')
-    const { messageStore, pinia } = await mountWithStore()
-    const { useUIStore } = await import('@/stores/ui')
-    const ui = useUIStore(pinia)
-    ui.setAutoBackfill(true)
+    const { messageStore } = await mountWithStore()
     await installTail(messageStore, messagesAt(30, 60))
-    await new Promise(r => setTimeout(r, 50))
-    const banner = () => document.querySelector('[data-testid="history-banner"]')
-    expect(banner().textContent).toContain('Loading older history')
-    expect(banner().textContent).not.toMatch(/Showing newest|gated|locked/i)
-    await fireEvent.click(document.querySelector('[data-testid="history-autoload-off"]'))
-    expect(ui.autoBackfillEnabled).toBe(false)
+    const set = async (loading, wait = 20) => {
+      historyBackfill.statusBySession.value = new Map([[SESSION, { mode: 'auto', paused: null, loading, error: null }]])
+      await new Promise(r => setTimeout(r, wait))
+    }
+    await set(true)
+    await set(false, 100)
+    expect(spinner()).toBeTruthy() // still held
+    await set(true) // the next chained page: never went away
+    expect(spinner()).toBeTruthy()
+    await set(false, 330)
+    expect(spinner()).toBeFalsy()
+    await set(true)
+    viewSessionIdRef.value = 'other-session'
     await new Promise(r => setTimeout(r, 30))
-    expect(banner().textContent).toContain('loads as you scroll up')
-    expect(document.querySelector('[data-testid="history-autoload-off"]')).toBeFalsy()
-    // a running "Load full history" shows the loading banner again, with Stop
-    historyBackfill.statusBySession.value = new Map([[SESSION, { mode: 'auto', paused: null, loading: true, error: null, forced: true }]])
+    expect(spinner()).toBeFalsy()
+    viewSessionIdRef.value = SESSION
+    historyBackfill.statusBySession.value = new Map()
+  })
+
+  it('the spinner is gone when the component unmounts', async () => {
+    const { historyBackfill } = await import('@/composables/useHistoryBackfill')
+    const { messageStore, wrapper } = await mountWithStore()
+    await installTail(messageStore, messagesAt(30, 60))
+    historyBackfill.statusBySession.value = new Map([[SESSION, { mode: 'auto', paused: null, loading: true, error: null }]])
     await new Promise(r => setTimeout(r, 30))
-    expect(banner().textContent).toContain('Loading older history')
-    expect(document.querySelector('[data-testid="history-autoload-off"]')).toBeTruthy()
+    expect(spinner()).toBeTruthy()
+    wrapper.unmount()
+    expect(spinner()).toBeFalsy()
+    historyBackfill.statusBySession.value = new Map()
+  })
+
+  it('a load error shows an alert notice with a focusable Retry that retries', async () => {
+    const { historyBackfill } = await import('@/composables/useHistoryBackfill')
+    const { messageStore } = await mountWithStore()
+    await installTail(messageStore, messagesAt(30, 60))
+    historyBackfill.statusBySession.value = new Map([[SESSION, { mode: 'auto', paused: null, loading: false, error: 'boom' }]])
+    await new Promise(r => setTimeout(r, 30))
+    expect(notice().getAttribute('role')).toBe('alert')
+    expect(notice().textContent).toContain("Couldn't load older history: boom")
+    expect(document.querySelector('.messages-area').contains(notice())).toBe(false)
+    const retry = vi.spyOn(historyBackfill, 'retry').mockImplementation(() => {})
+    const button = document.querySelector('[data-testid="history-notice-retry"]')
+    expect(button.tagName).toBe('BUTTON') // natively focusable, Enter / Space activate it
+    expect(button.disabled).toBe(false)
+    expect(button.tabIndex).toBeGreaterThanOrEqual(0)
+    button.focus()
+    expect(document.activeElement).toBe(button)
+    await fireEvent.click(button)
+    expect(retry).toHaveBeenCalledWith(SESSION)
+    historyBackfill.statusBySession.value = new Map()
+    vi.restoreAllMocks()
+  })
+
+  it('a jump / not-found notice is text only (status role, no buttons) and absent when the status is empty', async () => {
+    const { historyBackfill } = await import('@/composables/useHistoryBackfill')
+    const { messageStore } = await mountWithStore()
+    await installTail(messageStore, messagesAt(30, 60))
+    expect(notice()).toBeFalsy()
+    historyBackfill.statusBySession.value = new Map([[SESSION, { mode: 'auto', paused: null, loading: false, error: null, jumpError: "Couldn't find that message in the history" }]])
+    await new Promise(r => setTimeout(r, 30))
+    expect(notice().getAttribute('role')).toBe('status')
+    expect(notice().querySelector('button')).toBeFalsy()
     historyBackfill.statusBySession.value = new Map()
     await new Promise(r => setTimeout(r, 30))
-    const loadAll = vi.spyOn(historyBackfill, 'loadAll').mockImplementation(() => {})
-    vi.spyOn(window, 'confirm').mockReturnValue(true)
-    await fireEvent.click(document.querySelector('[data-testid="history-load-full"]'))
-    expect(loadAll).toHaveBeenCalledWith(SESSION)
-    await fireEvent.click(document.querySelector('[data-testid="history-autoload-on"]'))
-    expect(ui.autoBackfillEnabled).toBe(true)
-    vi.restoreAllMocks()
-    ui.setAutoBackfill(true)
+    expect(notice()).toBeFalsy()
+  })
+
+  it('toggling the spinner and the notice adds nothing to the scroll container (no flow insertion, no banner-height plumbing)', async () => {
+    const { historyBackfill } = await import('@/composables/useHistoryBackfill')
+    const { messageStore, container } = await mountWithStore()
+    await installTail(messageStore, messagesAt(30, 60))
+    await new Promise(r => setTimeout(r, 50))
+    const area = container.querySelector('.messages-area')
+    const wrapperEl = container.querySelector('.messages-area-wrapper')
+    const snapshot = () => ({ areaChildren: area.children.length, areaHtmlLength: area.innerHTML.length, wrapperStyle: wrapperEl.getAttribute('style') || '' })
+    const idle = snapshot()
+    for (const patch of [{ loading: true }, { error: 'boom' }, { jumpError: 'x' }, { jump: { label: 'y' } }]) {
+      historyBackfill.statusBySession.value = new Map([[SESSION, { mode: 'auto', paused: null, loading: false, error: null, ...patch }]])
+      await new Promise(r => setTimeout(r, 30))
+      expect(snapshot()).toEqual(idle)
+    }
+    expect(idle.wrapperStyle).not.toContain('history-banner-height')
+    historyBackfill.statusBySession.value = new Map()
+  })
+
+  it('the overlays are absolutely positioned, the spinner is click-through, reduced motion stops the rotation, the search bar is back at top: 12px', async () => {
+    const { readFileSync } = await import('node:fs')
+    const src = (rel) => readFileSync(`${process.cwd()}/src/${rel}`, 'utf8')
+    const spinnerSrc = src('components/messages/HistoryLoadingSpinner.vue')
+    expect(spinnerSrc).toMatch(/\.history-loading-spinner \{[^}]*position: absolute;[^}]*pointer-events: none;/s)
+    expect(spinnerSrc).toMatch(/opacity: 0\.6/)
+    expect(spinnerSrc).toMatch(/@media \(prefers-reduced-motion: reduce\)[\s\S]*animation: history-spinner-pulse/)
+    const listSrc = src('components/messages/MessageList.vue')
+    expect(listSrc).toMatch(/\.history-notice \{[^}]*position: absolute;/s)
+    expect(listSrc).not.toContain('history-banner')
+    const css = src('assets/styles.css')
+    expect(css).toMatch(/\.message-search-bar \{[^}]*top: 12px;/s)
+    expect(css).not.toContain('--history-banner-height')
   })
 
   it('registers its older-page view hook with the scheduler and removes only its own on unmount (issue #2320 follow-up)', async () => {
@@ -1939,30 +2013,25 @@ describe('tail-first history (issue #2030, stage 1b)', () => {
     vi.restoreAllMocks()
   })
 
-  it('renders no banner for a session shorter than one window', async () => {
+  it('renders no spinner or notice for a session shorter than one window', async () => {
     const { messageStore } = await mountWithStore()
     await installTail(messageStore, messagesAt(30, 40), { hasMoreBefore: false })
     await new Promise(r => setTimeout(r, 50))
-    expect(document.querySelector('[data-testid="history-banner"]')).toBeFalsy()
+    expect(spinner()).toBeFalsy()
+    expect(notice()).toBeFalsy()
   })
 
-  it('slow-link mode shows the manual banner with "Load older history" and "Load full history"', async () => {
+  it('slow-link mode shows no banner or buttons (nothing loads unrequested; scrolling still loads)', async () => {
     const { historyBackfill } = await import('@/composables/useHistoryBackfill')
     const { messageStore } = await mountWithStore()
     await installTail(messageStore, messagesAt(30, 60))
     historyBackfill.statusBySession.value = new Map([[SESSION, { mode: 'manual', paused: null, loading: false, error: null }]])
     await new Promise(r => setTimeout(r, 50))
-
-    expect(document.querySelector('[data-testid="history-banner"]').textContent).toContain('loads as you scroll up on this connection')
-    const loadOlder = vi.spyOn(historyBackfill, 'requestOlder').mockImplementation(() => {})
-    const loadAll = vi.spyOn(historyBackfill, 'loadAll').mockImplementation(() => {})
-    await fireEvent.click(document.querySelector('[data-testid="history-load-older"]'))
-    expect(loadOlder).toHaveBeenCalledWith(SESSION)
-    vi.spyOn(window, 'confirm').mockReturnValue(true)
-    await fireEvent.click(document.querySelector('[data-testid="history-load-full"]'))
-    expect(loadAll).toHaveBeenCalledWith(SESSION)
+    expect(spinner()).toBeFalsy()
+    expect(notice()).toBeFalsy()
+    expect(document.querySelector('[data-testid="history-load-older"]')).toBeFalsy()
+    expect(document.querySelector('[data-testid="history-load-full"]')).toBeFalsy()
     historyBackfill.statusBySession.value = new Map()
-    vi.restoreAllMocks()
   })
 
   describe('turn navigation over the history index (stage 2 PR B)', () => {
@@ -2051,21 +2120,18 @@ describe('tail-first history (issue #2030, stage 1b)', () => {
       expect(setSticky).toHaveBeenLastCalledWith(expect.anything(), true)
     })
 
-    it('shows the jump banner and a Cancel button that cancels the jump', async () => {
+    it('a running jump shows the spinner (no text banner, no Cancel button)', async () => {
       const { historyBackfill } = await import('@/composables/useHistoryBackfill')
-      const { messageStore } = await mountTail()
-      const cancel = vi.spyOn(historyBackfill, 'cancelJump').mockImplementation(() => {})
+      await mountTail()
       historyBackfill.statusBySession.value = new Map([[SESSION, {
         mode: 'auto', paused: null, loading: true, error: null,
         jump: { ordinal: 4 },
       }]])
       await new Promise(r => setTimeout(r, 50))
-      const banner = document.querySelector('[data-testid="history-banner"]')
-      expect(banner.textContent).toContain('Loading turn 4…')
-      await fireEvent.click(document.querySelector('[data-testid="history-jump-cancel"]'))
-      expect(cancel).toHaveBeenCalledWith(SESSION)
+      expect(document.querySelector('[data-testid="history-loading-spinner"]')).toBeTruthy()
+      expect(document.querySelector('[data-testid="history-banner"]')).toBeFalsy()
+      expect(document.querySelector('[data-testid="history-jump-cancel"]')).toBeFalsy()
       historyBackfill.statusBySession.value = new Map()
-      vi.restoreAllMocks()
     })
   })
 
@@ -2400,7 +2466,7 @@ describe('tail-first history (issue #2030, stage 1b)', () => {
       })
     })
 
-    it('the jump banner names the search result', async () => {
+    it('a search-hit jump shows the spinner while the window loads', async () => {
       const { historyBackfill } = await import('@/composables/useHistoryBackfill')
       await mountTail()
       historyBackfill.statusBySession.value = new Map([[SESSION, {
@@ -2408,7 +2474,7 @@ describe('tail-first history (issue #2030, stage 1b)', () => {
         jump: { label: 'search result' },
       }]])
       await new Promise(r => setTimeout(r, 50))
-      expect(document.querySelector('[data-testid="history-banner"]').textContent).toContain('Loading search result…')
+      expect(document.querySelector('[data-testid="history-loading-spinner"]')).toBeTruthy()
       historyBackfill.statusBySession.value = new Map()
     })
   })
@@ -2712,13 +2778,13 @@ describe('tail-first history (issue #2030, stage 1b)', () => {
       vi.restoreAllMocks()
     })
 
-    it('with the whole history loaded an unknown id shows the notice (banner included) and drops the param', async () => {
+    it('with the whole history loaded an unknown id shows the notice (notice shown) and drops the param', async () => {
       const { historyBackfill } = await import('@/composables/useHistoryBackfill')
       const notice = vi.spyOn(historyBackfill, 'showNotice')
       const { router } = await mountLinked('no-such-id', { hasMoreBefore: false })
       expect(notice).toHaveBeenCalledWith(SESSION, "Couldn't find that message in the history")
       expect(router.replace).toHaveBeenCalledWith({ query: { other: '1' } })
-      expect(document.querySelector('[data-testid="history-banner"]').textContent).toContain("Couldn't find that message")
+      expect(document.querySelector('[data-testid="history-notice"]').textContent).toContain("Couldn't find that message")
       historyBackfill.statusBySession.value = new Map()
       vi.restoreAllMocks()
     })
@@ -2961,19 +3027,19 @@ describe('tail-first history (issue #2030, stage 1b)', () => {
       vi.restoreAllMocks()
     })
 
-    it('a launch the server cannot find (404) shows a banner message and keeps the chip', async () => {
+    it('a launch the server cannot find (404) shows a notice and keeps the chip', async () => {
       const { messageStore } = await mountLegs([[3, 'launch-1']])
       messageStore.applyTaskLifecycleFrame(SESSION, 'task_started', { task_id: 'task-ghost', tool_use_id: 'launch-ghost', description: 'ghost' }, 1700000004)
       await new Promise(r => setTimeout(r, 50))
       const ghost = [...document.querySelectorAll('[data-testid="lane-launched-earlier"]')].find(el => el.getAttribute('aria-label').includes('ghost'))
       ghost.click()
       await new Promise(r => setTimeout(r, 150))
-      const banner = document.querySelector('[data-testid="history-banner"]')
+      const banner = document.querySelector('[data-testid="history-notice"]')
       expect(banner.textContent).toContain("Couldn't find the launching message in the history")
       expect(document.querySelectorAll('[data-testid="lane-launched-earlier"]').length).toBeGreaterThan(0)
     })
 
-    it('parent_unresolved (window anchored on the tool_call record) shows the banner message', async () => {
+    it('parent_unresolved (window anchored on the tool_call record) shows the notice', async () => {
       const { server } = await mountLegs([[3, 'launch-1']])
       const handle = server.handle
       apiMock.get.mockImplementation(async (url) => {
@@ -2982,11 +3048,11 @@ describe('tail-first history (issue #2030, stage 1b)', () => {
       })
       chip().click()
       await new Promise(r => setTimeout(r, 150))
-      const banner = document.querySelector('[data-testid="history-banner"]')
+      const banner = document.querySelector('[data-testid="history-notice"]')
       expect(banner?.textContent).toContain("Couldn't find the launching message in the history")
     })
 
-    it('a busy server (503 resolve_busy) shows a banner message and keeps the chip', async () => {
+    it('a busy server (503 resolve_busy) shows a notice and keeps the chip', async () => {
       await mountLegs([[3, 'launch-1']])
       apiMock.get.mockImplementation(async (url) => {
         if (url.includes('around_id=')) throw Object.assign(new Error('resolve_busy'), { status: 503 })
@@ -2994,7 +3060,7 @@ describe('tail-first history (issue #2030, stage 1b)', () => {
       })
       chip().click()
       await new Promise(r => setTimeout(r, 150))
-      expect(document.querySelector('[data-testid="history-banner"]').textContent).toContain('The server is busy')
+      expect(document.querySelector('[data-testid="history-notice"]').textContent).toContain('The server is busy')
       expect(chip()).toBeTruthy()
     })
 

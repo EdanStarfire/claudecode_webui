@@ -263,7 +263,7 @@ untouched. Docker sessions receive it via `CLAUDE_DOCKER_EXTRA_ENV`. Manual work
 The browser keeps a bounded amount of a long session's history, measured in bytes of the history file the
 loaded records cover (`frontend/src/utils/historyBudget.js`): **64 MiB desktop, 32 MiB on a phone profile**
 (viewport < 768 px, `navigator.deviceMemory <= 4`, or a coarse pointer); hidden support override
-`localStorage.historyBudgetMiB`. Background backfill stops at the budget, an idle trim releases the old end back to
+`localStorage.historyBudgetMiB`. Older history loads only on demand (scroll or jump; no background loading), an idle trim releases the old end back to
 0.75 x budget (never within 12 viewports of the viewport, at most every 30 s), a session that is no longer
 current keeps `min(8 MiB, budget/4)`, and the pinned island releases its far edge past the budget. Pages the user
 asks for are never refused by the budget (a user scrolling up keeps loading). Details: `frontend/CLAUDE.md`.

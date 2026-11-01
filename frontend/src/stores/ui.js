@@ -95,10 +95,6 @@ export const useUIStore = defineStore('ui', () => {
   // Auto-scroll state
   const autoScrollEnabled = ref(true)
 
-  // Issue #2030 (stage 3 PR 3D): background loading of the older history behind the newest window.
-  // On by default; off = older history loads only as the user scrolls up (or presses the banner button).
-  const autoBackfillEnabled = ref(readStorage('autoBackfill', true) !== false)
-
   // Issue #1631: Per-session sticky-to-bottom visibility (read by SessionStatusBar)
   const stickyToBottomBySession = ref(new Map())
   // Issue #1631: Per-session scroll-to-bottom request tokens (watched by MessageList)
@@ -356,11 +352,6 @@ export const useUIStore = defineStore('ui', () => {
     autoScrollEnabled.value = enabled
   }
 
-  function setAutoBackfill(enabled) {
-    autoBackfillEnabled.value = !!enabled
-    writeStorage('autoBackfill', autoBackfillEnabled.value)
-  }
-
   function setStickyToBottom(sessionId, value) {
     if (stickyToBottomBySession.value.get(sessionId) === value) return
     const next = new Map(stickyToBottomBySession.value)
@@ -588,7 +579,6 @@ export const useUIStore = defineStore('ui', () => {
     windowWidth,
     isMobile,
     autoScrollEnabled,
-    autoBackfillEnabled,
     stickyToBottomBySession,
     scrollToBottomTokenBySession,
     theme,
@@ -640,7 +630,6 @@ export const useUIStore = defineStore('ui', () => {
     toggleRightPanel,
     setRightPanelVisible,
     setAutoScroll,
-    setAutoBackfill,
     setStickyToBottom,
     requestScrollToBottom,
     setTTSReadAloud,

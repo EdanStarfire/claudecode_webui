@@ -1,24 +1,17 @@
 <template>
-  <div class="messages-area-wrapper flex-grow-1" :style="{ '--history-banner-height': `${historyBannerHeight}px` }">
-    <!-- Issue #2030 (stage 1b): the list opens on the newest window; older history backfills in
-         the background. Lives OUTSIDE the scroll container so its appearance/disappearance can
-         never shift the virtualizer's scroll coordinates. -->
+  <div class="messages-area-wrapper flex-grow-1">
+    <!-- Issue #2331: floating spinner and error/not-found notice, both OUTSIDE the scroll container
+         and position:absolute so their appearance can never shift the virtualizer's coordinates. -->
+    <HistoryLoadingSpinner :visible="spinnerVisible" />
     <div
-      v-if="historyBanner"
-      class="history-banner d-flex align-items-center gap-2 px-3 py-1 small"
-      :class="{ 'history-banner-error': historyBanner.kind === 'error' || historyBanner.kind === 'jump-error' }"
-      role="status"
-      data-testid="history-banner"
-      ref="historyBannerEl"
+      v-if="historyNotice"
+      class="history-notice small"
+      :class="{ 'history-notice-error': historyNotice.kind === 'error' }"
+      :role="historyNotice.kind === 'error' ? 'alert' : 'status'"
+      data-testid="history-notice"
     >
-      <span v-if="historyBanner.kind === 'loading' || historyBanner.kind === 'jump'" class="spinner-border spinner-border-sm flex-shrink-0" aria-hidden="true"></span>
-      <span class="flex-grow-1">{{ historyBanner.text }}</span>
-      <button v-if="historyBanner.kind === 'manual' || historyBanner.kind === 'budget'" class="btn btn-sm btn-outline-secondary py-0 history-banner-btn" data-testid="history-load-older" @click="loadOlderHistory">Load older history</button>
-      <button v-if="historyBanner.kind === 'loading'" class="btn btn-sm btn-outline-secondary py-0 history-banner-btn" data-testid="history-autoload-off" aria-label="Stop loading older history in the background" title="Stop loading older history in the background; it then loads as you scroll up" @click="setAutoBackfill(false)">Stop</button>
-      <button v-if="historyBanner.kind === 'off'" class="btn btn-sm btn-outline-secondary py-0 history-banner-btn" data-testid="history-autoload-on" @click="setAutoBackfill(true)">Load in background</button>
-      <button v-if="historyBanner.kind === 'manual' || historyBanner.kind === 'off' || historyBanner.kind === 'budget'" class="btn btn-sm btn-outline-secondary py-0 history-banner-btn" data-testid="history-load-full" @click="loadFullHistory">Load full history</button>
-      <button v-if="historyBanner.kind === 'jump'" class="btn btn-sm btn-outline-secondary py-0 history-banner-btn" data-testid="history-jump-cancel" @click="cancelTurnJump">Cancel</button>
-      <button v-if="historyBanner.kind === 'error'" class="btn btn-sm btn-outline-danger py-0 history-banner-btn" @click="historyBackfill.retry(viewSessionId)">Retry</button>
+      <span class="history-notice-text">{{ historyNotice.text }}</span>
+      <button v-if="historyNotice.kind === 'error'" class="btn btn-sm btn-outline-danger py-0 history-notice-btn" data-testid="history-notice-retry" @click="historyBackfill.retry(viewSessionId)">Retry</button>
     </div>
     <div class="messages-area overflow-auto" :class="{ 'theme-red': uiStore.isRedBackground }" ref="messagesArea" role="log" aria-live="polite" aria-label="Conversation messages" @scroll="onScroll" data-testid="message-list">
       <div class="messages-content" ref="messagesContent">
@@ -186,6 +179,7 @@ import { usePollingStore } from '@/stores/polling'
 import MessageItem from './MessageItem.vue'
 import CompactionEventGroup from './CompactionEventGroup.vue'
 import StreamingPreview from './StreamingPreview.vue'
+import HistoryLoadingSpinner from './HistoryLoadingSpinner.vue'
 import TruncationBanner from './TruncationBanner.vue'
 import DeferredToolBanner from './DeferredToolBanner.vue'
 import SubagentAnchorRow from './SubagentAnchorRow.vue'
@@ -430,58 +424,50 @@ const visibleIndexRange = computed(() => {
   return { top: rows[0].virtualRow.index, bottom: rows[rows.length - 1].virtualRow.index }
 })
 
-// Issue #2030 (stage 1b): history banner + scroll-up sentinel. Everything here reads the same
-// "history complete" flag the gated features (turn navigation, PreCompact indicators, search) read.
+// Issue #2331: floating spinner + notice overlay. Older history loads only on demand (scroll / jump).
 const historyStatus = computed(() => historyBackfill.statusBySession.value.get(viewSessionId.value) || null)
-const historyBanner = computed(() => {
+const historyLoading = computed(() => {
+  const status = historyStatus.value
+  // `paused`: a requested page is held back (connection, hidden tab, catch-up) — still pending, still show it.
+  return !!(status && (status.loading || status.paused || status.jump || status.island?.loading))
+})
+// Between two chained pages the status flips false -> true within a frame or two: hold the spinner for
+// SPINNER_HOLD_MS after a load ends so it does not blink (skipped under reduced motion; a session
+// switch re-syncs it at once, an unmount drops the timer).
+const SPINNER_HOLD_MS = 250
+const spinnerVisible = ref(historyLoading.value)
+let spinnerHoldTimer = null
+function clearSpinnerHold() {
+  clearTimeout(spinnerHoldTimer)
+  spinnerHoldTimer = null
+}
+watch(historyLoading, (loading) => {
+  if (loading) {
+    clearSpinnerHold()
+    spinnerVisible.value = true
+    return
+  }
+  const reduced = typeof window !== 'undefined' && window.matchMedia?.('(prefers-reduced-motion: reduce)')?.matches
+  if (reduced) { spinnerVisible.value = false; return }
+  clearSpinnerHold()
+  spinnerHoldTimer = setTimeout(() => { spinnerHoldTimer = null; spinnerVisible.value = false }, SPINNER_HOLD_MS)
+})
+watch(viewSessionId, () => {
+  clearSpinnerHold()
+  spinnerVisible.value = historyLoading.value
+})
+onUnmounted(clearSpinnerHold)
+const historyNotice = computed(() => {
   const sessionId = viewSessionId.value
   if (!sessionId) return null
   const status = historyStatus.value
   // A notice (a failed jump, a link to a message that is not there) shows even with the whole history loaded.
   if (status?.jumpError) return { kind: 'jump-error', text: status.jumpError }
-  if (messageStore.isHistoryComplete(sessionId)) return null
-  const fraction = messageStore.historyProgress(sessionId)?.fraction
-  const percent = fraction != null ? ` ${Math.round(fraction * 100)} %` : ''
-  if (status?.error) return { kind: 'error', text: `Couldn't load older history: ${status.error}` }
-  if (status?.jump) {
-    return { kind: 'jump', text: `Loading ${status.jump.label || `turn ${status.jump.ordinal}`}…` }
+  if (status?.error && !messageStore.isHistoryComplete(sessionId)) {
+    return { kind: 'error', text: `Couldn't load older history: ${status.error}` }
   }
-  // The loaded part reached the memory budget (or an idle trim released the old end): older history stays
-  // out until the user scrolls to it or asks (the paced loop does not restart).
-  if (!status?.loading && !status?.forced && (status?.paused === 'budget' || messageStore.getHistoryState(sessionId)?.budgetReached)) {
-    return { kind: 'budget', text: 'Older history is not loaded to save memory — scroll up or Load older' }
-  }
-  if (status?.mode === 'manual') {
-    return { kind: 'manual', text: `Older history loads as you scroll up on this connection.${percent && ` (${percent.trim()} loaded)`}` }
-  }
-  if (!uiStore.autoBackfillEnabled && !status?.forced) {
-    return { kind: 'off', text: `Older history loads as you scroll up.${percent && ` (${percent.trim()} loaded)`}` }
-  }
-  return { kind: 'loading', text: `Loading older history…${percent}` }
+  return null
 })
-
-function setAutoBackfill(enabled) {
-  uiStore.setAutoBackfill(enabled)
-  if (!enabled) historyBackfill.stopForced(viewSessionId.value) // "Stop" also ends a "Load full history"
-}
-
-// The floating search bar sits below the banner: publish the banner's rendered height as a CSS
-// variable (it wraps to several lines on a phone).
-const historyBannerEl = ref(null)
-const historyBannerHeight = ref(0)
-let bannerObserver = null
-watch(historyBannerEl, (el) => {
-  bannerObserver?.disconnect()
-  bannerObserver = null
-  if (!el) { historyBannerHeight.value = 0; return }
-  const update = () => { historyBannerHeight.value = el.offsetHeight }
-  update()
-  if (typeof ResizeObserver !== 'undefined') {
-    bannerObserver = new ResizeObserver(update)
-    bannerObserver.observe(el)
-  }
-}, { flush: 'post' })
-onUnmounted(() => bannerObserver?.disconnect())
 
 // Island state for the gap row (issue #2030 stage 3 PR 3C-1)
 const islandLoading = computed(() => historyStatus.value?.island?.loading || null)
@@ -583,25 +569,8 @@ function jumpToLatest() {
   scrollToBottomViaVirtualizer()
 }
 
-function loadOlderHistory() {
-  historyBackfill.requestOlder(viewSessionId.value)
-}
-
-// The status bar owns the jump (confirm guard, scroll once loaded); the banner only cancels it.
-function cancelTurnJump() {
-  historyBackfill.cancelJump(viewSessionId.value)
-}
-
-function loadFullHistory() {
-  if (typeof window !== 'undefined' && typeof window.confirm === 'function' &&
-      !window.confirm('Load the full conversation history? On a slow or metered connection this can use a lot of data.')) {
-    return
-  }
-  historyBackfill.loadAll(viewSessionId.value)
-}
-
 // Scroll-driven loading (issue #2030 stage 3 PR 3D): scrolling toward an interval edge prefetches the
-// next page of that interval at user priority (no inter-page gap, still paused while the live stream
+// next page of that interval at user priority (still held back while the live stream
 // is catching up) — up for any interval, down for the pinned island. The prefetch distance is three
 // viewport heights, widened to what the user would scroll through while one page is in flight
 // (measured page latency x recent scroll speed) so a fast scroll does not reach the edge first.
@@ -646,16 +615,15 @@ function evaluateHistoryEdges() {
   historyBackfill.setScrollInteraction(sessionId, { gestureActive: userGestureActive.value, nearTop })
   historyBackfill.requestTrimCheck(sessionId) // cheap: arms an idle trim only while over the memory budget
   if (isInitialLoad.value || messageStore.isHistoryComplete(sessionId) || turnJumpsOpen > 0) return
-  // Only a user who is (or just was) scrolling asks for a page: an idle list is extended by the
-  // background loop (or, in slow-link mode / with auto-load off, not at all — nothing loads unrequested).
+  // Only a user who is (or just was) scrolling asks for a page: an idle list asks for nothing
+  // (older history loads only on demand).
   const nowMs = performance.now()
   const userActive = (userGestureActive.value && nowMs > programmaticUntil) || pointerDown || nowMs - lastUserInputAt <= PREFETCH_USER_ACTIVE_MS
   if (!userActive) return
-  // A failed fetch waits for the banner's Retry / the error to clear instead of retrying on every scroll event.
+  // A failed fetch waits for the notice's Retry / the error to clear instead of retrying on every scroll event.
   const status = historyStatus.value
   if (status?.error) return
-  // Up: the topmost interval pages upward (the island when one is loaded — the suffix keeps its own
-  // background backfill — the suffix otherwise). Within one screen of the top the user is already waiting.
+  // Up: the topmost interval pages upward (the island when one is loaded, the suffix otherwise). Within one screen of the top the user is already waiting.
   if (nearTop) {
     if (!island) historyBackfill.requestOlder(sessionId, { urgent: top < ch })
     else if (island.hasMoreBefore && !status?.island?.error) historyBackfill.requestIslandOlder(sessionId)
@@ -850,7 +818,7 @@ function clampedLegRow(leg, spans) {
 
 // The lane chip of a leg launched before the loaded intervals: one bounded window around its
 // launching message (around_id=<tool_use_id>), through the same island path as every other jump.
-// A slow link confirms first (it names the window size); failures surface in the history banner.
+// A slow link confirms first (it names the window size); failures surface in the history notice.
 // A slow link confirms before a jump that loads a window (it names the size); true = the user declined.
 function declinedWindowJump(sessionId, what) {
   return jumpNeedsConfirm({ slowLink: historyBackfill.getMode(sessionId) === 'manual' }) &&
@@ -872,7 +840,7 @@ async function jumpToLaunch(lane) {
       await bringLaunchCardIntoView(lane)
     }
   } catch {
-    // failed (the banner says why), cancelled or superseded: the loaded intervals are left as is
+    // failed (the notice says why), cancelled or superseded: the loaded intervals are left as is
   } finally {
     endTurnJump()
   }
@@ -991,7 +959,7 @@ async function landOnLinkedMessage(id) {
         return
       }
       if (seq !== linkSeq) return
-      // The window just landed above the suffix and the banner changed height: let the list settle first.
+      // The window just landed above the suffix and the list re-lays out: let it settle first.
       await nextTick()
       for (let frame = 0; frame < 4; frame++) await nextFrame()
       index = rowOfLinkedMessage(id)
@@ -1218,7 +1186,7 @@ function matchRowIndex({ messageId, toolId }) {
 
 // Issue #2030 (stage 3 PR 3C-1): a server search hit that is not loaded opens through the same
 // jump as turn navigation: ONE bounded `around=<hit cursor>` window (about 0.5 MB of history) that
-// becomes the island, with progress banner and cancel; only a slow link asks first (the window
+// becomes the island, with the loading spinner; only a slow link asks first (the window
 // size is in the question). Resolves 'loaded' | 'declined' | 'cancelled' | 'not-found'.
 let activeSearchJump = null
 
@@ -1285,7 +1253,7 @@ async function scrollToMessageMatch(match) {
       }
       return false
     }
-    // The jump just prepended pages and the banner changed height (the list area resizes a few
+    // The jump just prepended pages (the list re-lays out a few
     // frames later): let the list and the virtualizer settle before resolving the row, or the
     // re-render that follows would drop the highlight applied below.
     await nextTick()
@@ -1901,26 +1869,52 @@ function normalizeMessage(message) {
   overflow: hidden;
 }
 
-.history-banner {
-  flex: 0 0 auto;
-  flex-wrap: wrap;
-  /* clear the floating search toggle that sits at the top-right of the list */
-  padding-right: 3.25rem !important;
+/* Issue #2331: error / not-found notice over the top-left of the list: no layout space, clears the
+   32 px search toggle at the right edge. */
+.history-notice {
+  position: absolute;
+  top: 8px;
+  left: 12px;
+  right: 56px;
+  max-width: 480px;
+  z-index: 6;
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.25rem 0.6rem;
   background: var(--bs-tertiary-bg);
-  border-bottom: 1px solid var(--bs-border-color);
+  border: 1px solid var(--bs-border-color);
+  border-radius: 6px;
   color: var(--bs-secondary-color);
 }
 
-.history-banner-error {
+.history-notice-text {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  display: -webkit-box;
+  -webkit-line-clamp: 1;
+  line-clamp: 1;
+  -webkit-box-orient: vertical;
+}
+
+.history-notice-error {
   color: var(--bs-danger);
 }
 
-/* Touch-sized banner controls on a phone. */
+.history-notice-btn {
+  flex: 0 0 auto;
+}
+
 @media (max-width: 767.98px) {
-  .history-banner-btn {
+  .history-notice-text {
+    -webkit-line-clamp: 2;
+    line-clamp: 2;
+  }
+  .history-notice-btn {
     min-height: 44px;
     padding-inline: 0.9rem;
-    /* the 44 px hit area must not make the banner taller than its one text line */
+    /* the 44 px hit area must not make the notice taller than its text */
     margin-block: -9px;
   }
 }

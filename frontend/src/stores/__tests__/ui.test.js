@@ -219,23 +219,4 @@ describe('ui store', () => {
       expect(localStorage.getItem('webui-sidebar-compactMinionTreeRows')).toBe(JSON.stringify(true))
     })
   })
-  describe('autoBackfill (issue #2030 stage 3 PR 3D)', () => {
-    it('is on by default, persists to webui-sidebar-autoBackfill and is restored from it', async () => {
-      vi.resetModules()
-      const { useUIStore } = await import('@/stores/ui')
-      const store = useUIStore()
-      expect(store.autoBackfillEnabled).toBe(true)
-
-      store.setAutoBackfill(false)
-      expect(store.autoBackfillEnabled).toBe(false)
-      expect(localStorage.getItem('webui-sidebar-autoBackfill')).toBe('false')
-
-      vi.resetModules()
-      const { useUIStore: again } = await import('@/stores/ui')
-      expect(again().autoBackfillEnabled).toBe(false)
-
-      again().setAutoBackfill(true)
-      expect(localStorage.getItem('webui-sidebar-autoBackfill')).toBe('true')
-    })
-  })
 })

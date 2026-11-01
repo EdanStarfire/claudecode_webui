@@ -234,7 +234,7 @@ export const useSessionStore = defineStore('session', () => {
     _hydrateSecondaryData(sessionId, { includeUsage })
     if (!skipPolling) {
       // Issue #2030 (stage 2 PR B): the history index follows the window and the snapshots.
-      import('../composables/useHistoryBackfill').then(({ startBackfillIfIncomplete }) => startBackfillIfIncomplete(sessionId, snapshotPromises))
+      import('../composables/useHistoryBackfill').then(({ scheduleIndexIfIncomplete }) => scheduleIndexIfIncomplete(sessionId, snapshotPromises))
     }
     return true
   }
