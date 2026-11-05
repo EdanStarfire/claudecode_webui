@@ -423,7 +423,7 @@ For detailed store documentation, see [frontend/CLAUDE.md](./frontend/CLAUDE.md#
 - `orphanedToolUses` (Map): Tools marked as orphaned
 
 **Key Actions**:
-- `loadMessages()`: Paginated loading with orphaned detection
+- `loadMessages()`: Tail-first window load (`{window: 'tail'}`) with orphaned detection
 - `addMessage()`, `addToolCall()`, `updateToolCall()`
 - `handleToolUse()`, `handlePermissionRequest()`, `handlePermissionResponse()`, `handleToolResult()`
 - `toggleToolExpansion()`: Collapse/expand tool cards

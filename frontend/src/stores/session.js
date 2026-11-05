@@ -155,7 +155,6 @@ export const useSessionStore = defineStore('session', () => {
    * connection explicitly archived instead of starting a connection that will sit idle
    * forever (an implicit, uninspectable "nothing will ever arrive" turned into an
    * explicit state).
-
    */
   async function runDataHydrationChain(sessionId, abortController, { includeUsage = true, skipPolling = false } = {}) {
     const snapshotPromises = [] // agents/tasks/background snapshot requests the history index waits for
@@ -168,7 +167,7 @@ export const useSessionStore = defineStore('session', () => {
       // Issue #2140 (builder-review fix): claim the shared history-load controller HERE,
       // unconditionally — not just when retryHydration() happens to call it first. Without
       // this, re-entering this branch for a session whose PREVIOUS load is still in flight
-      // (e.g. the user switched away before it finished, then switched back) would resume using
+      // (e.g. the user switched away before it finished, then switched back) would reuse
       // the stale, still-live controller instead of aborting it first. Also gives the catch block
       // below the actual signal that matters for "was my attempt the one just pre-empted" — the
       // outer `abortController` here only tracks THIS selection's stage-ownership, not whether a
