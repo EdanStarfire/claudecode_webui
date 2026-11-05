@@ -7,9 +7,11 @@ system messages into a greppable .md file for archived sessions.
 
 import json
 import logging
+import os
 from datetime import UTC, datetime
 from pathlib import Path
 
+from .archive_io import run_archive_io
 from .models.messages import LegacyMessageFormatError
 
 logger = logging.getLogger(__name__)
@@ -62,6 +64,10 @@ async def distill_session_history(
     """
     Distill raw messages.jsonl into a human-readable markdown summary.
 
+    The whole-file scan runs on the archive thread pool (issue #2312) so a large session does
+    not block the event loop. The output is written to a temp name and renamed, so a cancelled
+    caller (the thread cannot be interrupted) never leaves a half-written markdown file.
+
     Args:
         messages_jsonl_path: Path to the source messages.jsonl file
         output_path: Path to write the output markdown file
@@ -71,6 +77,22 @@ async def distill_session_history(
     Returns:
         True on success, False on failure
     """
+    return await run_archive_io(
+        _distill_session_history_sync,
+        messages_jsonl_path,
+        output_path,
+        session_id,
+        archive_timestamp,
+    )
+
+
+def _distill_session_history_sync(
+    messages_jsonl_path: Path,
+    output_path: Path,
+    session_id: str,
+    archive_timestamp: str,
+) -> bool:
+    """Blocking body of :func:`distill_session_history`."""
     try:
         if not messages_jsonl_path.exists():
             logger.warning(f"Messages file not found for distillation: {messages_jsonl_path}")
@@ -231,8 +253,13 @@ async def distill_session_history(
         # Ensure output directory exists
         output_path.parent.mkdir(parents=True, exist_ok=True)
 
-        with open(output_path, "w", encoding="utf-8") as f:
-            f.write("\n".join(lines))
+        tmp_output = output_path.with_name(f".{output_path.name}.tmp")
+        try:
+            with open(tmp_output, "w", encoding="utf-8") as f:
+                f.write("\n".join(lines))
+            os.replace(tmp_output, output_path)
+        finally:
+            tmp_output.unlink(missing_ok=True)
 
         logger.info(
             f"Distilled session history for {session_id}: "
