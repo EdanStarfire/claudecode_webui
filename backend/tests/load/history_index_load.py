@@ -14,7 +14,8 @@ scanned per fixture class and query kind, a 113 MB isolation probe, and the mixe
 with search traffic, supersede / disconnect / delete / reset churn, versus an open-only control
 of the same seed); see ``phase_search``.
 
-Phases: ``cold`` (cold index scan time / peak RSS / loop lag / response size per fixture class),
+Phases: ``archive`` (issue #2312: loop lag while a 113 MB session is deleted / reset, alone and 2 at once),
+``cold`` (cold index scan time / peak RSS / loop lag / response size per fixture class),
 ``firstpaint`` (window + agents + tasks latency with every cold scan of 1 and of 4 sessions
 triggered together; run it against ``--tree`` = a ``main`` checkout for the baseline), ``load``
 (N simulated browsers + cancellation / delete / reset churn + probes; asserts a-g), ``memory``
@@ -517,6 +518,51 @@ async def phase_load(be: Backend, fixtures: dict[str, Path], report: dict, *,
     }
 
 
+async def phase_archive(be: Backend, report: dict, *, scale: float = 1.0, concurrent: int = 2) -> None:
+    """Issue #2312: event-loop lag while a large session is deleted / reset (archive-and-clear).
+
+    One ~113 MB / 90k-record session (``tool_results_metadata`` rows) per operation, measured in
+    isolation with the 10 ms ticker, plus ``concurrent`` deletes and ``concurrent`` resets issued
+    together. Reports lag max/p99 and the main-thread block stacks for each case."""
+    from .fixture_gen import generate_session_file
+
+    p = PRESETS["huge"]
+    src = be.workdir / "archive_huge.jsonl"
+    generate_session_file(src, records=max(200, int(p["records"] * scale)),
+                          target_bytes=max(1 << 20, int(p["bytes"] * scale)), session_id="archive",
+                          seed=11, tool_results_metadata=True)
+    out: dict = {"fixture_mb": round(src.stat().st_size / 2**20, 1)}
+
+    async def case(label: str, op: str, count: int) -> None:
+        sids = [await be.new_session(src, f"{label}-{i}") for i in range(count)]
+        await asyncio.sleep(1.0)
+        await be.metrics(reset=True)
+        t0 = time.perf_counter()
+
+        async def one(sid: str):
+            if op == "delete":
+                return await be.client.delete(f"/api/sessions/{sid}")
+            return await be.client.post(f"/api/sessions/{sid}/reset")
+
+        responses = await asyncio.gather(*[one(s) for s in sids], return_exceptions=True)
+        wall = (time.perf_counter() - t0) * 1000.0
+        await asyncio.sleep(0.5)
+        m = await be.metrics()
+        ok = all(not isinstance(r, Exception) and r.status_code == 200 for r in responses)
+        out[label] = {"op": op, "sessions": count, "all_200": ok, "wall_ms": round(wall, 1),
+                      "lag": m["lag"], "block_stacks": m.get("block_stacks", [])[:6]}
+
+    await case("delete", "delete", 1)
+    await case("reset", "reset", 1)
+    await case("delete_concurrent", "delete", concurrent)
+    await case("reset_concurrent", "reset", concurrent)
+    out["checks"] = {f"{k}_lag_max_lt_100ms": out[k]["lag"]["max_ms"] < 100
+                     for k in ("delete", "reset", "delete_concurrent", "reset_concurrent")}
+    out["checks"]["all_200"] = all(out[k]["all_200"] for k in
+                                   ("delete", "reset", "delete_concurrent", "reset_concurrent"))
+    report["archive"] = out
+
+
 async def phase_memory(be: Backend, report: dict, *, sessions: int = 70) -> None:
     """~70 small/medium sessions touched: cache memory vs ~55 B/turn and the LRU cap."""
     work = Path(tempfile.mkdtemp(prefix="hi_mem_"))
@@ -948,7 +994,7 @@ async def amain(args) -> int:
     rc = 0
     try:
         await be.start()
-        phases = {"cold", "firstpaint", "load", "memory", "search"} if args.phase == "all" else {args.phase}
+        phases = {"cold", "firstpaint", "load", "memory", "search", "archive"} if args.phase == "all" else {args.phase}
         with_index = not args.baseline
         if "cold" in phases and with_index:
             await phase_cold(be, fixtures, report)
@@ -959,6 +1005,10 @@ async def amain(args) -> int:
                              args_scale=args.scale, with_index=with_index,
                              churn=not args.no_churn)
             if args.assert_checks and not all(report["load"]["checks"].values()):
+                rc = 1
+        if "archive" in phases:
+            await phase_archive(be, report, scale=args.scale)
+            if args.assert_checks and not all(report["archive"]["checks"].values()):
                 rc = 1
         if "memory" in phases and with_index:
             await phase_memory(be, report, sessions=args.memory_sessions)
@@ -982,7 +1032,7 @@ async def amain(args) -> int:
 
 def main() -> None:
     ap = argparse.ArgumentParser()
-    ap.add_argument("--phase", default="all", choices=["all", "cold", "firstpaint", "load", "memory", "search"])
+    ap.add_argument("--phase", default="all", choices=["all", "cold", "firstpaint", "load", "memory", "search", "archive"])
     ap.add_argument("--tree", default=None, help="checkout to run the Backend from (e.g. a main worktree)")
     ap.add_argument("--baseline", action="store_true", help="tree has no /history_index (main)")
     ap.add_argument("--port", type=int, default=8030)

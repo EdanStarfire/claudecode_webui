@@ -166,7 +166,14 @@ class DataStorageManager:
             return []
 
     async def get_message_count(self) -> int:
-        """Get total number of messages in the log"""
+        """Get total number of messages in the log.
+
+        The whole-file count runs in a worker thread (default executor; issue #2312) so a
+        large log does not block the event loop.
+        """
+        return await asyncio.to_thread(self._count_messages_sync)
+
+    def _count_messages_sync(self) -> int:
         try:
             if not self.messages_file.exists():
                 return 0

@@ -11,12 +11,15 @@ import asyncio
 import json
 import logging
 import mimetypes
+import os
 import shutil
+import threading
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import TYPE_CHECKING
 
+from backend.archive_io import run_archive_io
 from backend.history_distiller import distill_session_history
 from backend.message_history_reader import (
     FileMessageHistoryReader,
@@ -32,6 +35,14 @@ if TYPE_CHECKING:
 
 # Get specialized logger for archive operations
 archive_logger = get_logger('archive', category='ARCHIVE')
+_COPY_CHUNK_BYTES = 8 * 1024 * 1024
+_COPY_SYNC_BYTES = 16 * 1024 * 1024
+
+
+class _SnapshotCancelledError(Exception):
+    """Raised inside the worker thread when the awaiting snapshot was cancelled."""
+
+
 logger = logging.getLogger(__name__)
 
 
@@ -131,20 +142,63 @@ class ArchiveManager:
 
         Returns list of artifact name tokens archived (for telemetry).
         archive_dir is created by the caller before this method is invoked.
+
+        The copying runs on the archive thread pool (issue #2312) so a large messages.jsonl
+        does not block the event loop. If the awaiting task is cancelled, the worker is told
+        to stop, awaited to a halt, and ``archive_dir`` (exclusive to this snapshot) is removed,
+        so no partial archive is left behind.
         """
+        cancel = threading.Event()
+        job = asyncio.ensure_future(
+            run_archive_io(self._snapshot_artifacts_sync, session_dir, archive_dir, ctx, cancel)
+        )
+        try:
+            return await asyncio.shield(job)
+        except asyncio.CancelledError:
+            cancel.set()
+            # Shielded so a second cancel cannot skip the cleanup.
+            await asyncio.shield(asyncio.ensure_future(self._discard_cancelled(job, archive_dir)))
+            raise
+
+    @staticmethod
+    async def _discard_cancelled(job: "asyncio.Future", archive_dir: Path) -> None:
+        # The worker cannot be interrupted; it checks the cancel flag between chunks/artifacts.
+        await asyncio.wait({job})
+        if not job.cancelled():
+            job.exception()  # mark retrieved: the worker's cancel error is expected
+        await asyncio.to_thread(shutil.rmtree, archive_dir, True)
+
+    def _snapshot_artifacts_sync(
+        self,
+        session_dir: Path,
+        archive_dir: Path,
+        ctx: SnapshotContext,
+        cancel: threading.Event,
+    ) -> list[str]:
         archived: list[str] = []
 
+        def check() -> None:
+            if cancel.is_set():
+                raise _SnapshotCancelledError
+
         # Always-archive artifacts
-        self._copy_if_exists(session_dir / "messages.jsonl", archive_dir, archived)
+        check()
+        self._copy_if_exists(session_dir / "messages.jsonl", archive_dir, archived, cancel)
+        check()
         self._scrub_and_copy_state(session_dir, archive_dir, archived)
-        self._copy_if_exists(session_dir / "queue.jsonl", archive_dir, archived)
+        check()
+        self._copy_if_exists(session_dir / "queue.jsonl", archive_dir, archived, cancel)
+        check()
         self._copy_dir_if_exists(session_dir / "resources", archive_dir, archived)
+        check()
         self._copy_dir_if_exists(session_dir / "attachments", archive_dir, archived)
 
         # Disposal-only artifacts
         if not ctx.is_reset:
+            check()
             self._copy_dir_if_exists(session_dir / "history", archive_dir, archived)
 
+            check()
             if ctx.auto_memory_directory is not None:
                 self._copy_external_memory(
                     ctx.auto_memory_directory, session_dir, archive_dir, archived
@@ -152,19 +206,49 @@ class ArchiveManager:
             else:
                 self._copy_dir_if_exists(session_dir / "memory", archive_dir, archived)
 
+            check()
             if ctx.legion_id:
                 self._copy_legion_schedules(ctx.legion_id, archive_dir, archived)
 
         # Proxy logs — both disposal and reset (decision #11)
+        check()
         if ctx.proxy_enabled:
             self._copy_proxy_logs(session_dir, archive_dir, archived)
 
         return archived
 
-    def _copy_if_exists(self, src: Path, dst_dir: Path, archived: list[str]) -> None:
-        if src.exists():
-            shutil.copy2(src, dst_dir / src.name)
-            archived.append(src.name)
+    def _copy_if_exists(
+        self,
+        src: Path,
+        dst_dir: Path,
+        archived: list[str],
+        cancel: threading.Event | None = None,
+    ) -> None:
+        if not src.exists():
+            return
+        # Copy to a temp name and rename, so the final name only ever holds a complete file.
+        # Chunked so a cancellation request stops a large copy within one chunk.
+        dst = dst_dir / src.name
+        tmp = dst_dir / f".{src.name}.tmp"
+        try:
+            with open(src, "rb") as fsrc, open(tmp, "wb") as fdst:
+                unsynced = 0
+                while chunk := fsrc.read(_COPY_CHUNK_BYTES):
+                    if cancel is not None and cancel.is_set():
+                        raise _SnapshotCancelledError
+                    fdst.write(chunk)
+                    unsynced += len(chunk)
+                    if unsynced >= _COPY_SYNC_BYTES:
+                        # Bound the dirty pages a big copy queues up, so the filesystem
+                        # journal stays responsive for the loop's small synchronous I/O.
+                        fdst.flush()
+                        os.fdatasync(fdst.fileno())
+                        unsynced = 0
+            shutil.copystat(src, tmp)
+            os.replace(tmp, dst)
+        finally:
+            tmp.unlink(missing_ok=True)
+        archived.append(src.name)
 
     def _scrub_and_copy_state(
         self, session_dir: Path, archive_dir: Path, archived: list[str]
