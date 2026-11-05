@@ -1400,6 +1400,8 @@ class SessionCoordinator:
         if not success:
             return False
         coord_logger.info(f"Session {session_id} deleted")
+        # Issue #2318: drop state a request cached after the earlier cleanup mid-delete.
+        self._clear_task_list(session_id)
         await self._flush_analytics_and_notify_deleted(session_id)
         return True
 
