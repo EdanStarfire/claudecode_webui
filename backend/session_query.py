@@ -52,6 +52,8 @@ from .task_registry import TASK_LIFECYCLE_SUBTYPES, TaskLegRegistry
 
 logger = logging.getLogger(__name__)
 
+_MAX_TRACKED_GENERATIONS = 1024  # issue #2318: bound on remembered per-session generations
+
 # Issue #2030 stage 3 PR 3A: id lookups (``around_id=``). The only O(file) step of the windowed
 # reads; runs on the cold-scan pool (never the default executor), single-flight per (session, id).
 RESOLVE_WAIT_S = 5.0
@@ -96,6 +98,12 @@ class SessionQuery:
         self._history_indexes: OrderedDict[str, HistoryIndexState] = OrderedDict()
         self._history_index_fingerprints: dict[str, tuple[int, int]] = {}  # archive keys only
         self._history_index_pending: dict[str, list[tuple[int, int, dict]]] = {}
+        # Issue #2318: per-session invalidation generation, bumped by delete/reset. A request
+        # captures it before its first await and discards its hydration result if it moved. Values
+        # come from one monotonic counter (never repeat); the dict is capped so deleted sessions
+        # do not accumulate.
+        self._invalidation_gens: OrderedDict[str, int] = OrderedDict()
+        self._invalidation_seq = 0
         # session_id -> (task, cancel event) of the live-callback registry hydration
         self._live_registry_inflight: dict[str, tuple[asyncio.Task, threading.Event]] = {}
 
@@ -493,6 +501,7 @@ class SessionQuery:
         state = self._task_lists.get(session_id)
         if state is not None:
             return state
+        gen = self._generation(session_id)  # before the first await (issue #2318)
         # The task list is conversation state: it must stay readable after terminate
         # (which drops the storage manager), so fall back to the session's directory.
         storage = self._storage_managers.get(session_id)
@@ -522,6 +531,8 @@ class SessionQuery:
             # by it; TaskListState de-duplicates by tool_use_id, so replaying them is safe.
             for record in pending:
                 state.apply_tool_call(record)
+            if gen != self._generation(session_id):
+                return TaskListState()  # deleted / reset while hydrating (issue #2318)
             if not handle.cancelled:
                 self._task_lists[session_id] = state
             return state
@@ -545,7 +556,18 @@ class SessionQuery:
         if pending is not None:
             pending.append(record)
 
+    def _generation(self, session_id: str) -> int:
+        return self._invalidation_gens.get(session_id, 0)
+
+    def _bump_generation(self, session_id: str) -> None:
+        self._invalidation_seq += 1
+        self._invalidation_gens[session_id] = self._invalidation_seq
+        self._invalidation_gens.move_to_end(session_id)
+        while len(self._invalidation_gens) > _MAX_TRACKED_GENERATIONS:
+            self._invalidation_gens.popitem(last=False)
+
     def clear_task_list(self, session_id: str) -> None:
+        self._bump_generation(session_id)
         self._task_lists.pop(session_id, None)
         self._task_list_pending.pop(session_id, None)
         # A reset/delete must not serve or cache pre-reset state: abandon every in-flight cold
@@ -641,7 +663,8 @@ class SessionQuery:
         """Turn + compaction index of a live session's history (``/history_index``).
 
         Raises ``HistoryIndexBuildingError`` when the cold scan does not finish within the
-        waiter cap or was abandoned (session stopped/reset mid-scan)."""
+        waiter cap or was abandoned (session stopped/reset/deleted mid-scan)."""
+        gen = self._generation(session_id)  # before the first await (issue #2318)
         storage = self._storage_managers.get(session_id)
         if storage:
             # Idempotent: covers storage managers created outside the session-start paths.
@@ -669,7 +692,9 @@ class SessionQuery:
             scan_file_into(reader, state, cancel)
             return state
 
-        async def _flight(handle) -> HistoryIndexState:
+        async def _flight(handle) -> HistoryIndexState | None:
+            if gen != self._generation(session_id):
+                return None  # invalidated before the scan started (issue #2318)
             pending: list[tuple[int, int, dict]] = []
             self._history_index_pending[session_id] = pending
             try:
@@ -677,8 +702,8 @@ class SessionQuery:
             finally:
                 if self._history_index_pending.get(session_id) is pending:
                     del self._history_index_pending[session_id]
-            if handle.cancelled:
-                return state
+            if handle.cancelled or gen != self._generation(session_id):
+                return None  # abandoned, or the session was deleted / reset meanwhile (#2318)
             for start, end, record in pending:
                 if start < state.end:
                     continue  # the scan already read this record

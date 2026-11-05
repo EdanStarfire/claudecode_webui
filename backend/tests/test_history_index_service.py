@@ -907,3 +907,144 @@ def test_message_pipeline_task_frame_path_requests_the_live_hydration():
 
     src = inspect.getsource(message_pipeline)
     assert "_get_task_leg_registry(\n                                session_id, live=True" in src
+
+
+# ---- Issue #2318: generation re-check at cache time ------------------------------------------
+
+
+async def _race_delete_after_existence_check(
+    coordinator, call, owner=None, attr="get_session_directory"
+):
+    """Run ``call()`` and clear the session while it is suspended inside ``owner.attr`` (the
+    existence check / first await), then let it continue."""
+    gate = asyncio.Event()
+    entered = asyncio.Event()
+    owner = owner or coordinator.session_manager
+    real = getattr(owner, attr)
+
+    async def gated(*args, **kwargs):
+        entered.set()
+        await gate.wait()
+        return await real(*args, **kwargs)
+
+    setattr(owner, attr, gated)
+    try:
+        task = asyncio.ensure_future(call())
+        await asyncio.wait_for(entered.wait(), 5)
+        coordinator._clear_task_list(SID)  # delete / reset cleanup runs mid-request
+        gate.set()
+        return await task
+    finally:
+        setattr(owner, attr, real)
+
+
+@pytest.mark.asyncio
+async def test_issue_2318_delete_after_existence_check_does_not_cache_index(tmp_path):
+    coordinator, _ = await _coordinator(tmp_path, _history())
+    query = coordinator._session_query
+    coordinator._storage_managers.pop(SID)  # request resolves the reader via the session dir
+    coordinator.session_manager.get_session_directory = AsyncMock(
+        return_value=tmp_path / "sessions" / SID
+    )
+    with pytest.raises(HistoryIndexBuildingError):  # no waiter gets a dead session's index
+        await _race_delete_after_existence_check(
+            coordinator, lambda: coordinator.get_history_index(SID)
+        )
+    assert SID not in query._history_indexes
+    assert SID not in query._history_index_pending
+    assert query._cold_scans.inflight_count == 0
+    payload = await coordinator.get_history_index(SID)  # a fresh request (reset) rescans
+    assert payload["turns"]
+    assert SID in query._history_indexes
+
+
+@pytest.mark.asyncio
+async def test_issue_2318_reset_mid_scan_result_is_not_served_after_reset(tmp_path):
+    coordinator, storage = await _coordinator(tmp_path, _history())
+    query = coordinator._session_query
+    reader_cls = type(storage.reader)
+    real = reader_cls.iter_records_with_offsets
+    started = threading.Event()
+    release = threading.Event()
+
+    def blocked(self, prefilters, **kwargs):
+        started.set()
+        release.wait(5)
+        yield from real(self, prefilters, **kwargs)
+
+    reader_cls.iter_records_with_offsets = blocked
+    try:
+        waiters = [asyncio.ensure_future(coordinator.get_history_index(SID)) for _ in range(3)]
+        for _ in range(200):
+            if started.is_set():
+                break
+            await asyncio.sleep(0.01)
+        coordinator._clear_task_list(SID)
+        release.set()
+        results = await asyncio.gather(*waiters, return_exceptions=True)
+    finally:
+        reader_cls.iter_records_with_offsets = real
+    assert all(isinstance(r, HistoryIndexBuildingError) for r in results)
+    assert SID not in query._history_indexes
+
+
+@pytest.mark.asyncio
+async def test_issue_2318_delete_after_check_does_not_cache_task_list(tmp_path):
+    coordinator, _ = await _coordinator(tmp_path, [_user(0)])
+    query = coordinator._session_query
+    coordinator._storage_managers.pop(SID)
+    coordinator.session_manager.get_session_directory = AsyncMock(
+        return_value=tmp_path / "sessions" / SID
+    )
+    tasks = await _race_delete_after_existence_check(
+        coordinator, lambda: coordinator.get_session_tasks(SID)
+    )
+    assert tasks["tasks"] == []
+    assert SID not in query._task_lists
+
+
+def test_issue_2318_generation_map_is_bounded(tmp_path):
+    from collections import OrderedDict
+
+    from backend.session_query import _MAX_TRACKED_GENERATIONS, SessionQuery
+
+    query = SimpleNamespace(_invalidation_gens=OrderedDict(), _invalidation_seq=0)
+    for i in range(_MAX_TRACKED_GENERATIONS + 10):
+        SessionQuery._bump_generation(query, f"s{i}")
+    assert len(query._invalidation_gens) == _MAX_TRACKED_GENERATIONS
+
+
+@pytest.mark.asyncio
+async def test_issue_2318_delete_drops_state_cached_by_request_between_cleanup_and_finalize(
+    tmp_path,
+):
+    coordinator, _ = await _coordinator(tmp_path, _history())
+    query = coordinator._session_query
+    for name in ("_cascade_delete_children",):
+        setattr(coordinator, name, AsyncMock(return_value=[]))
+    for name in ("_detach_session_from_project", "_detach_session_from_parent",
+                 "_delete_legion_schedules_for_session", "_teardown_sdk_before_archive",
+                 "_archive_session_before_delete"):
+        setattr(coordinator, name, AsyncMock(return_value=None))
+    coordinator.session_manager.get_session_info = AsyncMock(return_value=None)
+    coordinator.session_manager.get_session_directory = AsyncMock(
+        return_value=tmp_path / "sessions" / SID
+    )
+    coordinator._unregister_capability_registry = MagicMock()
+    coordinator._cleanup_legion_directory = MagicMock()
+
+    real_finalize = coordinator._finalize_session_manager_delete
+
+    async def finalize(session_id):
+        # slipped in after the cleanup, before the registry removal completes
+        await coordinator.get_history_index(session_id)
+        await coordinator.get_session_tasks(session_id)
+        assert SID in query._history_indexes
+        coordinator.session_manager.delete_session = AsyncMock(return_value=True)
+        coordinator._flush_analytics_and_notify_deleted = AsyncMock()
+        return await real_finalize(session_id)
+
+    coordinator._finalize_session_manager_delete = finalize
+    result = await coordinator.delete_session(SID)
+    assert result["success"] is True
+    assert SID not in query._history_indexes and SID not in query._task_lists
