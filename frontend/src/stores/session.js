@@ -128,10 +128,7 @@ export const useSessionStore = defineStore('session', () => {
 
   const HYDRATION_STEP_TIMEOUT_MS = 20000
 
-  // Issue #2140: per-page (not whole-call) inactivity budget for the paginated history
-  // load — a large session's page count is unbounded, so a single whole-call deadline
-  // (the old HYDRATION_STEP_TIMEOUT_MS behavior loadMessages() used to be wrapped in)
-  // fails sessions that are merely slow-but-steady rather than genuinely stuck.
+  // Issue #2140: inactivity budget for the history window request (not a whole-call deadline).
   const HISTORY_PAGE_INACTIVITY_TIMEOUT_MS = 30000
 
   function withTimeout(promise, ms, stageLabel) {
@@ -158,13 +155,9 @@ export const useSessionStore = defineStore('session', () => {
    * connection explicitly archived instead of starting a connection that will sit idle
    * forever (an implicit, uninspectable "nothing will ever arrive" turned into an
    * explicit state).
-   *
-   * Issue #2140: `allowEpochRestart` (internal, never passed by external callers) guards
-   * the one automatic re-invocation on an epoch-mismatch restart (Backend restarted
-   * mid-load) — set false on that single recursive call so a second mismatch in a row
-   * surfaces as a normal error instead of looping forever.
+
    */
-  async function runDataHydrationChain(sessionId, abortController, { includeUsage = true, skipPolling = false, allowEpochRestart = true } = {}) {
+  async function runDataHydrationChain(sessionId, abortController, { includeUsage = true, skipPolling = false } = {}) {
     const snapshotPromises = [] // agents/tasks/background snapshot requests the history index waits for
     const messageStore = await import('./message')
     const msgStore = messageStore.useMessageStore()
@@ -207,10 +200,6 @@ export const useSessionStore = defineStore('session', () => {
         if (abortController.signal.aborted || historyController.signal.aborted) {
           clearHydrationStageIfOwned(sessionId, abortController)
           return false
-        }
-        if (error.isHydrationRestartRequired && allowEpochRestart) {
-          pushDebugEvent('session', 'hydration-retry', { sessionId, reason: 'epoch-mismatch' })
-          return runDataHydrationChain(sessionId, abortController, { includeUsage, skipPolling, allowEpochRestart: false })
         }
         setHydrationError(sessionId, abortController, 'loading_history', error)
         return false

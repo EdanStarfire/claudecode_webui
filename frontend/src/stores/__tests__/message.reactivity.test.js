@@ -233,7 +233,7 @@ describe('message writers re-trigger dependents', () => {
       total_count: 2, has_more: false, event_cursor: 1,
     })
     const before = p.runs()
-    await store.loadMessages(SID)
+    await store.loadMessages(SID, 100000)
     expect(p.read()).toBe('1/1')
     expect(p.runs() - before).toBeGreaterThanOrEqual(1)
   })

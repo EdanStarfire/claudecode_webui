@@ -262,10 +262,9 @@ export const usePollingStore = defineStore('polling', () => {
   const lruSessionIds = []
   const MAX_SUBSCRIBED_SESSIONS = 5
 
-  // Issue #2140: resync (evicted/stream_reset) uses the same per-page-inactivity/abort/
-  // resume machinery as the initial hydration load — see message.js's
-  // claimHydrationLoad()/fetchAllMessagePages() and session.js's identically-valued
-  // constant of the same name.
+  // Issue #2140: resync (evicted/stream_reset) uses the same inactivity/abort handling as the
+  // initial hydration load — see message.js's claimHydrationLoad() and session.js's
+  // identically-valued constant of the same name.
   const HISTORY_PAGE_INACTIVITY_TIMEOUT_MS = 30000
   // After this many CONSECUTIVE resync failures for a session, stop auto-retriggering it
   // from the poll loop (today's literally-unbounded retry loop for this failure path) —
@@ -628,9 +627,9 @@ export const usePollingStore = defineStore('polling', () => {
   // Issue #2140: the single resync entry point for both _processSessionBatch call sites
   // below (evicted and stream_reset) AND retryResync() — claims the shared per-session
   // history-load tracker in message.js (aborting whichever attempt was previously current,
-  // whether that was a prior resync or session.js's own retryHydration()) before resuming
-  // via the same per-page-inactivity/abort-aware loadMessages() the initial hydration load
-  // uses. Returns true if a resync was actually attempted (and succeeded); false if skipped
+  // whether that was a prior resync or session.js's own retryHydration()) before
+  // fetching the newest window via the same inactivity/abort-aware tail load the initial
+  // hydration uses. Returns true if a resync was actually attempted (and succeeded); false if skipped
   // because this session's resync already hit RESYNC_FAILURE_CEILING consecutive failures
   // (terminal — only a manual retryResync() clears that). A thrown error propagates to the
   // caller, which (via the existing poll-loop catch) lands the connection in 'backoff' —
