@@ -110,7 +110,7 @@ async function coldRestReload(fixture) {
   })
 
   applyStoredTaskLifecycleFrames(messageStore, fixture.sessionId, fixture.restHistory.messages ?? [])
-  await messageStore.loadMessages(fixture.sessionId)
+  await messageStore.loadMessages(fixture.sessionId, 100000)
 
   return {
     messages: messageStore.messagesBySession.get(fixture.sessionId) || [],

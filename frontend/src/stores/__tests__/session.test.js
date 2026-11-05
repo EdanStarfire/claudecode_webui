@@ -951,7 +951,7 @@ describe('session store', () => {
       })
 
       // The FIRST attempt's signal must already be aborted by the re-entry's claim —
-      // otherwise two fetchAllMessagePages() loops would run concurrently over the same
+      // otherwise two history loads would run concurrently over the same
       // shared state, each making its own redundant network request.
       expect(capturedSignalsA[0].aborted).toBe(true)
 
