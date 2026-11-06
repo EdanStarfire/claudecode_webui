@@ -34,6 +34,7 @@ from .analytics.database import AnalyticsDB
 from .analytics_store import AnalyticsStore
 from .application_service import ApplicationService
 from .config_manager import default_config_file
+from .gc_tuning import freeze_startup_heap
 from .message_parser import MessageParser, MessageProcessor
 from .models.messages import MessageRecord, PermissionInfo, ToolCall
 from .permission_service import PermissionService
@@ -1556,6 +1557,7 @@ def create_app(
     @asynccontextmanager
     async def _lifespan(_app: FastAPI):
         await app_instance.initialize()
+        freeze_startup_heap()  # issue #2336
         yield
         await app_instance.cleanup()
 

@@ -59,8 +59,29 @@ class BlockSampler(threading.Thread):
             self.counts[key] = self.counts.get(key, 0) + 1
 
 
+class GcPauses:
+    """Records collector pauses > 20 ms (generation, ms): a long gen-2 pass blocks the loop
+    regardless of what the request handlers do (issue #2336 attribution)."""
+
+    def __init__(self):
+        import gc
+
+        self.pauses: list[tuple[int, float]] = []
+        self._t0 = 0.0
+        gc.callbacks.append(self._cb)
+
+    def _cb(self, phase: str, info: dict) -> None:
+        if phase == "start":
+            self._t0 = time.perf_counter()
+        else:
+            ms = (time.perf_counter() - self._t0) * 1000.0
+            if ms > 20.0:
+                self.pauses.append((info["generation"], round(ms, 1)))
+
+
 class LagMonitor:
     def __init__(self):
+        self.gc_pauses = GcPauses()
         self.samples: list[float] = []
         self._stop = False
         self.heartbeat = time.monotonic()
@@ -131,13 +152,23 @@ def build(args):
     config_file = default_config_file()
     ensure_config_file(config_file)
     tenant = TenantContext(data_dir=data_dir, config_file=config_file, host="127.0.0.1")
+    mock = {}
+    if os.environ.get("LOAD_MOCK_FIXTURES"):  # sessions named after a fixture start on the mock SDK
+        fixtures = Path(os.environ["LOAD_MOCK_FIXTURES"])
+        mock = {"mock_sdk": True, "fixtures_dir": fixtures,
+                "available_fixtures": sorted(d.name for d in fixtures.iterdir() if d.is_dir())}
     backend = BackendApp(
-        data_dir, auth_token=args.token, host="127.0.0.1", port=args.port, tenant_context=tenant
+        data_dir, auth_token=args.token, host="127.0.0.1", port=args.port, tenant_context=tenant,
+        **mock,
     )
 
     @asynccontextmanager
     async def lifespan(_app: FastAPI):
         await backend.initialize()
+        if not os.environ.get("LOAD_NO_GC_FREEZE"):  # what create_app's lifespan does (#2336)
+            from backend.gc_tuning import freeze_startup_heap
+
+            freeze_startup_heap()
         yield
         await backend.cleanup()
 
@@ -150,7 +181,7 @@ def install_routes(backend, monitor: LagMonitor) -> None:
     coordinator = backend.service.coordinator
 
     @app.get("/api/__load/metrics")
-    async def metrics(reset: int = 0):
+    async def metrics(reset: int = 0, gc_objects: int = 0):
         query = coordinator._session_query
         scans = getattr(query, "_cold_scans", None)
         indexes = getattr(query, "_history_indexes", {})
@@ -201,6 +232,15 @@ def install_routes(backend, monitor: LagMonitor) -> None:
                 "disconnected": searches.disconnected,
                 "timed_out": searches.timed_out,
             }
+        import gc
+
+        if gc_objects:  # len(get_objects()) itself blocks the loop ~60 ms on a 900k-object heap
+            out["gc_tracked_objects"] = len(gc.get_objects())
+        out["gc_stats"] = gc.get_stats()
+        out["gc_threshold"] = gc.get_threshold()
+        out["gc_pauses_over_20ms"] = list(monitor.gc_pauses.pauses)
+        if reset:
+            monitor.gc_pauses.pauses.clear()
         sampler = getattr(monitor, "sampler", None)
         if sampler is not None:
             out["block_stacks"] = sorted(sampler.counts.items(), key=lambda kv: -kv[1])[:12]
