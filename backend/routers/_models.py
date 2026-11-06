@@ -166,6 +166,12 @@ class PermissionModeRequest(BaseModel):
     mode: str
 
 
+class ProviderModelRequest(BaseModel):
+    """Issue #2333: live Provider Model switch (catalog entry + model within it)."""
+    provider_catalog_id: str
+    provider_model_id: str
+
+
 class ModelRequest(BaseModel):
     model: str
 

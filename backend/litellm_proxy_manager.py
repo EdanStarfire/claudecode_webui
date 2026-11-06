@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import itertools
 import os
 import secrets
 import uuid
@@ -68,6 +69,11 @@ class LiteLLMProxyManager:
     today, never varying within one manager instance.
     """
 
+    # Monotonic across (re-)registrations (process-wide) so a sidecar addon caching a higher
+    # version from a previous launch of the same session never ignores a new registration.
+    _routing_versions = itertools.count(1)
+    _live_model_names: set[str] | frozenset[str] = frozenset()
+
     def __init__(
         self,
         catalog_manager: ProviderCatalogManager,
@@ -94,6 +100,9 @@ class LiteLLMProxyManager:
         self._last_restart: datetime | None = None
         self._last_error: str | None = None
         self._model_count: int = 0
+        # Issue #2333: aliases the CURRENTLY RUNNING router serves (the catalog may have moved on
+        # since; list_model_aliases() reads the catalog, this reflects the last (re)build).
+        self._live_model_names: set[str] = set()
         # litellm 1.105+ refuses to boot without a master key set (its ASGI lifespan runs
         # this check on every start, regardless of our custom_auth path). Generated once per
         # Backend-process boot; never written to config, logs, or any API response — real
@@ -215,7 +224,43 @@ class LiteLLMProxyManager:
             "model_map": model_map or {},
             "default_model": default_model,
             "passthrough_models": list(passthrough_models or []),
+            "version": next(self._routing_versions),
         }
+
+    def update_session_routing_model(
+        self,
+        session_id: str,
+        default_model: str,
+        model_map: dict[str, str] | None = None,
+    ) -> dict | None:
+        """Issue #2333: swap a registered session's target model, keeping every other field.
+
+        virtual_key, base_url and passthrough_models (#2285) are untouched. The registry entry
+        is replaced with ONE assignment of a fresh dict (never mutated in place) so a concurrent
+        /routing read sees the old or the new entry, never a mix. Bumps ``version``. Returns the
+        previous entry (for rollback via restore_session_routing) or None if not registered.
+        """
+        key = (self._backend_id, session_id)
+        old = self._routing_registry.get(key)
+        if old is None:
+            return None
+        self._routing_registry[key] = {
+            **old,
+            "default_model": default_model,
+            "model_map": dict(model_map) if model_map is not None else dict(old.get("model_map", {})),
+            "version": next(self._routing_versions),
+        }
+        return old
+
+    def restore_session_routing(self, session_id: str, previous: dict) -> None:
+        """Issue #2333: roll back to ``previous`` content but with a NEWER version, so an addon
+        that already cached the failed entry re-adopts the restored one."""
+        key = (self._backend_id, session_id)
+        self._routing_registry[key] = {**previous, "version": next(self._routing_versions)}
+
+    def has_live_model(self, alias: str) -> bool:
+        """Issue #2333: True when the running router serves ``alias``."""
+        return alias in self._live_model_names
 
     def unregister_session_routing(self, session_id: str) -> None:
         """Remove routing entry for session_id (no-op if absent)."""
@@ -323,6 +368,7 @@ class LiteLLMProxyManager:
         # The auth module re-imports user_custom_auth per-request so setting
         # the module attribute is sufficient.
         router = litellm.Router(model_list=model_list)
+        self._live_model_names = {item["model_name"] for item in model_list}
         _ps.llm_router = router
         _ps.llm_model_list = model_list
         _ps.user_custom_auth = self.auth_callback

@@ -992,3 +992,71 @@ describe('session store', () => {
     })
   })
 })
+
+describe('session store — setProviderModel (issue #2333)', () => {
+  it('posts the catalog/model pair and mirrors the applied model into the session and initData', async () => {
+    const { useSessionStore } = await import('@/stores/session')
+    const store = useSessionStore()
+    store.sessions.set('sess-1', makeSession({
+      config: { provider_catalog_id: 'catA', provider_model_id: 'm1', permission_mode: 'default' },
+      current_model: 'catA--m1'
+    }))
+    store.initData.set('sess-1', { model: 'catA--m1' })
+    apiMock.post.mockResolvedValue({ success: true, model: 'catB--m1', applied: true, restart_required: [] })
+
+    const result = await store.setProviderModel('sess-1', 'catB', 'm1')
+
+    expect(apiMock.post).toHaveBeenCalledWith('/api/sessions/sess-1/provider-model', {
+      provider_catalog_id: 'catB', provider_model_id: 'm1'
+    })
+    expect(result.applied).toBe(true)
+    const session = store.getSession('sess-1')
+    expect(session.current_model).toBe('catB--m1')
+    expect(session.config).toEqual({
+      provider_catalog_id: 'catB', provider_model_id: 'm1', permission_mode: 'default'
+    })
+    expect(session.restart_required).toEqual([])
+    expect(store.initData.get('sess-1').model).toBe('catB--m1')
+  })
+
+  it('stores restart_required reasons and leaves current_model alone when not applied live', async () => {
+    const { useSessionStore } = await import('@/stores/session')
+    const store = useSessionStore()
+    store.sessions.set('sess-1', makeSession({ config: {}, current_model: 'catA--m1' }))
+    apiMock.post.mockResolvedValue({
+      success: true, model: 'catA--m4', applied: false,
+      restart_required: ['Catalog change pending: restart the LiteLLM proxy, then restart the session.']
+    })
+
+    await store.setProviderModel('sess-1', 'catA', 'm4')
+
+    const session = store.getSession('sess-1')
+    expect(session.current_model).toBe('catA--m1')
+    expect(session.restart_required).toHaveLength(1)
+  })
+
+  it('throws on failure and leaves the session untouched', async () => {
+    const { useSessionStore } = await import('@/stores/session')
+    const store = useSessionStore()
+    store.sessions.set('sess-1', makeSession({
+      config: { provider_catalog_id: 'catA', provider_model_id: 'm1' }, current_model: 'catA--m1'
+    }))
+    apiMock.post.mockRejectedValue(Object.assign(new Error('bad'), { data: { detail: 'upstream rejected' } }))
+
+    await expect(store.setProviderModel('sess-1', 'catB', 'm1')).rejects.toThrow('bad')
+    const session = store.getSession('sess-1')
+    expect(session.config.provider_catalog_id).toBe('catA')
+    expect(session.current_model).toBe('catA--m1')
+  })
+
+  it('patchSession takes restart_required from the confirmed response', async () => {
+    const { useSessionStore } = await import('@/stores/session')
+    const store = useSessionStore()
+    store.sessions.set('sess-1', makeSession({ config: {} }))
+    apiMock.patch.mockResolvedValue({ session: { config: { docker_enabled: true }, restart_required: ['Docker isolation changed'] } })
+
+    await store.patchSession('sess-1', { config: { docker_enabled: true } })
+
+    expect(store.getSession('sess-1').restart_required).toEqual(['Docker isolation changed'])
+  })
+})

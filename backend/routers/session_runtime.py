@@ -13,6 +13,7 @@ from ._models import (
     ModelRequest,
     PermissionModeRequest,
     PermissionResponseRequest,
+    ProviderModelRequest,
 )
 
 
@@ -110,6 +111,18 @@ def build_router(webui) -> APIRouter:
         if not success:
             raise HTTPException(status_code=400, detail="Failed to set model")
         return {"success": success, "model": request.model}
+
+    @router.post("/api/sessions/{session_id}/provider-model")
+    @handle_exceptions("set provider model", value_error_status=400)
+    async def set_provider_model(session_id: str, request: ProviderModelRequest):
+        """Issue #2333: switch a provider-routed session's catalog model live (no restart)
+        when possible; otherwise persist and report ``restart_required``."""
+        if not await webui.service.get_session_exists(session_id):
+            raise HTTPException(status_code=404, detail="Session not found")
+        result = await webui.service.set_provider_model(
+            session_id, request.provider_catalog_id, request.provider_model_id
+        )
+        return {"success": True, **result}
 
     @router.post("/api/sessions/{session_id}/add-directory")
     @handle_exceptions("add directory", value_error_status=400)

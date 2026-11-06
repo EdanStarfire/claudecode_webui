@@ -492,8 +492,21 @@ async def _do_refresh(record: dict, get_partner_value) -> dict:
 # Main addon class
 # ---------------------------------------------------------------------------
 
+# Issue #2333: a live Provider Model switch changes the backend's routing entry mid-session, so
+# the addon re-reads it (instead of only once in running()) before rewriting a request's model.
+# At most one fetch per TTL, with a tight timeout: this is on the request path.
+ROUTING_REFRESH_TTL_SECONDS = 1.0
+ROUTING_FETCH_TIMEOUT_SECONDS = 1.0
+
+
 class ProxyAddon:
     """Typed-secret proxy addon. Fetches secrets via REST at load; injects/scrubs per-type."""
+
+    # Issue #2333 routing-refresh state (class-level defaults: the lock is created lazily).
+    _routing_checked_at: float = 0.0
+    _routing_refresh_warned: bool = False
+    _routing_refresh_lock: asyncio.Lock | None = None
+    _diag_log_file = None
 
     def __init__(self):
         self._session_token: str = ""
@@ -547,6 +560,7 @@ class ProxyAddon:
 
         try:
             self._routing = await self._fetch_routing()
+            self._routing_checked_at = time.monotonic()
             if self._routing["hostname_rewrites"]:
                 ctx.log.info(
                     f"[proxy] Routing enabled: {self._routing['hostname_rewrites']}"
@@ -680,6 +694,7 @@ class ProxyAddon:
             inject_fn(flow, record, ph)
 
         if flow.metadata.get("routed_via_litellm"):
+            await self._refresh_routing()
             self._rewrite_model_in_body(flow)
             self._maybe_drop_temperature(flow)
 
@@ -709,6 +724,46 @@ class ProxyAddon:
         else:
             flow.response.stream = _make_chunk_filter(response_pairs)
 
+    async def _refresh_routing(self) -> None:
+        """Issue #2333: re-fetch routing (at most once per TTL, single-flight) so a live model
+        switch reaches the next request. Keeps the last good routing on any failure.
+
+        ``self._routing`` is only ever replaced wholesale, never mutated, so a request that
+        already took its snapshot sees the old or the new routing, never a mix. A payload with no
+        virtual key (backend lost the session's entry) or an older version is ignored.
+        """
+        if not self._session_id or not self._routing.get("virtual_key"):
+            return
+        if time.monotonic() - self._routing_checked_at < ROUTING_REFRESH_TTL_SECONDS:
+            return
+        if self._routing_refresh_lock is None:
+            self._routing_refresh_lock = asyncio.Lock()
+        async with self._routing_refresh_lock:
+            if time.monotonic() - self._routing_checked_at < ROUTING_REFRESH_TTL_SECONDS:
+                return
+            try:
+                fresh = await self._fetch_routing(timeout=ROUTING_FETCH_TIMEOUT_SECONDS)
+            except Exception as exc:
+                if not self._routing_refresh_warned:
+                    self._routing_refresh_warned = True
+                    self._write_diag(f"routing refresh failed, keeping cached routing: {exc}")
+                return
+            finally:
+                self._routing_checked_at = time.monotonic()
+            self._routing_refresh_warned = False
+            if not fresh.get("virtual_key"):
+                return
+            if int(fresh.get("version") or 0) < int(self._routing.get("version") or 0):
+                return
+            if (fresh.get("default_model"), fresh.get("model_map")) != (
+                self._routing.get("default_model"), self._routing.get("model_map"),
+            ):
+                self._write_diag(
+                    f"routing refreshed: default_model {self._routing.get('default_model')} "
+                    f"-> {fresh.get('default_model')} (version {fresh.get('version')})"
+                )
+            self._routing = fresh
+
     def _rewrite_model_in_body(self, flow: http.HTTPFlow) -> None:
         """Rewrite top-level `model` field in JSON body to LiteLLM alias.
 
@@ -716,7 +771,8 @@ class ProxyAddon:
         No-op when body is None (streaming) or encoded (gzip) — same limitation as
         credential injection.
         """
-        default_model = self._routing.get("default_model")
+        routing = self._routing  # one snapshot per request (issue #2333): never a mix of old/new
+        default_model = routing.get("default_model")
         if not default_model:
             return
         if flow.request.content is None:
@@ -731,9 +787,9 @@ class ProxyAddon:
             return
         original = body["model"]
         # Issue #2285: aliases the session explicitly routes itself (Auto Mode classifier).
-        if original in (self._routing.get("passthrough_models") or []):
+        if original in (routing.get("passthrough_models") or []):
             return
-        model_map = self._routing.get("model_map") or {}
+        model_map = routing.get("model_map") or {}
         if model_map:
             match = _TIER_REGEX.search(str(original))
             tier = match.group(1).lower() if match else None
@@ -846,14 +902,14 @@ class ProxyAddon:
     # Internal helpers
     # ------------------------------------------------------------------
 
-    async def _fetch_json(self, path: str) -> dict:
+    async def _fetch_json(self, path: str, timeout: float = 10.0) -> dict:
         """GET {WEBUI_BASE_URL}{path} with session Bearer auth. Returns parsed JSON."""
         url = f"{WEBUI_BASE_URL}{path}"
         async with httpx.AsyncClient() as client:
             resp = await client.get(
                 url,
                 headers={"Authorization": f"Bearer {self._session_token}"},
-                timeout=10.0,
+                timeout=timeout,
             )
             resp.raise_for_status()
             return resp.json()
@@ -867,9 +923,9 @@ class ProxyAddon:
             if secret.get("placeholder")
         }
 
-    async def _fetch_routing(self) -> dict:
-        """GET /api/sessions/{id}/routing → {hostname_rewrites, virtual_key}."""
-        return await self._fetch_json(f"/api/sessions/{self._session_id}/routing")
+    async def _fetch_routing(self, timeout: float = 10.0) -> dict:
+        """GET /api/sessions/{id}/routing → {hostname_rewrites, virtual_key, ..., version}."""
+        return await self._fetch_json(f"/api/sessions/{self._session_id}/routing", timeout=timeout)
 
     async def _get_partner_value(self, name: str) -> str:
         """Return the value of a sibling record (e.g. refresh_token) by name."""

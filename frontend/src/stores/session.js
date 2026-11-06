@@ -811,6 +811,8 @@ export const useSessionStore = defineStore('session', () => {
       for (const key of Object.keys(updates)) {
         merged[key] = key in confirmed ? confirmed[key] : updates[key]
       }
+      // Issue #2333: the backend recomputes restart-required reasons on every config save
+      if (Array.isArray(confirmed.restart_required)) merged.restart_required = confirmed.restart_required
       updateSession(sessionId, merged)
       console.log(`Updated session ${sessionId}:`, updates)
     } catch (error) {
@@ -863,6 +865,39 @@ export const useSessionStore = defineStore('session', () => {
       console.error('Failed to set model:', error)
       throw error
     }
+  }
+
+  /**
+   * Switch a provider-routed session's catalog model (issue #2333). Applies live on an active
+   * session; otherwise the backend persists it and reports why a restart is needed. Throws on
+   * failure (the backend leaves the session config untouched). Mirrors setModel's display sync.
+   * Returns {model, applied, restart_required}.
+   */
+  async function setProviderModel(sessionId, catalogId, modelId) {
+    const result = await api.post(`/api/sessions/${sessionId}/provider-model`, {
+      provider_catalog_id: catalogId,
+      provider_model_id: modelId,
+    })
+    const session = sessions.value.get(sessionId)
+    const updates = {
+      config: {
+        ...(session?.config || {}),
+        provider_catalog_id: catalogId,
+        provider_model_id: modelId,
+      },
+      restart_required: result.restart_required ?? [],
+    }
+    if (result.applied) updates.current_model = result.model
+    updateSession(sessionId, updates)
+
+    if (result.applied) {
+      const storedInitData = initData.value.get(sessionId)
+      if (storedInitData) {
+        storedInitData.model = result.model
+        initData.value.set(sessionId, storedInitData)
+      }
+    }
+    return result
   }
 
   /**
@@ -1116,6 +1151,7 @@ export const useSessionStore = defineStore('session', () => {
     patchSession,
     setPermissionMode,
     setModel,
+    setProviderModel,
     addDirectory,
     startSession,
     terminateSession,

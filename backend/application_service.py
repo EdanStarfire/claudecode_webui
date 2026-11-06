@@ -359,11 +359,15 @@ class ApplicationService:
         )
 
     async def update_session(self, session_id: str, **updates) -> bool:
-        return await self.coordinator.session_manager.update_session(
+        ok = await self.coordinator.session_manager.update_session(
             session_id,
             template_manager=self.coordinator.template_manager,
             **updates,
         )
+        if ok and "_replace_config" in updates:
+            # Issue #2333: a saved config change may need a restart to take effect
+            await self.coordinator.refresh_restart_required(session_id)
+        return ok
 
     async def get_session_working_directory(self, session_id: str) -> str | None:
         """Return working_directory for file-serving and diff routes."""
@@ -409,6 +413,9 @@ class ApplicationService:
 
     async def set_model(self, session_id: str, model: str) -> bool:
         return await self.coordinator.set_model(session_id, model)
+
+    async def set_provider_model(self, session_id: str, catalog_id: str, model_id: str) -> dict:
+        return await self.coordinator.set_provider_model(session_id, catalog_id, model_id)
 
     async def add_directory(self, session_id: str, directory: str) -> dict:
         return await self.coordinator.add_directory(session_id, directory)
@@ -695,6 +702,7 @@ class ApplicationService:
             "model_map": routing.get("model_map", {}),
             "default_model": routing.get("default_model"),
             "passthrough_models": routing.get("passthrough_models", []),
+            "version": routing.get("version", 1),
         }
 
     def get_litellm_proxy_runtime_status(self) -> dict:

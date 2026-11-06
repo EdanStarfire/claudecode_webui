@@ -54,7 +54,8 @@ ALLOWLIST: dict[str, int] = {
     # docstring) — only tenant_context construction/threading grew this.
     # Issue #2145: 344->346 — one process-bound `_background_tasks` state dict
     # (plain-dict state init, same residual category as above) plus its comment.
-    "__init__": 346,
+    # Issue #2333: 346->347 — one line constructing ProviderModelSwitch(self).
+    "__init__": 347,
     # --- Orchestration ---
     "initialize": 69,
     "cleanup": 23,
