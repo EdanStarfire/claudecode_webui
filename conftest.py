@@ -4,6 +4,9 @@ import os
 
 import pytest
 
+# Issue #2336: the server lifespan freezes the GC heap; never do that to the pytest process.
+os.environ.setdefault("BACKEND_DISABLE_GC_FREEZE", "1")
+
 
 @pytest.fixture(autouse=True, scope="session")
 def _unset_claudecode_env():

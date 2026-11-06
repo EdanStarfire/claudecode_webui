@@ -38,6 +38,7 @@ from typing import Any, NamedTuple, Protocol
 
 from . import history_search as hs
 from .models.messages import LegacyMessageFormatError
+from .response_offload import SizedPayload
 
 logger = logging.getLogger(__name__)
 
@@ -152,7 +153,8 @@ class HistoryWindow:
             payload["has_more_after"] = bool(self.has_more_after)
         if self.anchor_cursor is not None:
             payload["anchor_cursor"] = self.anchor_cursor
-        return payload
+        # Size hint for the off-loop serializer (issue #2336); never part of the body.
+        return SizedPayload(payload, self.bytes_read)
 
 
 class MessageHistoryReader(Protocol):

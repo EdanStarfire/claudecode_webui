@@ -7,6 +7,7 @@ from shared.exception_handlers import handle_exceptions
 
 from ..history_index import HistoryIndexBuildingError
 from ..http_range import build_resource_response
+from ..response_offload import offload_large_json
 from ._search import run_search
 from ._windows import map_window_errors, validate_window_params
 
@@ -52,13 +53,13 @@ def build_router(webui) -> APIRouter:
                 ("after_bytes", after_bytes), ("after", after), ("until", until),
             ) if v is not None
         }
-        return await map_window_errors(
+        return await offload_large_json(await map_window_errors(
             webui.service.get_archive_messages(
                 session_id, archive_id, offset=offset, limit=limit, window=window,
                 before=before, min_turns=min_turns, max_records=max_records,
                 max_bytes=max_bytes, **stage3,
             )
-        )
+        ))
 
     @router.get("/api/projects/{project_id}/archives/{session_id}/{archive_id}/history_index")
     @handle_exceptions("get archive history index")
@@ -67,7 +68,9 @@ def build_router(webui) -> APIRouter:
         if not await webui.service.validate_project_exists(project_id):
             raise HTTPException(status_code=404, detail="Project not found")
         try:
-            return await webui.service.get_archive_history_index(session_id, archive_id)
+            return await offload_large_json(
+                await webui.service.get_archive_history_index(session_id, archive_id)
+            )
         except HistoryIndexBuildingError as e:
             raise HTTPException(
                 status_code=503, detail="index_building", headers={"Retry-After": "5"}

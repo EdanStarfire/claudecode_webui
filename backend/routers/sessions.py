@@ -11,6 +11,7 @@ from shared.exception_handlers import handle_exceptions
 
 from ..fixture_export import FixtureExportError
 from ..history_index import HistoryIndexBuildingError
+from ..response_offload import offload_large_json
 from ..session_lifecycle import is_deliverable
 from ._models import (
     FixtureExportRequest,
@@ -534,7 +535,7 @@ def build_router(webui) -> APIRouter:
         )
         if before is not None or around is not None or around_id is not None or after is not None:
             # Older/around/after pages carry no event cursor: it only has meaning at the tail.
-            return result
+            return await offload_large_json(result)
         # Issue #1000: Include event queue cursor so frontend poll starts
         # exactly where REST left off, preventing duplicate message replay.
         queue = webui.service.get_session_queue(session_id)
@@ -544,7 +545,7 @@ def build_router(webui) -> APIRouter:
         # needed by the Frontend-issued history cursor mechanism (src/routers/sessions.py)
         # to detect a restart racing this very read.
         result["epoch"] = session_stream_epoch(queue) if queue else PROCESS_EPOCH
-        return result
+        return await offload_large_json(result)
 
     @router.get("/api/sessions/{session_id}/background_agents")
     @handle_exceptions("get background agents")
@@ -580,7 +581,7 @@ def build_router(webui) -> APIRouter:
         if not await webui.service.get_session_exists(session_id):
             raise HTTPException(status_code=404, detail="Session not found")
         try:
-            return await webui.service.get_history_index(session_id)
+            return await offload_large_json(await webui.service.get_history_index(session_id))
         except HistoryIndexBuildingError as e:
             raise HTTPException(
                 status_code=503, detail="index_building", headers={"Retry-After": "5"}
