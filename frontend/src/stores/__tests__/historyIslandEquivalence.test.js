@@ -1,6 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { setActivePinia, createPinia } from 'pinia'
-import { listRawFixtureNames, loadRawFixture, normalizeForComparison } from './helpers/fixtureEquivalence'
+import { listRawFixtureNames, loadRawFixture, normalizeForComparison, assertGeneratedFixturesFresh } from './helpers/fixtureEquivalence'
 import { scaleRestHistoryMessages } from './helpers/scaleFixture'
 import { createFakeHistoryServer } from './helpers/historyServer'
 import { buildLoadedRows } from '@/utils/loadedRows'
@@ -11,6 +11,10 @@ import { resolveMessageId } from '@/search/messageSearch'
 // the live suffix, random walks of jumps / pages / backfill, live events during island fetches,
 // resync with an island and island replacement must all converge on EXACTLY the state a full load
 // produces — messages, tool calls (each tool's `input`), hook correlation and rendered rows.
+//
+// NEEDS THE GENERATION STEP FIRST (the fixtures under backend/tests/fixtures/generated/ are gitignored
+// and rebuilt by the real backend pipeline): `uv run pytest backend/tests/test_equivalence_replay_generation.py`
+// from the repo root, then `npx vitest run`. A missing or stale generated copy fails this file at collection.
 
 const apiMock = vi.hoisted(() => ({ get: vi.fn(), post: vi.fn(), put: vi.fn(), delete: vi.fn(), patch: vi.fn() }))
 vi.mock('@/utils/api', () => ({ api: apiMock, getAuthToken: vi.fn().mockReturnValue(null) }))
@@ -51,6 +55,30 @@ function snapshot(store) {
   })
 }
 
+/**
+ * Like snapshot(), but with the tool-call ARRAY ORDER (and the positions in toolIndex) ignored: tool
+ * entries, their fields, hook correlation per tool and every rendered row stay strictly compared.
+ * Used by the random walks only: when a suffix that starts with result-only tool_call records meets
+ * an island, the merge keeps those entries at their first-seen position (the island's copy is dropped
+ * in favour of the suffix's), whereas a full load orders them by launch. No consumer depends on the
+ * order (lookups go through toolIndex by id; rows are built from messages), see test (iii-b).
+ */
+function snapshotOrderInsensitiveTools(store) {
+  const snap = snapshot(store)
+  const byId = (a, b) => (a.id < b.id ? -1 : a.id > b.id ? 1 : 0)
+  const hooksById = new Map((store.toolCallsBySession.get(SID) || []).map((t, i) => [t.id, snap.hooksByTool[i]]))
+  const toolCalls = [...snap.toolCalls].sort(byId)
+  // toolIndex positions are not compared, but every id must still point at its own entry
+  const live = store.toolCallsBySession.get(SID) || []
+  for (const [id, idx] of store.toolIndexBySession.get(SID) || []) expect(live[idx]?.id).toBe(id)
+  return {
+    ...snap,
+    toolCalls,
+    toolIndex: snap.toolIndex.map(([id]) => id).sort(),
+    hooksByTool: toolCalls.map(t => hooksById.get(t.id)),
+  }
+}
+
 /** Record positions of the display-user turns (what a real server snaps a window start to). */
 function turnPositions(records, fullStore) {
   const turns = new Set(buildLoadedRows(fullStore, SID)
@@ -74,6 +102,8 @@ async function finish(store) {
   }
 }
 
+const isTaskLifecycleFrame = (r) => r.type === 'system' && String(r.metadata?.subtype || '').startsWith('task_')
+
 function seeded(seed) {
   let x = seed >>> 0
   return () => { x = (x * 1664525 + 1013904223) >>> 0; return x / 2 ** 32 }
@@ -82,6 +112,11 @@ function seeded(seed) {
 beforeEach(() => { apiMock.get.mockReset() })
 
 const fixtureNames = listRawFixtureNames()
+// (v-b) is a no-op on fixtures without task lifecycle frames in their tail; make sure it runs somewhere.
+it('(v-b) guard: at least one fixture ends with task lifecycle frames', () => {
+  expect(fixtureNames.some(n => loadRawFixture(n).restHistory.messages.slice(-8).some(isTaskLifecycleFrame))).toBe(true)
+})
+assertGeneratedFixturesFresh(fixtureNames) // the committed raw/ fallback is incomplete and would hide fixture changes
 
 describe.each(fixtureNames)('island == full load (AC8, issue #2030 stage 3), fixture %s', (name) => {
   const records = loadRawFixture(name).restHistory.messages
@@ -129,7 +164,7 @@ describe.each(fixtureNames)('island == full load (AC8, issue #2030 stage 3), fix
   })
 
   it('(iii) random walks of scroll-up / jump / search jump / island paging / backfill, ending complete, == full load', async () => {
-    const expected = snapshot(await loadFull(records))
+    const expected = snapshotOrderInsensitiveTools(await loadFull(records))
     for (let walk = 0; walk < 12; walk++) {
       const rnd = seeded(1000 + walk)
       const store = await freshStore()
@@ -172,8 +207,33 @@ describe.each(fixtureNames)('island == full load (AC8, issue #2030 stage 3), fix
         }
       }
       await finish(store)
-      expect(snapshot(store), `walk ${walk}`).toEqual(expected)
+      expect(snapshotOrderInsensitiveTools(store), `walk ${walk}`).toEqual(expected)
     }
+  })
+
+  it('(iii-b) a suffix starting with result-only tool records meets an island: same tools and rows as a full load; tool order is first-seen (documented, non-semantic)', async () => {
+    const fullStore = await loadFull(records)
+    const expected = snapshotOrderInsensitiveTools(fullStore)
+    const fullIds = fullStore.toolCallsBySession.get(SID).map(t => t.id)
+    // Suffix starts: every tool_call record index (so some suffixes begin with results whose launching
+    // message lies in the not-yet-loaded part).
+    const starts = records.map((r, i) => (r.type === 'tool_call' && i > 0 ? i : -1)).filter(i => i > 0)
+    let reordered = 0
+    for (const tailStart of starts) {
+      const store = await freshStore()
+      serve(createFakeHistoryServer(records, { tailStart, pageSize: 9, aroundBefore: 6, aroundAfter: 4, afterPageSize: 5 }))
+      await store.loadMessages(SID, null, 0, { window: 'tail', signal: sig() })
+      await store.loadAround(SID, { cursor: 'b:10' })
+      await finish(store)
+      const ids = store.toolCallsBySession.get(SID).map(t => t.id)
+      expect([...ids].sort(), `tailStart=${tailStart}`).toEqual([...fullIds].sort())
+      expect(snapshotOrderInsensitiveTools(store), `tailStart=${tailStart}`).toEqual(expected)
+      if (JSON.stringify(ids) !== JSON.stringify(fullIds)) reordered++
+    }
+    // Pins the documented behaviour on fixtures that interleave result-only records (primary does): the
+    // order differs from a full load. If the merge is ever changed to reproduce launch order, replace this
+    // with a strict order check and use snapshot() in (iii).
+    if (name === 'primary') expect(reordered).toBeGreaterThan(0)
   })
 
   it('(v) live events arriving while island fetches are in flight land in the suffix and the result == full load of the grown history', async () => {
@@ -181,7 +241,10 @@ describe.each(fixtureNames)('island == full load (AC8, issue #2030 stage 3), fix
       ...record, message_id: record.message_id && `${record.message_id}-later${i}`,
       tool_use_id: record.tool_use_id && `${record.tool_use_id}-later${i}`, timestamp: (record.timestamp || 0) + 1e6,
     })
-    const extra = records.slice(-8).map(later)
+    // System task_* lifecycle frames are excluded: replayed live they add a terminal subagent signal
+    // row that a plain full load (no live source, no hydrated legs) never produces. That behaviour has
+    // its own test below (v-b).
+    const extra = records.slice(-8).filter(r => !isTaskLifecycleFrame(r)).map(later)
     const grown = [...records, ...extra]
     const expected = snapshot(await loadFull(grown))
 
@@ -201,6 +264,41 @@ describe.each(fixtureNames)('island == full load (AC8, issue #2030 stage 3), fix
     // the file grew: later pages come from the grown history
     serve(createFakeHistoryServer(grown, { tailStart: Math.max(1, records.length - 10), pageSize: 9, aroundBefore: 8, aroundAfter: 4, afterPageSize: 5 }))
     await finish(store)
+    expect(snapshot(store)).toEqual(expected)
+  })
+
+  it('(v-b) live task lifecycle frames during an island fetch behave like live frames on a full-load store (each terminal signal row once)', async () => {
+    const later = (record, i) => ({
+      ...record, message_id: record.message_id && `${record.message_id}-later${i}`,
+      tool_use_id: record.tool_use_id && `${record.tool_use_id}-later${i}`, timestamp: (record.timestamp || 0) + 1e6,
+    })
+    const extra = records.slice(-8).map(later)
+    if (!extra.some(isTaskLifecycleFrame)) return // fixture has no task lifecycle frames in its tail
+    // Reference: the full load, then the same records applied as live ones (the lifecycle handler's output
+    // is only produced by the live source, so a full load of the grown history is not comparable).
+    const reference = await loadFull(records)
+    for (const r of extra) reference.applyRecord(SID, r, 'live')
+    const expected = snapshot(reference)
+    const signalKeys = (st) => buildLoadedRows(st, SID).filter(i => i.type === 'subagent_signal').map(i => i.key)
+
+    const store = await freshStore()
+    serve(createFakeHistoryServer(records, { tailStart: Math.max(1, records.length - 10), pageSize: 9, aroundBefore: 8, aroundAfter: 4, afterPageSize: 5 }))
+    await store.loadMessages(SID, null, 0, { window: 'tail', signal: sig() })
+    const real = apiMock.get.getMockImplementation()
+    let release
+    apiMock.get.mockImplementation((url) => (String(url).includes('around=')
+      ? new Promise(resolve => { release = () => resolve(real(url)) }) : real(url)))
+    const pending = store.loadAround(SID, { cursor: `b:${Math.max(0, Math.min(Math.floor(records.length / 3), records.length - 14))}` })
+    for (const r of extra.slice(0, 4)) store.applyRecord(SID, r, 'live')
+    release()
+    await pending
+    for (const r of extra.slice(4)) store.applyRecord(SID, r, 'live')
+    apiMock.get.mockImplementation(real)
+    await finish(store)
+    const keys = signalKeys(store)
+    expect(new Set(keys).size).toBe(keys.length) // no duplicated terminal signal row
+    expect(keys.some(k => k.includes('terminal-'))).toBe(true) // and the live task_notification produced one
+    expect(keys).toEqual(signalKeys(reference))
     expect(snapshot(store)).toEqual(expected)
   })
 

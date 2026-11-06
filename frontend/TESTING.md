@@ -16,6 +16,12 @@ npm run test:coverage  # with coverage report
 
 All 40+ tests should pass in under 10 seconds.
 
+**Equivalence suites need the generation step first** (`src/stores/__tests__/*Equivalence.test.js`, `message.scale.test.js`):
+they read fixtures under `backend/tests/fixtures/generated/` (gitignored, rebuilt by the real backend pipeline). From the repo root run
+`uv run pytest backend/tests/test_equivalence_replay_generation.py` before `npm test`, and re-run it whenever `backend/tests/fixtures/raw/`
+changes. A stale `generated/` dir silently masks fixture changes; `historyIslandEquivalence.test.js` fails at collection with an
+actionable message when its generated copy is missing or older than the committed raw fixture (`assertGeneratedFixturesFresh()`).
+
 ## Test Structure
 
 ```
