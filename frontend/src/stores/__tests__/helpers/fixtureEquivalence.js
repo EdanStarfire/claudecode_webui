@@ -32,6 +32,30 @@ export function hasGeneratedFixture(name) {
 }
 
 /**
+ * Fails with an actionable message when a fixture's generated copy is missing or older than its
+ * committed raw/{name}/ source (a stale generated/ dir silently masks fixture changes: it is
+ * gitignored and survives checkouts). For suites that must run against freshly regenerated data:
+ *   uv run pytest backend/tests/test_equivalence_replay_generation.py
+ * Suites that tolerate the committed fallback (see hasGeneratedFixture()) need not call this.
+ */
+export function assertGeneratedFixturesFresh(names) {
+  const hint = 'Run `uv run pytest backend/tests/test_equivalence_replay_generation.py` from the repo root first.'
+  for (const name of names) {
+    const generated = path.join(GENERATED_FIXTURES_ROOT, name, 'rest_history.json')
+    if (!fs.existsSync(generated)) {
+      throw new Error(`Generated equivalence fixture '${name}' is missing (${generated}). ${hint}`)
+    }
+    const generatedAt = fs.statSync(generated).mtimeMs
+    for (const file of ['raw_log.jsonl', 'messages.jsonl', 'state.json']) {
+      const source = path.join(RAW_FIXTURES_ROOT, name, file)
+      if (fs.existsSync(source) && fs.statSync(source).mtimeMs > generatedAt) {
+        throw new Error(`Generated equivalence fixture '${name}' is stale (older than raw/${name}/${file}). ${hint}`)
+      }
+    }
+  }
+}
+
+/**
  * Every raw-fixture directory name with a raw_log.jsonl — discovered dynamically (not
  * hardcoded) so a future recorded fixture is picked up automatically. Throws (does not
  * return an empty list) when the directory is missing or has no eligible fixture, so a
