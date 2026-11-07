@@ -117,7 +117,7 @@ export function useVirtualNavigation(virtualizerRef, hooks = {}) {
 
     hooks.onJumpStart?.(index)
     setCue(null) // a cue of the jump this one replaces no longer describes where the list is going
-    const myEpoch = epoch
+    const myEpoch = ++epoch // a pending landing of an older jump (keeper correction, instant jump) drops its follow-ups
     const el = virtualizer.scrollElement
     forceFreshMeasurements(virtualizer)
     const target = el ? resolveOffset(virtualizer, index, align) : null
