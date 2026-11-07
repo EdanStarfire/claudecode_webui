@@ -262,6 +262,9 @@ class OAuthCallbackListenerManager:
         # web_server.py wires them — MCP-only deployments never set these.
         self._standalone_complete: CompleteFlowFn | None = None
         self._standalone_denied: DeniedFn | None = None
+        # Issue #2103: RelayManager handles Slack user-token OAuth callbacks (its pending
+        # state lives in the manager itself; Slack needs neither PKCE nor `scope`).
+        self._relay_oauth = None
         self._listeners: dict[int, OAuthCallbackListener] = {}
         # config_id (MCP) or flow_id (standalone, issue #1871) -> (port, path). The two
         # id spaces never collide: MCP config ids and OAuth `state` flow ids come from
@@ -282,6 +285,12 @@ class OAuthCallbackListenerManager:
         self._standalone_complete = complete_fn
         self._standalone_denied = denied_fn
 
+    def set_relay_oauth(self, relay_manager) -> None:
+        self._relay_oauth = relay_manager
+
+    def _is_relay_flow(self, state: str | None) -> bool:
+        return bool(state) and self._relay_oauth is not None and self._relay_oauth.is_relay_oauth_state(state)
+
     async def _is_standalone_flow(self, state: str) -> bool:
         context = await self._oauth_manager.get_pending_context(state)
         return bool(context) and context.get("flow_type") in (
@@ -297,6 +306,9 @@ class OAuthCallbackListenerManager:
         flow — peeked before popping so the routing decision doesn't consume the
         pending entry itself.
         """
+        if self._is_relay_flow(state):
+            record = await self._relay_oauth.oauth_complete(state, code)
+            return record.relay_id
         if await self._is_standalone_flow(state) and self._standalone_complete is not None:
             return await self._standalone_complete(state, code)
         server_id = await self._oauth_manager.complete_flow(state, code)
@@ -308,6 +320,9 @@ class OAuthCallbackListenerManager:
         """Issue #1871: notify a standalone flow's caller of a provider-side denial
         or error. No-op for MCP flows (and for malformed callbacks with no state) —
         matches existing MCP behavior of only logging server-side."""
+        if self._is_relay_flow(state):
+            self._relay_oauth.oauth_denied(state, error_description or error)
+            return
         if not state or self._standalone_denied is None or not await self._is_standalone_flow(state):
             return
         await self._standalone_denied(state, error, error_description)

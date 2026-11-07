@@ -11,6 +11,7 @@ from shared.exception_handlers import handle_exceptions
 
 from ..fixture_export import FixtureExportError
 from ..history_index import HistoryIndexBuildingError
+from ..relay.handles import HandleConflictError
 from ..response_offload import offload_large_json
 from ..session_lifecycle import is_deliverable
 from ._models import (
@@ -25,6 +26,20 @@ from ._search import run_search
 from ._windows import map_window_errors, validate_window_params
 
 logger = logging.getLogger(__name__)
+
+
+async def _validate_relay_config(webui, session_id: str, config: dict) -> dict:
+    """Issue #2103: validate relay fields / relay-* secret assignment in a config replacement.
+
+    Returns the config to persist (an omitted relay_handle is carried over so the handle
+    stays stable across whole-config saves).
+    """
+    try:
+        return await webui.service.relay_service.validate_session_config(session_id, config)
+    except HandleConflictError as e:
+        raise HTTPException(status_code=409, detail=str(e)) from e
+    except ValueError as e:
+        raise HTTPException(status_code=422, detail=str(e)) from e
 
 
 async def _validate_recording_config(webui, session_id: str, config: dict) -> None:
@@ -271,7 +286,9 @@ def build_router(webui) -> APIRouter:
         # Handle full config dict replacement (issue #1230)
         if request.config is not None:
             await _validate_recording_config(webui, session_id, request.config)
-            updates["_replace_config"] = request.config
+            updates["_replace_config"] = await _validate_relay_config(
+                webui, session_id, request.config
+            )
 
         # Handle name update
         if request.name is not None:
@@ -408,6 +425,13 @@ def build_router(webui) -> APIRouter:
         success = await webui.service.update_session(session_id, **updates)
         if not success:
             raise HTTPException(status_code=500, detail="Failed to update session")
+
+        if request.config is not None or "template_id" in request.model_fields_set:
+            # Issue #2103: keep the handle index in step / assign on first attachment.
+            try:
+                await webui.service.relay_service.sync_session(session_id)
+            except Exception:
+                logger.exception("Relay handle sync failed for session %s", session_id)
 
         session_info = await webui.service.get_session_object(session_id)
         if session_info is None:

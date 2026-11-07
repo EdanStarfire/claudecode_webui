@@ -55,9 +55,11 @@ ALLOWLIST: dict[str, int] = {
     # Issue #2145: 344->346 — one process-bound `_background_tasks` state dict
     # (plain-dict state init, same residual category as above) plus its comment.
     # Issue #2333: 346->347 — one line constructing ProviderModelSwitch(self).
-    "__init__": 347,
+    # Issue #2103: 347->349 — exposes relay_manager/relay_service from build_core_managers().
+    "__init__": 349,
     # --- Orchestration ---
-    "initialize": 69,
+    # Issue #2103: 69->70 — one `await self.relay_service.initialize()` line.
+    "initialize": 70,
     "cleanup": 23,
     # --- Acknowledged "real logic" residual kept on the coordinator by
     # design: session lifecycle operations, the state-change notify/relay

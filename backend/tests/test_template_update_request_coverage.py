@@ -24,6 +24,7 @@ from backend.session_config import SessionConfig
 _SESSION_ONLY_FIELDS = {
     "working_directory",  # not applicable to templates
     "template_id",        # template PK, not a config field in the request
+    "relay_handle",       # session-tier only (issue #2103); validate_relay_config rejects it on templates
 }
 
 

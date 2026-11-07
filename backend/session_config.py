@@ -13,6 +13,8 @@ from pathlib import Path
 
 from pydantic import BaseModel, Field, field_validator
 
+from .relay.validation import validate_assigned_secrets, validate_relay_config
+
 
 def validate_and_normalize_working_directory(
     path: str | None,
@@ -136,6 +138,14 @@ class SessionConfig(BaseModel):
     timestamp_injection_frequency: str = "every_message"  # "every_message" | "once_per_day"
     timestamp_injection_timezone: str = "UTC"  # IANA tz name
 
+    # Relay attachment (issue #2103). relay_handle is session-tier only; the policy dict is
+    # merged per channel across tiers at call time (backend/relay/service.py), not replaced.
+    relay_id: str | None = None
+    relay_footer_enabled: bool | None = None
+    relay_footer_template: str | None = None
+    relay_channel_policies: dict[str, str] | None = None
+    relay_handle: str | None = None
+
     # Hooks (issue #1629)
     hook_ids: list[str] | None = None  # Global hook config IDs to attach, in order
 
@@ -192,6 +202,20 @@ class SessionConfig(BaseModel):
     provider_opus_model_id: str | None = None
     provider_default_tier: str | None = None  # "haiku" | "sonnet" | "opus"
 
+    @field_validator("assigned_secrets")
+    @classmethod
+    def _reject_relay_secrets(cls, v):
+        validate_assigned_secrets(v)  # issue #2103: relay-* vault secrets are never assignable
+        return v
+
+    @field_validator("relay_footer_template", "relay_channel_policies", "relay_handle")
+    @classmethod
+    def _validate_relay_field(cls, v, info):
+        # Issue #2103: bad values are rejected where entered (422 on create requests);
+        # tier rules (relay_handle session-only) are enforced by the profile/template managers.
+        validate_relay_config({info.field_name: v}, "session")
+        return v
+
     @field_validator("model", "auto_mode_classifier_model")
     @classmethod
     def _normalize_model(cls, v):
@@ -235,6 +259,8 @@ CONFIG_FIELDS: set[str] = {
     "provider_sonnet_catalog_id", "provider_sonnet_model_id",
     "provider_opus_catalog_id", "provider_opus_model_id",
     "provider_default_tier",
+    "relay_id", "relay_footer_enabled", "relay_footer_template",
+    "relay_channel_policies", "relay_handle",
 }
 
 # Default values for all CONFIG_FIELDS — derived from a fresh SessionConfig instance.

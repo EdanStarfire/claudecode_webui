@@ -128,6 +128,10 @@ def build_router(webui) -> APIRouter:
             inject_timestamps_enabled=request.inject_timestamps_enabled,
             timestamp_injection_frequency=request.timestamp_injection_frequency,
             timestamp_injection_timezone=request.timestamp_injection_timezone,
+            relay_id=request.relay_id,
+            relay_footer_enabled=request.relay_footer_enabled,
+            relay_footer_template=request.relay_footer_template,
+            relay_channel_policies=request.relay_channel_policies,
             profile_ids=request.profile_ids,
         )
 

@@ -23,6 +23,7 @@ from shared.logging_config import get_logger
 
 from .config_resolution import PROFILE_AREA_KEYS, PROFILE_AREAS
 from .models.config_profile import ConfigProfile
+from .relay.validation import validate_relay_config
 from .slug_utils import slugify as _slugify
 
 logger = logging.getLogger(__name__)
@@ -210,6 +211,8 @@ class ProfileManager:
                 f"Valid keys: {PROFILE_AREAS[area]}"
             )
 
+        validate_relay_config(config, "profile")
+
         now = datetime.now(UTC)
         profile = ConfigProfile(
             profile_id=str(uuid.uuid4()),
@@ -269,6 +272,7 @@ class ProfileManager:
                     f"Config keys {invalid_keys} are not valid for area '{profile.area}'. "
                     f"Valid keys: {PROFILE_AREAS[profile.area]}"
                 )
+            validate_relay_config(config, "profile")
             profile.config = config
 
         profile.updated_at = datetime.now(UTC)

@@ -23,6 +23,7 @@ from shared.logging_config import get_logger
 
 from .models.messages import CURRENT_MESSAGE_SCHEMA_VERSION, LegacyMessageFormatError
 from .models.permission_mode import PermissionMode
+from .relay.validation import validate_relay_config
 from .session_config import CONFIG_FIELDS, DEFAULTS, SessionConfig
 from .session_lifecycle import (  # noqa: F401 — re-exported; see module docstring below
     AUTO_START_STATES,
@@ -634,6 +635,8 @@ class SessionManager:
             if k in CONFIG_FIELDS and v != DEFAULTS.get(k)
         }
 
+        validate_relay_config(config_dict, "session")
+
         session_info = SessionInfo(
             session_id=session_id,
             state=SessionState.CREATED,
@@ -1216,6 +1219,52 @@ class SessionManager:
             except Exception as e:
                 logger.error(f"Failed to update session {session_id} name: {e}")
                 return False
+
+    async def update_relay_policy(
+        self, session_id: str, channel_id: str, policy: str | None
+    ) -> bool:
+        """Set (or remove, when *policy* is None) one session-tier relay channel policy.
+
+        Touches only ``config["relay_channel_policies"][channel_id]``; effective policy is
+        merged live per call (backend/relay/service.py), so no restart is needed (issue #2103).
+        """
+        async with self._get_session_lock(session_id):
+            session = self._active_sessions.get(session_id)
+            if not session:
+                return False
+            policies = dict(session.config.get("relay_channel_policies") or {})
+            if policy is None:
+                policies.pop(channel_id, None)
+            else:
+                policies[channel_id] = policy
+            if policies:
+                session.config["relay_channel_policies"] = policies
+            else:
+                session.config.pop("relay_channel_policies", None)
+            session.updated_at = datetime.now(UTC)
+            await self._persist_session_state(session_id)
+            await self._notify_metadata_change_callbacks(session_id)
+            return True
+
+    async def set_relay_handle(self, session_id: str, handle: str) -> bool:
+        """Persist ``config["relay_handle"]``. Never derived from the name here: the handle
+        is rename-stable and independent of ``slug`` (issue #2103)."""
+        async with self._get_session_lock(session_id):
+            session = self._active_sessions.get(session_id)
+            if not session:
+                return False
+            session.config["relay_handle"] = handle
+            session.updated_at = datetime.now(UTC)
+            await self._persist_session_state(session_id)
+            await self._notify_metadata_change_callbacks(session_id)
+            return True
+
+    def has_session(self, session_id: str) -> bool:
+        return session_id in self._active_sessions
+
+    def iter_relay_handles(self) -> list[tuple[str, str | None]]:
+        """(session_id, relay_handle) for every known session (handle index build)."""
+        return [(sid, s.config.get("relay_handle")) for sid, s in self._active_sessions.items()]
 
     async def update_sdk_generated_name(self, session_id: str, sdk_name: str) -> bool:
         """Update SDK-generated session title (issue #904)"""

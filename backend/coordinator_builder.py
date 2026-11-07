@@ -42,6 +42,9 @@ from .oauth_secret_bundle_manager import OAuthSecretBundleManager
 from .pending_store import PendingStore
 from .project_manager import ProjectManager
 from .queue_manager import QueueManager
+from .relay.handles import RelayHandleIndex
+from .relay.service import RelayService
+from .relay_manager import RelayManager
 from .secrets_service import SecretsService
 from .session_manager import SessionManager
 from .vault_refresh_manager import VaultRefreshManager
@@ -78,6 +81,9 @@ class CoreManagers:
     oauth_secret_bundle_manager: OAuthSecretBundleManager
     queue_manager: QueueManager
     pending_store: PendingStore
+    # Issue #2103: relay asset, handle index and the live policy/handle service.
+    relay_manager: RelayManager
+    relay_service: RelayService
 
 
 def build_core_managers(
@@ -130,6 +136,13 @@ def build_core_managers(
     queue_manager = QueueManager()
     pending_store = PendingStore()
 
+    relay_manager = RelayManager(data_dir, credential_vault)
+    relay_service = RelayService(
+        relay_manager, RelayHandleIndex(session_manager.has_session),
+        session_manager, template_manager, profile_manager,
+    )
+    oauth_callback_listener_manager.set_relay_oauth(relay_manager)
+
     return CoreManagers(
         session_manager=session_manager,
         template_manager=template_manager,
@@ -151,6 +164,8 @@ def build_core_managers(
         oauth_secret_bundle_manager=oauth_secret_bundle_manager,
         queue_manager=queue_manager,
         pending_store=pending_store,
+        relay_manager=relay_manager,
+        relay_service=relay_service,
     )
 
 

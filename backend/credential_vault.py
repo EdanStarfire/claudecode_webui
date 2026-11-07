@@ -17,6 +17,7 @@ import os
 from pathlib import Path
 
 from .models.secret_record import SecretRecord, SecretType, validate_secret_name
+from .relay.validation import RELAY_SECRET_PREFIX
 from .secrets_keyring import delete_secret_value, get_secret_value, set_secret_value
 from .slug_utils import slugify_secret
 
@@ -162,6 +163,10 @@ class SecretsVault:
         """
         results = []
         for name in names:
+            # Issue #2103: relay-owned secrets are read only in-process by RelayManager.
+            if name.strip().lower().startswith(RELAY_SECRET_PREFIX):
+                logger.warning("Refusing to resolve relay-owned secret for assignment")
+                continue
             meta_path = self._secret_filename(name)
             if not meta_path.exists():
                 logger.warning(f"Secret '{name}' not found in vault, skipping")
