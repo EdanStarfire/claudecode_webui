@@ -402,10 +402,18 @@ class TemplateManager:
 
         # Issue #2103: validate before any field is mutated so a rejected update leaves
         # the in-memory template untouched.
-        if config is not None:
-            validate_relay_config(
-                {k: v for k, v in config.items() if k in CONFIG_FIELDS}, "template"
-            )
+        relay_flat = {
+            k: v for k, v in {
+                "relay_id": relay_id, "relay_footer_enabled": relay_footer_enabled,
+                "relay_footer_template": relay_footer_template,
+                "relay_channel_policies": relay_channel_policies,
+            }.items() if v is not None
+        }
+        base_config = (
+            {k: v for k, v in config.items() if k in CONFIG_FIELDS}
+            if config is not None else template.config
+        )
+        validate_relay_config({**base_config, **relay_flat}, "template")
 
         # Check name uniqueness if changing name
         if name and name.strip() != template.name:

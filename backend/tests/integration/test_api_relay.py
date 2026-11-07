@@ -337,3 +337,14 @@ async def test_issue_2103_oauth_denied_and_unknown_state(relay_env):
     # A code for an unknown state falls through to the MCP path and fails without touching relays
     with pytest.raises(ValueError):
         await listener.complete_and_broadcast("forged-state", "code")
+
+
+@pytest.mark.asyncio
+async def test_issue_2103_rejected_template_update_leaves_template_untouched(relay_env):
+    client = relay_env["client"]
+    t = (await client.post("/api/templates", json={"name": "Keep", "description": "orig"})).json()
+    r = await client.put(f"/api/templates/{t['template_id']}",
+                         json={"name": "Renamed", "description": "new", "relay_footer_template": "hi !bob"})
+    assert r.status_code == 400
+    got = (await client.get(f"/api/templates/{t['template_id']}")).json()
+    assert got["name"] == "Keep" and got["description"] == "orig"
