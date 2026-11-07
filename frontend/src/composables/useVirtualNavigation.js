@@ -47,16 +47,21 @@ export function forceFreshMeasurements(virtualizer) {
 export function useVirtualNavigation(virtualizerRef, hooks = {}) {
   const motionRunner = createJumpMotion()
   let cueTimer = null
+  let epoch = 0 // bumped by cancelMotion: an instant jump that was awaiting its mount must not run its follow-ups afterwards
 
+  let cueActive = false
   function setCue(cue) {
     clearTimeout(cueTimer)
     cueTimer = null
+    if (!cue && !cueActive) return
+    cueActive = !!cue
     hooks.onCue?.(cue)
-    if (cue) cueTimer = setTimeout(() => { cueTimer = null; hooks.onCue?.(null) }, CUE_MS)
+    if (cue) cueTimer = setTimeout(() => { cueTimer = null; cueActive = false; hooks.onCue?.(null) }, CUE_MS)
   }
 
   /** Stops a running jump animation (session switch, unmount, deactivate): no landing correction, no cue. */
   function cancelMotion(reason = 'cancel') {
+    epoch++
     motionRunner.cancel(reason)
     setCue(null)
     stopLibraryReconcile()
@@ -95,8 +100,9 @@ export function useVirtualNavigation(virtualizerRef, hooks = {}) {
   /**
    * Scrolls so `index` is the current best-known target, then waits for it to actually mount.
    * Returns true once the index is confirmed mounted, false if the virtualizer/index is
-   * unavailable, mounting couldn't be confirmed within the bounded retry budget, or the jump was
-   * cancelled (the user scrolled, a newer jump started).
+   * unavailable or mounting couldn't be confirmed within the bounded retry budget, and null when the
+   * jump was cancelled (the user scrolled, a newer jump started, the view went away): the row may
+   * well exist, so a caller must not report it missing.
    *
    * `motion`: 'animate' (default; a deliberate jump) | 'none' (an instant correction: search keeper,
    * retries). `pulse` (default: true for 'animate') runs hooks.onLanded after a confirmed landing.
@@ -110,6 +116,8 @@ export function useVirtualNavigation(virtualizerRef, hooks = {}) {
     }
 
     hooks.onJumpStart?.(index)
+    setCue(null) // a cue of the jump this one replaces no longer describes where the list is going
+    const myEpoch = epoch
     const el = virtualizer.scrollElement
     forceFreshMeasurements(virtualizer)
     const target = el ? resolveOffset(virtualizer, index, align) : null
@@ -121,6 +129,7 @@ export function useVirtualNavigation(virtualizerRef, hooks = {}) {
     if (plan.kind === 'instant') {
       motionRunner.cancel('superseded')
       const landed = await exactLanding(index, align, behavior)
+      if (myEpoch !== epoch) return null
       if (landed && pulse) hooks.onLanded?.(index)
       return landed
     }
@@ -129,7 +138,6 @@ export function useVirtualNavigation(virtualizerRef, hooks = {}) {
     hooks.onMotionStart?.()
     try {
       const resolveTarget = () => resolveOffset(virtualizerRef.value || virtualizer, index, target.align)?.offset ?? target.offset
-      const onFrame = () => hooks.onFrame?.()
       let tweenFrom = from
       if (plan.kind === 'long') {
         showLongCue(virtualizer, el, index, from, target.offset, plan.up)
@@ -142,7 +150,7 @@ export function useVirtualNavigation(virtualizerRef, hooks = {}) {
       }
       if (handle.cancelled) return finishCancelled(handle)
       const ease = plan.kind === 'long' ? easeOutCubic : easeInOutCubic
-      const result = await handle.tween({ from: tweenFrom, resolveTarget, duration: plan.duration, ease, onFrame })
+      const result = await handle.tween({ from: tweenFrom, resolveTarget, duration: plan.duration, ease, onFrame: hooks.onFrame })
       if (result !== 'done' || handle.cancelled) return finishCancelled(handle)
       const landed = await exactLanding(index, target.align, behavior, handle)
       if (handle.cancelled) return finishCancelled(handle)
@@ -159,7 +167,7 @@ export function useVirtualNavigation(virtualizerRef, hooks = {}) {
       setCue(null)
       hooks.onUserCancel?.()
     }
-    return false
+    return null
   }
 
   function showLongCue(virtualizer, el, index, fromOffset, toOffset, up) {

@@ -3179,6 +3179,7 @@ describe('jump motion (issue #2342)', () => {
     const src = readFileSync(`${process.cwd()}/src/components/messages/MessageList.vue`, 'utf8')
     expect(src).toMatch(/scrollToItemIndexTrusted\(index, \{ align: 'center', behavior: 'auto', motion: 'none' \}\)/) // keeper tick
     expect(src).toMatch(/scrollToItemIndexTrusted\(index, \{ align: 'start', behavior: 'auto', pulse: false \}\)/) // launch card pulses instead
+    expect(src).toMatch(/mounted === null\) return false/) // a cancelled jump is not a "match not found"
   })
 
   it('an upward long jump cues UP (direction is the user\'s, not a list offset artefact)', async () => {
@@ -3211,7 +3212,7 @@ describe('jump motion (issue #2342)', () => {
     const landed = wrapper.vm.scrollToItemIndex(200, { align: 'start', behavior: 'auto' })
     await sleep(100)
     area.dispatchEvent(new Event('wheel'))
-    expect(await landed).toBe(false)
+    expect(await landed).toBeNull()
     const stoppedAt = area.scrollTop
     await sleep(600)
     expect(area.scrollTop).toBe(stoppedAt)
@@ -3224,12 +3225,12 @@ describe('jump motion (issue #2342)', () => {
     const first = wrapper.vm.scrollToItemIndex(200, { align: 'start', behavior: 'auto' })
     await sleep(60)
     viewSessionIdRef.value = 'another-session'
-    expect(await first).toBe(false)
+    expect(await first).toBeNull()
     viewSessionIdRef.value = SESSION_ID
     const second = wrapper.vm.scrollToItemIndex(100, { align: 'start', behavior: 'auto' })
     await sleep(60)
     wrapper.unmount()
-    expect(await second).toBe(false)
+    expect(await second).toBeNull()
   })
 
   it('the animation holds the jump-open state: sticky is dropped for the jump and re-derived from where it landed', async () => {
@@ -3250,7 +3251,7 @@ describe('jump motion (issue #2342)', () => {
     const first = wrapper.vm.scrollToItemIndex(200, { align: 'start', behavior: 'auto' })
     await sleep(60)
     const second = wrapper.vm.scrollToItemIndex(40, { align: 'start', behavior: 'auto' })
-    expect(await first).toBe(false)
+    expect(await first).toBeNull()
     expect(await second).toBe(true)
     await sleep(500)
     expect(pulsedIndexes(animate)).toEqual(['40'])

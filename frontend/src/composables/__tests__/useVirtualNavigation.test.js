@@ -193,7 +193,7 @@ describe('useVirtualNavigation jump motion (issue #2342)', () => {
     const promise = nav.scrollToItemIndex(16, { align: 'start' })
     await new Promise(resolve => setTimeout(resolve, 60))
     el.dispatchEvent(new Event('wheel'))
-    expect(await promise).toBe(false)
+    expect(await promise).toBeNull()
     expect(fake.scrollToIndex).not.toHaveBeenCalled()
     expect(hooks.onLanded).not.toHaveBeenCalled()
     expect(hooks.onUserCancel).toHaveBeenCalledTimes(1)
@@ -209,7 +209,7 @@ describe('useVirtualNavigation jump motion (issue #2342)', () => {
     await new Promise(resolve => setTimeout(resolve, 40))
     state.target = 2400
     const second = nav.scrollToItemIndex(24, { align: 'start' })
-    expect(await first).toBe(false)
+    expect(await first).toBeNull()
     expect(await second).toBe(true)
     expect(hooks.onMotionStart).toHaveBeenCalledTimes(2)
     expect(hooks.onMotionEnd).toHaveBeenCalledTimes(2)
@@ -222,7 +222,7 @@ describe('useVirtualNavigation jump motion (issue #2342)', () => {
     const promise = nav.scrollToItemIndex(16, { align: 'start' })
     await new Promise(resolve => setTimeout(resolve, 40))
     nav.cancelMotion('session')
-    expect(await promise).toBe(false)
+    expect(await promise).toBeNull()
     expect(fake.scrollToIndex).not.toHaveBeenCalled()
     expect(hooks.onLanded).not.toHaveBeenCalled()
     expect(nav.isAnimating()).toBe(false)
@@ -253,7 +253,7 @@ describe('useVirtualNavigation cancel vs the virtualizer reconcile loop (issue #
     await new Promise(resolve => setTimeout(resolve, 40))
     el.dispatchEvent(new Event('touchstart'))
     expect(fake.scrollState).toBeNull()
-    expect(await promise).toBe(false)
+    expect(await promise).toBeNull()
   })
 
   it('with fake timers: after a user cancel during the final landing the reconcile loop never pulls the view back', async () => {
@@ -285,9 +285,65 @@ describe('useVirtualNavigation cancel vs the virtualizer reconcile loop (issue #
       expect(el.scrollTop).toBe(999) // nothing pulled the view back to the target
       expect(fake.scrollState).toBeNull()
       await vi.advanceTimersByTimeAsync(2000)
-      expect(await promise).toBe(false)
+      expect(await promise).toBeNull()
     } finally {
       vi.useRealTimers()
     }
+  })
+})
+
+describe('useVirtualNavigation review follow-ups (issue #2342)', () => {
+  it('the virtualizer still exposes the private scrollState field stopLibraryReconcile clears (guards a library upgrade)', async () => {
+    const { Virtualizer } = await import('@tanstack/virtual-core')
+    const v = new Virtualizer({
+      count: 1, getScrollElement: () => null, estimateSize: () => 10, scrollToFn() {},
+      observeElementRect() {}, observeElementOffset() {},
+    })
+    expect('scrollState' in v).toBe(true)
+  })
+
+  it('a session switch while an instant jump awaits its mount drops its follow-ups (no pulse in the other session)', async () => {
+    const hooks = { onLanded: vi.fn(), onJumpStart: vi.fn() }
+    const fake = { scrollToIndex: vi.fn(), getTotalSize: () => 0, getVirtualItems: () => [{ index: 3 }] }
+    const nav = useVirtualNavigation(ref(fake), hooks)
+    const promise = nav.scrollToItemIndex(3, { align: 'start' })
+    nav.cancelMotion('session')
+    expect(await promise).toBeNull()
+    expect(hooks.onLanded).not.toHaveBeenCalled()
+  })
+
+  it('a tween frame that throws releases the hold instead of leaving the caller waiting forever', async () => {
+    const el = document.createElement('div')
+    Object.defineProperty(el, 'clientHeight', { value: 800, configurable: true })
+    el.scrollTo = vi.fn(() => { throw new Error('detached') })
+    const hooks = { onMotionStart: vi.fn(), onMotionEnd: vi.fn(), onLanded: vi.fn() }
+    const fake = {
+      scrollElement: el, scrollToIndex: vi.fn(), getTotalSize: () => 100000, getOffsetForIndex: () => [1600, 'start'],
+      getVirtualItemForOffset: () => ({ index: 1 }), getVirtualItems: () => [{ index: 16 }],
+    }
+    const spy = vi.spyOn(console, 'error').mockImplementation(() => {})
+    const nav = useVirtualNavigation(ref(fake), hooks)
+    expect(await nav.scrollToItemIndex(16, { align: 'start' })).toBeNull()
+    expect(hooks.onMotionEnd).toHaveBeenCalledTimes(1)
+    expect(hooks.onLanded).not.toHaveBeenCalled()
+    spy.mockRestore()
+  })
+
+  it('a replaced long-jump cue is cleared when a shorter jump starts', async () => {
+    const el = document.createElement('div')
+    Object.defineProperty(el, 'clientHeight', { value: 800, configurable: true })
+    el.scrollTo = vi.fn(({ top }) => { el.scrollTop = top })
+    let target = 40000
+    const hooks = { onCue: vi.fn() }
+    const fake = {
+      scrollElement: el, scrollToIndex: vi.fn(), getTotalSize: () => 100000, getOffsetForIndex: () => [target, 'start'],
+      getVirtualItemForOffset: () => ({ index: 1 }), getVirtualItems: () => [{ index: 5 }, { index: 400 }, { index: 20 }],
+    }
+    const nav = useVirtualNavigation(ref(fake), hooks)
+    await nav.scrollToItemIndex(400, { align: 'start' })
+    expect(hooks.onCue).toHaveBeenLastCalledWith(expect.objectContaining({ label: expect.any(String) }))
+    target = el.scrollTop + 500 // a short jump
+    await nav.scrollToItemIndex(20, { align: 'start' })
+    expect(hooks.onCue).toHaveBeenLastCalledWith(null)
   })
 })

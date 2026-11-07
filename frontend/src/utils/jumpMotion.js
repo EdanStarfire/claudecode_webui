@@ -17,7 +17,7 @@ export const SETTLE_MS = 300
 export const CUE_MS = 1100
 
 const MIN_MOVE_PX = 2 // closer than this is not worth animating
-const SCROLL_KEYS = new Set(['ArrowUp', 'ArrowDown', 'PageUp', 'PageDown', 'Home', 'End', ' '])
+export const SCROLL_RELEVANT_KEYS = new Set(['ArrowUp', 'ArrowDown', 'PageUp', 'PageDown', 'Home', 'End', ' '])
 
 export const easeOutCubic = (p) => 1 - Math.pow(1 - p, 3)
 export const easeInOutCubic = (p) => (p < 0.5 ? 4 * p * p * p : 1 - Math.pow(-2 * p + 2, 3) / 2)
@@ -55,7 +55,7 @@ export function prefersReducedMotion(matchMedia = typeof window !== 'undefined' 
   }
 }
 
-function isTextEntryTarget(el) {
+export function isTextEntryTarget(el) {
   if (!el) return false
   if (el.isContentEditable) return true
   return el.tagName === 'INPUT' || el.tagName === 'TEXTAREA' || el.tagName === 'SELECT'
@@ -66,7 +66,7 @@ function isTextEntryTarget(el) {
  * listeners (wheel / touchstart / mousedown on the scroller, scroll keys on the window) for the handle's
  * lifetime; any of them cancels with reason 'user' (the user wins: nothing corrects the position afterwards).
  *
- * handle: `{ cancelled, reason, tween(opts) -> Promise<'done'|'cancelled'>, end() }`
+ * handle: `{ cancelled, reason, tween(opts) -> Promise<'done'|'cancelled'|'error'>, end() }`
  */
 export function createJumpMotion({
   now = () => performance.now(),
@@ -90,7 +90,7 @@ export function createJumpMotion({
 
     const onUser = () => handle.cancel('user')
     const onKey = (e) => {
-      if (!SCROLL_KEYS.has(e.key)) return
+      if (!SCROLL_RELEVANT_KEYS.has(e.key)) return
       if (isTextEntryTarget(doc?.activeElement)) return
       handle.cancel('user')
     }
@@ -130,15 +130,22 @@ export function createJumpMotion({
       const step = () => {
         rafId = null
         if (handle.cancelled) return
-        const p = duration > 0 ? Math.min(1, (now() - t0) / duration) : 1
-        const to = resolveTarget()
-        const top = p >= 1 ? to : from + (to - from) * ease(p)
-        if (typeof el.scrollTo === 'function') el.scrollTo({ top, behavior: 'auto' })
-        else el.scrollTop = top
-        onFrame?.(p)
-        if (p < 1) { rafId = raf(step); return }
-        resolveTween = null
-        resolve('done')
+        try {
+          const p = duration > 0 ? Math.min(1, (now() - t0) / duration) : 1
+          const to = resolveTarget()
+          const top = p >= 1 ? to : from + (to - from) * ease(p)
+          if (typeof el.scrollTo === 'function') el.scrollTo({ top, behavior: 'auto' })
+          else el.scrollTop = top
+          onFrame?.()
+          if (p < 1) { rafId = raf(step); return }
+          resolveTween = null
+          resolve('done')
+        } catch (err) {
+          // a throwing frame (detached list, a hook) must not leave the caller awaiting forever with the jump-open hold held
+          console.error('[jumpMotion] tween frame failed', err)
+          resolveTween = null
+          resolve('error')
+        }
       }
       rafId = raf(step)
     })

@@ -159,12 +159,12 @@ async function resolve(perm, decision) {
 // Issue #1748 follow-up (user feedback): `align: 'auto'`/`block: 'nearest'` (not 'center') so an
 // already-visible target doesn't move at all, and an off-screen one moves the minimum distance
 // instead of forcibly recentering the viewport.
-// Issue #1748 (stage: windowing): the virtualizer-level jump uses `behavior: 'auto'` (instant),
-// not 'smooth' — per plan §5.5, a long unmounted span must never be smooth-scrolled through (it
-// would visibly animate across mostly-empty spacer space now that overscan is a real value). The
-// final scrollIntoView correction stays smooth since by then the target is confirmed mounted —
-// real content, a short distance, where smooth easing is the intended UX.
+// Issue #1748 (stage: windowing): the virtualizer write mode stays `behavior: 'auto'`; the jump itself
+// is the JS-driven eased scroll of issue #2342 (never a native smooth scroll across unmounted rows, see
+// useVirtualNavigation.js). The final scrollIntoView correction stays smooth since by then the target is
+// confirmed mounted — real content, a short distance, where smooth easing is the intended UX.
 async function viewInContext(perm) {
+  if (uiStore.isMobile) sheetOpen.value = false // close the sheet first: the list now animates and must be visible while it does
   if (perm.isSubagent) {
     messageStore.setLegExpanded(perm.taskId, perm.legIndex, true)
     await nextTick()
@@ -187,7 +187,6 @@ async function viewInContext(perm) {
         ?.scrollIntoView({ behavior: 'smooth', block: 'nearest' })
     }
   }
-  if (uiStore.isMobile) sheetOpen.value = false
 }
 </script>
 

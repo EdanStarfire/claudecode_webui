@@ -193,6 +193,7 @@ import { useMessageSearch } from '@/composables/useMessageSearch'
 import { resolveMessageId } from '@/search/messageSearch'
 import { applyHighlight, clearHighlight } from '@/search/highlightMatch'
 import { useVirtualNavigation, forceFreshMeasurements } from '@/composables/useVirtualNavigation'
+import { SCROLL_RELEVANT_KEYS, isTextEntryTarget, prefersReducedMotion } from '@/utils/jumpMotion'
 import { computeItemKeys } from '@/utils/displayableItems'
 import { buildLoadedRows } from '@/utils/loadedRows'
 import { historyBackfill } from '@/composables/useHistoryBackfill'
@@ -363,7 +364,7 @@ const virtualNav = useVirtualNavigation(rowVirtualizer, {
   onMotionStart: () => beginTurnJump(true),
   onMotionEnd: () => endTurnJump(),
   onFrame: () => markProgrammaticScroll(),
-  onJumpStart: () => cancelPendingPulse(),
+  onJumpStart: () => { cancelPendingPulse(); stopKeeper() }, // a newer deliberate jump ends a search keeper that would re-aim at its old hit
   onLanded: (index) => { pulseLandedRow(index) },
   onUserCancel: () => { programmaticUntil = 0; cancelPendingPulse(); stopLaunchPulse() },
   onCue: (cue) => { jumpCue.value = cue },
@@ -524,8 +525,7 @@ watch(historyLoading, (loading) => {
     spinnerVisible.value = true
     return
   }
-  const reduced = typeof window !== 'undefined' && window.matchMedia?.('(prefers-reduced-motion: reduce)')?.matches
-  if (reduced) { spinnerVisible.value = false; return }
+  if (prefersReducedMotion()) { spinnerVisible.value = false; return }
   clearSpinnerHold()
   spinnerHoldTimer = setTimeout(() => { spinnerHoldTimer = null; spinnerVisible.value = false }, SPINNER_HOLD_MS)
 })
@@ -936,10 +936,12 @@ async function bringLaunchCardIntoView(lane) {
   // The virtualizer keeps correcting the jump's scroll offset while the rows around the target are
   // measured: wait until the position has been stable for a few frames before adjusting it. A
   // position that never settles (the user scrolled, another jump started) is left alone.
+  const token = pulseToken // a newer jump or a user input moves it on: this adjustment is then void
   let last = null
   let stable = 0
   for (let frame = 0; frame < 40 && stable < 5; frame++) {
     await nextFrame()
+    if (token !== pulseToken) return
     stable = area.scrollTop === last ? stable + 1 : 0
     last = area.scrollTop
   }
@@ -975,8 +977,7 @@ function stopLaunchPulse() {
 
 function pulseLaunchCard(card) {
   stopLaunchPulse()
-  const reduced = typeof window !== 'undefined' && window.matchMedia?.('(prefers-reduced-motion: reduce)').matches
-  if (reduced) {
+  if (prefersReducedMotion()) {
     card.style.outline = LAUNCH_PULSE_OUTLINE
     card.style.outlineOffset = '2px'
     launchPulse = { card, static: true, timer: setTimeout(stopLaunchPulse, LAUNCH_PULSE_MS) }
@@ -1478,6 +1479,7 @@ async function scrollToLoadedMatch(match, index, seq) {
 
   const mounted = await scrollToItemIndexTrusted(index, { align: 'center', behavior: 'auto' })
   if (seq !== navigationSeq) return mounted // superseded by a newer navigation; don't touch shared highlight state
+  if (mounted === null) return false // the animation was cancelled (the user scrolled, another jump started): the row exists, this is not a miss
 
   clearActiveHighlight()
   if (!mounted) {
@@ -1670,14 +1672,6 @@ function renewGestureWindow() {
     // immediately after every touchend, defeating its entire purpose.
   }, GESTURE_WINDOW_MS)
 }
-
-function isTextEntryTarget(el) {
-  if (!el) return false
-  if (el.isContentEditable) return true
-  return el.tagName === 'INPUT' || el.tagName === 'TEXTAREA' || el.tagName === 'SELECT'
-}
-
-const SCROLL_RELEVANT_KEYS = new Set(['ArrowUp', 'ArrowDown', 'PageUp', 'PageDown', 'Home', 'End', ' '])
 
 // InputArea.vue is a sibling component on the same page — without this exclusion, typing
 // Home/End/Arrow/Space in its textarea (all common text-editing keys) would spuriously open a
