@@ -51,6 +51,8 @@ from .litellm_proxy_manager import (
 )
 from .mcp_config_manager import McpServerType
 from .oauth_refresh_manager import OAuthRefreshManager
+from .restart_required import build_launch_snapshot
+from .restart_required import single_alias as config_single_alias
 from .session_lifecycle import is_restartable
 from .session_manager import SessionState
 from .session_recorder import SessionRecorder
@@ -233,6 +235,7 @@ class SessionLauncher:
     # _active_sdks reach-in). A property (not a snapshotted reference) also
     # covers the rarer case of the dict itself being reassigned wholesale.
     _active_sdks = property(lambda self: self._coordinator._active_sdks)
+    _launch_snapshots = property(lambda self: self._coordinator._launch_snapshots)
     _storage_managers = property(lambda self: self._coordinator._storage_managers)
     _session_recorders = property(lambda self: self._coordinator._session_recorders)
     _usage_baseline_by_session = property(lambda self: self._coordinator._usage_baseline_by_session)
@@ -983,6 +986,9 @@ class SessionLauncher:
             )
 
             litellm_routed = (tier_active or single_active) and _proxy_mgr is not None
+            # Issue #2333: launch-time facts for restart-required tracking (pre-vet classifier).
+            _pre_vet_config = effective_config
+            _launch_compact_window: int | None = None
 
             # Issue #2285: a LiteLLM catalog alias used as the Auto Mode classifier model is
             # only routable on a LiteLLM-routed session; elsewhere it would be sent to
@@ -1056,6 +1062,7 @@ class SessionLauncher:
                         )
                         if _win is not None:
                             _extra["CLAUDE_CODE_AUTO_COMPACT_WINDOW"] = str(_win)
+                        _launch_compact_window = _win
                     docker_env_vars["CLAUDE_DOCKER_EXTRA_ENV"] = json.dumps(_extra)
                 else:
                     # Non-Docker: tier breakout not available; single-model alias override only
@@ -1083,6 +1090,7 @@ class SessionLauncher:
                         )
                         if _win is not None:
                             litellm_env["CLAUDE_CODE_AUTO_COMPACT_WINDOW"] = str(_win)
+                        _launch_compact_window = _win
 
             # Override fields computed earlier in this method:
             #   system_prompt   — assembled above (includes legion guide, history ref, etc.)
@@ -1207,6 +1215,22 @@ class SessionLauncher:
                     # logger.info(f"Cleaned up failed SDK for session {session_id}")
 
                 return False
+
+            # Issue #2333: record what this CLI process was launched with, clear stale
+            # restart-required reasons, and make current_model the served alias on a
+            # single-model provider session (the SDK model is the alias; Docker's body
+            # rewrite serves the same alias) so display is consistent after a restart.
+            _launch_alias = config_single_alias(effective_config) if litellm_routed else None
+            self._launch_snapshots[session_id] = build_launch_snapshot(
+                _pre_vet_config, litellm_routed=litellm_routed, live_alias=_launch_alias,
+                wants_compact_window=_wants_compact_window, compact_window=_launch_compact_window,
+            )
+            self.session_manager.clear_restart_required(session_id)
+            if _launch_alias:
+                await self.session_manager.set_current_model(session_id, _launch_alias)
+            # A config save that raced the launch window (after effective_config was read, before
+            # this snapshot existed) shows up as a diff against the snapshot.
+            await self._coordinator.refresh_restart_required(session_id)
 
             # Send system message for SDK client launch/resume
             # logger.info(f"Session {session_id}: sdk_was_created = {sdk_was_created}")
@@ -1408,6 +1432,9 @@ class SessionLauncher:
             self._emitted_turn_ids.pop(session_id, None)
             # Issue #894: Cleanup retry sequence tracking
             self._retry_sequences.pop(session_id, None)
+            # Issue #2333: a stopped session has no launch to be "restart required" against
+            self._launch_snapshots.pop(session_id, None)
+            self.session_manager.clear_restart_required(session_id)
 
             # Issue #2159: no explicit _notify_state_change() here — this used to be
             # a 3rd, redundant state_change emission on top of the 2 that
@@ -1482,6 +1509,8 @@ class SessionLauncher:
             await asyncio.sleep(settle_seconds)
 
         del self._active_sdks[session_id]
+        self._launch_snapshots.pop(session_id, None)  # issue #2333
+        self.session_manager.clear_restart_required(session_id)
         # A late frame or a hydrate during the teardown window may have re-cached
         # the dying process's list; drop it again now that the process is gone.
         self._background_tasks.pop(session_id, None)

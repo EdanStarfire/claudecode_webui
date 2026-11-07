@@ -258,6 +258,20 @@ env var only lowers the CLI window. User `extra_env` always wins; non-LiteLLM se
 untouched. Docker sessions receive it via `CLAUDE_DOCKER_EXTRA_ENV`. Manual workaround:
 `extra_env CLAUDE_CODE_AUTO_COMPACT_WINDOW=200k` or `/autocompact 200k`.
 
+## Live Provider Model Switch (issue #2333)
+
+`POST /api/sessions/{id}/provider-model` (`backend/provider_model_switch.py`) switches a LiteLLM-catalog
+session's model without a restart, mirroring #1673 but never touching `config["model"]` (so it does not reuse
+`SessionManager.update_model`). Non-Docker: `sdk.set_model("{catalog}--{model}")` — the single proxy holds every
+entry's credentials, so a cross-catalog switch needs no key/route re-issue. Docker: the backend swaps the session's
+`LiteLLMProxyManager` routing entry (`update_session_routing_model`, versioned, other fields preserved) and the
+sidecar addon re-reads `/routing` (<= once per second, 1 s timeout, keeps last good) before each model rewrite.
+Apply happens first, persistence after; a failure leaves config untouched. A session's launch-bound settings
+(provider<->direct / tier routing, Docker, classifier model, auto-compact window drift, alias missing from the
+running router) are diffed against a launch snapshot (`backend/restart_required.py`) into the runtime
+`restart_required` reasons list in the session payload (not persisted; cleared on (re)start); the Settings UI shows
+an amber banner + Model Tuning chip that opens the existing manage-session modal's Restart action.
+
 ## Loaded-History Memory Budget (issue #2030, stage 4 PR 4d)
 
 The browser keeps a bounded amount of a long session's history, measured in bytes of the history file the

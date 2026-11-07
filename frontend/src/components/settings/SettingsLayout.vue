@@ -20,6 +20,7 @@
     <!-- Content area -->
     <div class="settings-content">
       <SettingsBreadcrumb />
+      <RestartRequiredBanner />
       <component
         :is="sectionComponent"
         v-if="sectionComponent"
@@ -50,6 +51,7 @@ import { useSettingsStore } from '@/stores/settings'
 import { useUIStore } from '@/stores/ui'
 import SettingsSidebar from './SettingsSidebar.vue'
 import SettingsBreadcrumb from './SettingsBreadcrumb.vue'
+import RestartRequiredBanner from './RestartRequiredBanner.vue'
 import DirtyGuardModal from './DirtyGuardModal.vue'
 import ApplicationFeaturesSection from './sections/ApplicationFeaturesSection.vue'
 import ApplicationPricingSection from './sections/ApplicationPricingSection.vue'

@@ -13,7 +13,7 @@ from shared.exception_handlers import handle_exceptions
 
 from .secrets import _build_session_token_auth
 
-_EMPTY_ROUTING = {"hostname_rewrites": {}, "virtual_key": None, "model_map": {}, "default_model": None}
+_EMPTY_ROUTING = {"hostname_rewrites": {}, "virtual_key": None, "model_map": {}, "default_model": None, "version": 0}
 
 
 def build_router(webui) -> APIRouter:

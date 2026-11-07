@@ -44,7 +44,9 @@ from .models.messages import (
 )
 from .models.permission_mode import PermissionMode
 from .project_manager import ProjectInfo
+from .provider_model_switch import ProviderModelSwitch
 from .queue_processor import QueueProcessor
+from .restart_required import LaunchSnapshot
 from .routers._models import _validate_new_additional_directory
 from .session_config import DEFAULTS, SessionConfig
 from .session_launcher import (
@@ -281,6 +283,7 @@ class SessionCoordinator:
 
         # Active SDK instances
         self._active_sdks: dict[str, ClaudeSDK] = {}
+        self._provider_switch = ProviderModelSwitch(self)
         self._storage_managers: dict[str, DataStorageManager] = {}
         # Issue #1998: raw-fidelity session recorders, keyed by session_id. Created lazily in
         # start_session() when the effective config opts in and the flag above is on; reused
@@ -1730,6 +1733,21 @@ class SessionCoordinator:
             # Re-raise as ValueError so web_server can surface the SDK error message to the user
             logger.exception(f"Failed to set model for session {session_id}")
             raise ValueError(str(e)) from e
+
+    @property
+    def _launch_snapshots(self) -> dict[str, LaunchSnapshot]:
+        """Issue #2333: what each running CLI process was launched with (restart-required base)."""
+        return self._provider_switch.launch_snapshots
+
+    async def set_provider_model(
+        self, session_id: str, catalog_id: str, model_id: str
+    ) -> dict[str, Any]:
+        """Issue #2333: live Provider Model switch (see ProviderModelSwitch)."""
+        return await self._provider_switch.set_provider_model(session_id, catalog_id, model_id)
+
+    async def refresh_restart_required(self, session_id: str) -> list[str]:
+        """Issue #2333: recompute and publish restart-required reasons (config PATCH hook)."""
+        return await self._provider_switch.refresh_restart_required(session_id)
 
     async def get_mcp_status(self, session_id: str) -> dict:
         """Get MCP server status for a session."""

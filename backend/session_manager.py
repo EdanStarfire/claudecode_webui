@@ -77,6 +77,9 @@ class SessionInfo:
     # Live runtime model (distinct from config["model"]) - issue #1673
     current_model: str | None = None
     initial_model: str | None = None
+    # Issue #2333: runtime-only reasons why a saved model-related change needs a restart.
+    # Serialized in the session payload, but stripped from state.json and cleared on (re)start.
+    restart_required: list[str] = field(default_factory=list)
     error_message: str | None = None
     # Structured ResultError fields (issue #1902) — additive, mirror error_message
     error_subtype: str | None = None
@@ -211,6 +214,7 @@ class SessionInfo:
             "project_id": self.project_id,
             "queue_config": self.queue_config,
             "queue_paused": self.queue_paused,
+            "restart_required": list(self.restart_required),
             "role": self.role,
             "sdk_generated_name": self.sdk_generated_name,
             "secret_fetch_token": self.secret_fetch_token,
@@ -1140,7 +1144,9 @@ class SessionManager:
             session_dir.mkdir(exist_ok=True)
 
             state_file = session_dir / "state.json"
-            write_alphabetized_json(state_file, session.to_dict())
+            state = session.to_dict()
+            state.pop("restart_required", None)  # issue #2333: runtime-only, never persisted
+            write_alphabetized_json(state_file, state)
 
         except Exception as e:
             logger.error(f"Failed to persist session state for {session_id}: {e}")
@@ -1297,6 +1303,76 @@ class SessionManager:
             except Exception as e:
                 logger.error(f"Failed to update session {session_id} model: {e}")
                 return False
+
+    async def update_provider_model(
+        self,
+        session_id: str,
+        catalog_id: str,
+        model_id: str,
+        current_model: str | None = None,
+    ) -> bool:
+        """Issue #2333: persist a provider-routed session's catalog entry + model.
+
+        Deliberately NOT update_model(): that writes config["model"] (the plain Model field,
+        #1673), which would pollute a provider session's config with the catalog alias.
+        ``current_model`` (the alias being served) is only set when the change was applied live.
+        """
+        async with self._get_session_lock(session_id):
+            session = self._active_sessions.get(session_id)
+            if not session:
+                logger.error(f"Session {session_id} not found")
+                return False
+            previous = (
+                session.config.get("provider_catalog_id"),
+                session.config.get("provider_model_id"),
+                session.current_model,
+            )
+            try:
+                session.config["provider_catalog_id"] = catalog_id
+                session.config["provider_model_id"] = model_id
+                if current_model is not None:
+                    session.current_model = current_model
+                session.updated_at = datetime.now(UTC)
+                await self._persist_session_state(session_id)
+            except Exception as e:
+                session.config["provider_catalog_id"], session.config["provider_model_id"], \
+                    session.current_model = previous
+                logger.error(f"Failed to update session {session_id} provider model: {e}")
+                return False
+            await self._notify_metadata_change_callbacks(session_id)
+            session_logger.info(
+                f"Updated session {session_id} provider model to '{catalog_id}--{model_id}'"
+            )
+            return True
+
+    async def set_restart_required(self, session_id: str, reasons: list[str]) -> bool:
+        """Issue #2333: replace the runtime restart-required reasons; broadcast only on change.
+
+        Not persisted (state.json never carries it), so no disk write.
+        """
+        session = self._active_sessions.get(session_id)
+        if not session or session.restart_required == reasons:
+            return False
+        session.restart_required = list(reasons)
+        await self._notify_metadata_change_callbacks(session_id)
+        return True
+
+    async def set_current_model(self, session_id: str, model: str) -> bool:
+        """Issue #2333: set the runtime current_model only (config untouched), persisted."""
+        async with self._get_session_lock(session_id):
+            session = self._active_sessions.get(session_id)
+            if not session or session.current_model == model:
+                return False
+            session.current_model = model
+            await self._persist_session_state(session_id)
+        await self._notify_metadata_change_callbacks(session_id)
+        return True
+
+    def clear_restart_required(self, session_id: str) -> None:
+        """Issue #2333: silent clear (the caller's own state broadcast carries the new value)."""
+        session = self._active_sessions.get(session_id)
+        if session:
+            session.restart_required = []
 
     async def upsert_link(self, session_id: str, label: str, url: str) -> dict:
         """Upsert a named link for a session (upsert by exact label match).

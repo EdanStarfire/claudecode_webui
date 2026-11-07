@@ -7,7 +7,17 @@
       :saving="saving"
       @save="handleSave"
       @cancel="handleCancel"
-    />
+    >
+      <template v-if="isSessionMode && hasRestartRequired" #chips-extra>
+        <button
+          type="button"
+          class="restart-chip"
+          data-testid="restart-required-chip"
+          :title="restartReasons.join('\n')"
+          @click="openRestart"
+        >⟳ Restart required</button>
+      </template>
+    </SettingsToolbar>
 
     <div v-if="!entity" class="section-loading">Loading…</div>
 
@@ -23,6 +33,15 @@
     <div v-else class="section-body">
       <div v-if="tierValidationError" class="alert alert-warning py-1 px-2 mb-2" style="font-size:12px;">
         {{ tierValidationError }}
+      </div>
+      <div
+        v-if="saveError"
+        class="alert alert-danger py-1 px-2 mb-2"
+        style="font-size:12px;"
+        role="alert"
+        data-testid="model-save-error"
+      >
+        <strong>Provider model not changed.</strong> {{ saveError }}
       </div>
       <FieldSection
         :fields="FIELD_SCHEMAS.model"
@@ -53,6 +72,7 @@ import { useEditSectionReset } from '@/composables/useEditSectionReset'
 import { FIELD_RESET } from '@/composables/fieldResetSentinel.js'
 import { useScheduleStore } from '@/stores/schedule'
 import { useScheduleSectionSave } from '@/composables/useScheduleSectionSave'
+import { useRestartRequired } from '@/composables/useRestartRequired'
 
 const PROFILE_AREA = 'model'
 const SECTION_KEY  = 'model-tuning'
@@ -165,6 +185,10 @@ const saveScheduleSessionConfig = useScheduleSectionSave({
   ephemeralAgentId: computed(() => entity.value?.ephemeral_agent_id),
 })
 
+const { reasons: restartReasons, hasRestartRequired, openRestart } = useRestartRequired(
+  computed(() => (isSessionMode.value ? entityId.value : ''))
+)
+
 const toolbarChips = computed(() => {
   if (isSessionMode.value) {
     const section = route.params.section || SECTION_KEY
@@ -197,11 +221,25 @@ function handleLinkedField(linked) {
 }
 
 const tierValidationError = ref(null)
+const saveError = ref(null)
+
+// Issue #2333: a Provider Model change on a running session goes through the live-switch endpoint.
+// Tier routing is launch-bound (restart notice comes from the backend's PATCH diff instead).
+function providerModelChange(d, newConfig, tierEnabled) {
+  if (tierEnabled) return null
+  if (!('provider_catalog_id' in d) && !('provider_model_id' in d)) return null
+  const { provider_catalog_id: catalogId, provider_model_id: modelId } = newConfig
+  if (!catalogId || !modelId) return null
+  const current = entity.value?.config || {}
+  if (current.provider_catalog_id === catalogId && current.provider_model_id === modelId) return null
+  return { catalogId, modelId }
+}
 
 async function handleSave() {
   if (!entity.value || !isDirty.value) return
   saving.value = true
   tierValidationError.value = null
+  saveError.value = null
   try {
     const d = { ...draft.value }
     const keysToDelete = Object.keys(d).filter(k => d[k] === FIELD_RESET)
@@ -243,6 +281,18 @@ async function handleSave() {
       if (isActive && Object.prototype.hasOwnProperty.call(d, 'model') && newConfig.model) {
         await sessionStore.setModel(entityId.value, newConfig.model)
       }
+      // Issue #2333: live-switch the Provider Model first (failure aborts the save and keeps the
+      // draft dirty, so the config never claims a model that is not in use), then persist.
+      const isRunning = ['active', 'paused'].includes(entity.value?.state)
+      const providerChange = isRunning ? providerModelChange(d, newConfig, tierEnabled) : null
+      if (providerChange) {
+        try {
+          await sessionStore.setProviderModel(entityId.value, providerChange.catalogId, providerChange.modelId)
+        } catch (err) {
+          saveError.value = err?.data?.detail || err?.message || 'Switching the provider model failed.'
+          return
+        }
+      }
       await sessionStore.patchSession(entityId.value, { config: newConfig })
     } else if (isTemplateMode.value) {
       if (keysToDelete.length > 0) {
@@ -260,12 +310,14 @@ async function handleSave() {
     settingsStore.markClean(areaKey.value)
   } catch (err) {
     console.error('Save failed:', err)
+    if (isSessionMode.value) saveError.value = err?.data?.detail || err?.message || 'Save failed.'
   } finally {
     saving.value = false
   }
 }
 
 function handleCancel() {
+  saveError.value = null
   settingsStore.discardDraft(areaKey.value)
 }
 
@@ -294,6 +346,20 @@ onMounted(() => {
   font-size: 13px;
   line-height: 1.6;
 }
+
+.restart-chip {
+  display: inline-flex;
+  align-items: center;
+  padding: 2px 8px;
+  border-radius: 12px;
+  font-size: 11px;
+  font-weight: 600;
+  cursor: pointer;
+  background: rgba(210, 153, 34, 0.15);
+  border: 1px solid rgba(210, 153, 34, 0.5);
+  color: #d29922;
+}
+.restart-chip:hover { background: rgba(210, 153, 34, 0.25); }
 
 .section-na strong { color: var(--bs-emphasis-color); }
 
