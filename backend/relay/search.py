@@ -24,13 +24,23 @@ MAX_RESULTS = 50
 SEARCH_TEXT_LIMIT = 500
 
 
-def message_dict(msg: RelayMessage, text_limit: int, channel: str | None = None) -> dict[str, Any]:
+def message_dict(
+    msg: RelayMessage,
+    text_limit: int,
+    channel: str | None = None,
+    channel_name: str | None = None,
+    user_names: dict[str, str | None] | None = None,
+) -> dict[str, Any]:
+    """One result entry. Everything Slack-user-controlled (text, names) lives here, and this
+    dict is only ever returned inside the untrusted wrapper."""
     text = msg.text or ""
     return {
         "channel": channel or msg.channel,
+        "channel_name": channel_name,
         "ts": msg.ts,
         "thread_ts": msg.thread_ts,
         "user": msg.user,
+        "user_name": (user_names or {}).get(msg.user) if msg.user else None,
         "text": text[:text_limit] + ("…" if len(text) > text_limit else ""),
         "permalink": msg.permalink,
         "is_agent_message": is_agent_message(msg),

@@ -263,6 +263,17 @@ async def test_issue_2103_start_events_reserved():
         await adapter.start_events(lambda e: None)
 
 
+async def test_issue_2103_user_info_prefers_display_name():
+    def handler(request):
+        assert request.url.path.endswith("users.info") and _form(request) == {"user": "U0A"}
+        return httpx.Response(200, json={"ok": True, "user": {
+            "id": "U0A", "name": "alice", "real_name": "Alice Real",
+            "profile": {"display_name": "", "real_name": "Alice Profile"}, "is_bot": False}})
+
+    info = await make_adapter(handler).user_info("U0A")
+    assert (info.id, info.name, info.is_bot) == ("U0A", "Alice Profile", False)
+
+
 async def test_issue_2103_search_text_falls_back_to_blocks():
     """search.messages returns text "" for block messages: use section/rich_text, skip footer."""
     match = {

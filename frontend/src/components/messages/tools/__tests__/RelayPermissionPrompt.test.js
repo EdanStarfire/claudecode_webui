@@ -14,7 +14,7 @@ vi.mock('@/composables/useNotifications', () => ({ notify: vi.fn() }))
 
 const ASK = {
   kind: 'ask_send', tool: 'post', action: 'send', channel_id: 'C0ASK00001',
-  channel_name: 'ask-ch', policy: 'ask', text_preview: 'hello team'
+  channel_name: 'ask-ch', channel_label: '#ask-ch', policy: 'ask', text_preview: 'hello team'
 }
 const CHOOSE = { ...ASK, kind: 'choose_policy', tool: 'read_thread', action: 'read', policy: null, text_preview: '' }
 
@@ -39,6 +39,19 @@ describe('RelayPermissionPrompt', () => {
       { decision: 'allow', relayChoice: { policy: null, promote: true } },
       { decision: 'deny', relayChoice: null }
     ])
+  })
+
+  it('shows the resolved label as plain text (no markup rendering)', () => {
+    renderWithStores(RelayPermissionPrompt, {
+      props: { prompt: { ...ASK, channel_label: 'DM with <b>Alice</b>' } }
+    })
+    expect(screen.getByTestId('relay-channel').textContent).toBe('DM with <b>Alice</b>')
+    expect(screen.getByTestId('relay-channel').querySelector('b')).toBeNull()
+  })
+
+  it('falls back to the channel id when no label was resolved', () => {
+    renderWithStores(RelayPermissionPrompt, { props: { prompt: { ...ASK, channel_label: undefined } } })
+    expect(screen.getByTestId('relay-channel').textContent).toBe('C0ASK00001')
   })
 
   it('choose_policy offers the four policies and emits the selected one', async () => {

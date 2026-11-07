@@ -24,6 +24,7 @@ from .adapter import (
     RelayMessage,
     ThreadPage,
     UploadResult,
+    UserInfo,
 )
 
 logger = logging.getLogger(__name__)
@@ -289,6 +290,16 @@ class SlackAdapter:
     async def open_dm(self, user_id: str) -> str:
         data = await self._call("conversations.open", {"users": user_id}, json_body=True)
         return (data.get("channel") or {}).get("id", "")
+
+    async def user_info(self, user_id: str) -> UserInfo:
+        data = await self._call("users.info", {"user": user_id})
+        user = data.get("user") or {}
+        profile = user.get("profile") or {}
+        name = (
+            profile.get("display_name") or profile.get("real_name") or user.get("real_name")
+            or user.get("name")
+        )
+        return UserInfo(id=user.get("id", user_id), name=name or None, is_bot=bool(user.get("is_bot")))
 
     async def start_events(self, handler: EventHandler) -> None:
         raise NotImplementedError("Slack event streaming arrives with the inbound stage")

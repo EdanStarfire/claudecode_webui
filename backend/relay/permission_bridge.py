@@ -102,6 +102,6 @@ class RelayPermissionBridge:
         await self.audit.record(
             ctx.relay_id, event="policy_change", session_id=session_id, handle=ctx.handle,
             session_name=ctx.session_info.name, tool=gate_result.tool, channel_id=channel_id,
-            channel_name=gate_result.channel_name, outcome="ok", policy=policy,
+            channel_name=gate_result.channel_label, outcome="ok", policy=policy,
             approval="prompt_promote",
         )

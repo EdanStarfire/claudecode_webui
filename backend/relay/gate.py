@@ -17,6 +17,7 @@ from typing import TYPE_CHECKING, Any
 
 from .adapter import RelayAdapter, RelayError
 from .grants import Grant, GrantStore
+from .names import NameResolver
 from .policy import (
     ALLOW,
     CHANNEL_ID_RE,
@@ -24,7 +25,7 @@ from .policy import (
     PROMPT,
     decide,
 )
-from .safety import contains_trigger_syntax
+from .safety import contains_trigger_syntax, safe_error_code
 
 if TYPE_CHECKING:
     from backend.relay_manager import RelayManager
@@ -72,6 +73,7 @@ class RelayContext:
     session_info: SessionInfo
     adapter: RelayAdapter
     handle: str | None
+    owner_user_id: str | None
     footer_enabled: bool
     footer_template: str | None
 
@@ -84,7 +86,8 @@ class GateResult:
     code: str | None = None
     message: str | None = None
     channel_id: str | None = None
-    channel_name: str | None = None
+    channel_name: str | None = None  # plain name for the owner's prompt/audit; never sent to the agent
+    channel_label: str | None = None  # '#name' / 'DM with X' / 'your self-DM'
     policy: str | None = None
     prompt: dict[str, Any] | None = field(default=None)
 
@@ -125,7 +128,7 @@ class RelayPolicyGate:
         self.sessions = session_manager
         self.grants = grants or GrantStore()
         self._clock = clock
-        self._names: dict[str, str] = {}  # channel id -> display name
+        self.names = NameResolver()
         self._by_name: dict[str, str] = {}  # name -> channel id
         self._names_loaded_at: float | None = None
 
@@ -148,6 +151,7 @@ class RelayPolicyGate:
             session_info=info,
             adapter=self.relay_manager.adapter_for(relay_id),
             handle=info.config.get("relay_handle") or await self.service.ensure_handle(session_id),
+            owner_user_id=getattr(self.relay_manager.relays[relay_id], "owner_user_id", None),
             footer_enabled=True if enabled is None else bool(enabled),
             footer_template=attachment["relay_footer_template"],
         )
@@ -165,7 +169,7 @@ class RelayPolicyGate:
         convs = await ctx.adapter.list_conversations("public_channel,private_channel", 1000)
         for c in convs:
             if c.name:
-                self._names[c.id] = c.name
+                self.names.seed_channel(ctx.relay_id, c.id, c.name)
                 self._by_name[c.name] = c.id
         self._names_loaded_at = now
 
@@ -189,33 +193,20 @@ class RelayPolicyGate:
                 if name in self._by_name:
                     return self._by_name[name]
         except RelayError as e:
-            raise GateError("channel_unresolved", f"Could not resolve channel ({e.code}).") from None
+            raise GateError("channel_unresolved", f"Could not resolve channel ({safe_error_code(e.code)}).") from None
         raise GateError(
             "channel_unresolved",
             "Could not resolve the channel. Use a channel ID (C…/G…/D…), #channel-name, or a "
             "user ID (U…) to message a person; '@name' is not supported, only user IDs.",
         )
 
-    async def channel_name(self, ctx: RelayContext, channel_id: str) -> str | None:
-        """Display name for an ALLOWED/prompted channel (never called for blocked ones)."""
-        if channel_id in self._names:
-            return self._names[channel_id]
-        try:
-            info = await ctx.adapter.conversation_info(channel_id)
-        except RelayError:
-            return None
-        name = info.name or (f"DM {info.user}" if info.is_im and info.user else None)
-        if name:
-            self._names[channel_id] = name
-        return name
+    async def label(self, ctx: RelayContext, channel_id: str) -> str:
+        """Owner-facing label (never sent to the agent); the ID when it cannot be resolved."""
+        return await self.names.channel_label(
+            ctx.adapter, ctx.relay_id, channel_id, ctx.owner_user_id
+        )
 
     # --------------------------------------------------------------- decisions
-
-    @staticmethod
-    def _label(result_name: str | None, channel_id: str) -> str:
-        return f"#{result_name}" if result_name and not result_name.startswith("DM ") else (
-            result_name or channel_id
-        )
 
     @staticmethod
     def outbound_texts(tool: str, args: dict[str, Any]) -> list[str]:
@@ -241,7 +232,13 @@ class RelayPolicyGate:
         return ""
 
     async def evaluate(
-        self, session_id: str, tool_name: str, args: dict[str, Any], ctx: RelayContext | None = None
+        self,
+        session_id: str,
+        tool_name: str,
+        args: dict[str, Any],
+        ctx: RelayContext | None = None,
+        *,
+        with_prompt: bool = True,
     ) -> GateResult:
         tool = tool_short_name(tool_name)
         if tool is None:
@@ -273,33 +270,36 @@ class RelayPolicyGate:
         policy = eff.policy if eff else None
         decision = decide(policy, action)
 
+        # Messages to the agent carry IDs only: channel names are Slack-user-controlled text.
         if decision.kind == DENY:
             if decision.code == "channel_blocked":
                 msg = f"Channel {channel_id} is not accessible to this session."
-                name = None
             else:
-                name = await self.channel_name(ctx, channel_id)
                 msg = (
-                    f"Channel {self._label(name, channel_id)} is {policy} for this session; "
-                    "sending is not permitted. Do not retry; ask the user to change the policy."
+                    f"Channel {channel_id} is {policy} for this session; sending is not "
+                    "permitted. Do not retry; ask the user to change the policy."
                 )
-            return GateResult(DENY, tool, action, decision.code, msg, channel_id, name, policy)
-        if decision.kind == ALLOW:
-            return GateResult(ALLOW, tool, action, channel_id=channel_id, policy=policy)
+            return GateResult(DENY, tool, action, decision.code, msg, channel_id, policy=policy)
+        if decision.kind == ALLOW or not with_prompt:
+            return GateResult(
+                decision.kind, tool, action, channel_id=channel_id, policy=policy
+            )
 
-        name = await self.channel_name(ctx, channel_id)
+        name = await self.names.channel_name(ctx.adapter, ctx.relay_id, channel_id)
+        label = await self.label(ctx, channel_id)
         prompt = {
             "kind": "ask_send" if decision.kind == PROMPT else "choose_policy",
             "tool": tool,
             "action": action,
             "channel_id": channel_id,
             "channel_name": name,
+            "channel_label": label,
             "policy": policy,
             "text_preview": self._preview(tool, args),
         }
         return GateResult(
             decision.kind, tool, action, channel_id=channel_id, channel_name=name,
-            policy=policy, prompt=prompt,
+            channel_label=label, policy=policy, prompt=prompt,
         )
 
     async def authorize(
@@ -307,7 +307,7 @@ class RelayPolicyGate:
     ) -> tuple[GateResult, Grant | None]:
         """Authoritative handler-side check; ``prompt``/``choose_policy`` outcomes must hold a
         one-shot grant, else they fail closed."""
-        result = await self.evaluate(ctx.session_id, tool, args, ctx)
+        result = await self.evaluate(ctx.session_id, tool, args, ctx, with_prompt=False)
         # Always consume: a grant for a call that is now plainly allowed (policy promoted by the
         # same prompt) must not linger.
         grant = self.grants.consume(ctx.session_id, tool, args)
@@ -315,10 +315,9 @@ class RelayPolicyGate:
             return result, grant if result.kind == ALLOW else None
         if grant is not None:
             return GateResult(
-                ALLOW, tool, result.action, channel_id=result.channel_id,
-                channel_name=result.channel_name, policy=result.policy,
+                ALLOW, tool, result.action, channel_id=result.channel_id, policy=result.policy,
             ), grant
-        label = self._label(result.channel_name, result.channel_id or "")
+        label = result.channel_id or ""
         if result.kind == PROMPT:
             result.code = "approval_required"
             result.message = (

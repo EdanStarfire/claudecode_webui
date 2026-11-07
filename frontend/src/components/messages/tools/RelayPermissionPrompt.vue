@@ -93,11 +93,9 @@ const title = computed(() =>
   isChoosePolicy.value ? 'Choose a policy for a Slack channel' : 'Slack send needs approval'
 )
 const actionLabel = computed(() => ACTION_LABELS[props.prompt.tool] || 'Use')
-const channelLabel = computed(() => {
-  const name = props.prompt.channel_name
-  if (name && !name.startsWith('DM ')) return `#${name}`
-  return name || props.prompt.channel_id
-})
+// Plain text only (Vue escapes it): the backend resolves "#name", "DM with <name>" or
+// "your self-DM", falling back to the raw ID when a lookup failed.
+const channelLabel = computed(() => props.prompt.channel_label || props.prompt.channel_id)
 const selectedPolicy = ref('ask')
 const saveLabel = computed(() =>
   selectedPolicy.value === 'blocked' ? 'Save and block' : 'Save policy and continue'

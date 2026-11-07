@@ -343,8 +343,22 @@ any API, logged, or put in exception text, and never enter containers (`relay-*`
 - **Search** (`relay/search.py`) is scoped with `in:` filters to read_only/ask/auto channels (chunks of 10;
   Slack treats several `in:` as OR), then post-filtered from result metadata against the same set. Unlisted
   channels are excluded (a note gives the count) rather than prompting. **Untrusted wrapper**: `search` and
-  `read_thread` text is returned inside `UNTRUSTED_OPEN` / `UNTRUSTED_CLOSE` (`relay/safety.py`), any
-  `[END UNTRUSTED` in content is neutralised to `[END_UNTRUSTED`, empty results are wrapped too.
+  `read_thread` results are returned inside a **nonce-bearing fence** (`relay/safety.py::wrap_untrusted`):
+  `[UNTRUSTED EXTERNAL CONTENT id=<nonce> from Slack — …it ends only at the marker bearing this same id…]` …
+  `[END UNTRUSTED EXTERNAL CONTENT id=<nonce>]`. The payload is serialized first, then a fresh
+  `secrets.token_hex(8)` is generated (regenerated if it occurs in the payload), so content cannot close or forge
+  the fence whatever Unicode tricks it uses; marker-prefix neutralisation (`[END UNTRUSTED` ->
+  `[END_UNTRUSTED`) stays as defense in depth only. Empty results are wrapped too. `wrap_instruction()` is the
+  sibling (`[OWNER INSTRUCTION id=…]`) for the inbound stage's self-DM instructions (unused in 1b).
+  Everything Slack-user-controlled returned to the agent (message text, `user_name`, `channel_name`, permalink)
+  lives inside the fence; outside it only IDs, timestamps, our own messages, sanitized provider error codes
+  (`safe_error_code`) and plain opaque cursors are returned. Policy errors name channels by ID only.
+- **Names** (`relay/names.py::NameResolver`): user IDs via `users.info`, channel IDs via `conversations.info`,
+  cached in memory for the process lifetime (LRU 2000, no persistence), resolved lazily with a 3 s timeout and a
+  60 s failure back-off, falling back to the ID, never blocking a prompt. Names are cleaned (control/zero-width/bidi
+  characters stripped, 80 chars). They appear in the permission prompt (`channel_label`: `#name`, `DM with <name>`,
+  `your self-DM` from the relay's `owner_user_id`; plain text), in audit records (`channel_name`) and inside the
+  wrapper.
 - **Outbound tagging**: every `post` / `reply` carries Slack metadata `event_type=cc_webui_agent_message` with
   `session_id`, `handle`, `relay_id`; a footer (default on, `relay_footer_enabled`) is a `context` block after the
   body `section` blocks (`{session_link}` renders empty: the Backend does not know a public URL). Footers show the

@@ -13,6 +13,7 @@ from backend.relay.adapter import (
     RelayMessage,
     ThreadPage,
     UploadResult,
+    UserInfo,
 )
 from backend.relay.audit import RelayAuditLog
 from backend.relay.gate import RelayPolicyGate
@@ -21,6 +22,9 @@ from backend.relay.permission_bridge import RelayPermissionBridge
 from backend.relay.policy import EffectivePolicy
 
 SELF_DM = "D0SELF0001"
+OWNER = "U0OWNER001"
+OTHER_DM = "D0OTHER0001"
+OTHER_USER = "U0OTHER001"
 CH_AUTO = "C0AUTO0001"
 CH_ASK = "C0ASK00001"
 CH_RO = "C0READONLY1"
@@ -34,6 +38,8 @@ class FakeAdapter:
         self.search_results: list[RelayMessage] = []
         self.thread_messages: list[RelayMessage] = []
         self.fail_with: str | None = None
+        self.users = {OWNER: "Owner Person", OTHER_USER: "Alice Example", "U0SELF0001": "Self"}
+        self.fail_lookups = False
         self.names = {CH_AUTO: "auto-ch", CH_ASK: "ask-ch", CH_RO: "ro-ch",
                       CH_BLOCKED: "blocked-ch", CH_UNLISTED: "unlisted-ch"}
 
@@ -70,7 +76,19 @@ class FakeAdapter:
 
     async def conversation_info(self, channel):
         self.calls.append(("conversation_info", channel))
+        if self.fail_lookups:
+            raise RelayError("internal_error", "conversations.info")
+        if channel == SELF_DM:
+            return ConversationInfo(id=channel, is_im=True, user=OWNER)
+        if channel == OTHER_DM:
+            return ConversationInfo(id=channel, is_im=True, user=OTHER_USER)
         return ConversationInfo(id=channel, name=self.names.get(channel))
+
+    async def user_info(self, user_id):
+        self.calls.append(("user_info", user_id))
+        if self.fail_lookups:
+            raise RelayError("internal_error", "users.info")
+        return UserInfo(id=user_id, name=self.users.get(user_id))
 
     async def list_conversations(self, types="public_channel,private_channel,mpim,im", limit=200):
         self.calls.append(("list_conversations", types))
@@ -82,7 +100,7 @@ class FakeAdapter:
 
     def network_calls(self) -> list[tuple]:
         """Calls that touch message content (anything but name/DM resolution)."""
-        resolution = {"conversation_info", "list_conversations", "open_dm"}
+        resolution = {"conversation_info", "list_conversations", "open_dm", "user_info"}
         return [c for c in self.calls if c[0] not in resolution]
 
 
@@ -136,7 +154,7 @@ class FakeService:
 
 class FakeRelayManager:
     def __init__(self, adapter: FakeAdapter, relay_id: str = "relay1") -> None:
-        self.relays = {relay_id: object()}
+        self.relays = {relay_id: SimpleNamespace(owner_user_id=OWNER)}
         self._adapter = adapter
 
     def has_token(self, relay_id, kind="user"):
