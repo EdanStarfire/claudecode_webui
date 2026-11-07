@@ -51,6 +51,9 @@
             </dd>
           </dl>
 
+          <RelaySharedWarning v-if="relay.user_secret_shared" :shared="relay.user_secret_shared" class="card-warning" data-testid="relay-card-shared-user" />
+          <RelaySharedWarning v-if="relay.app_secret_shared" :shared="relay.app_secret_shared" class="card-warning" data-testid="relay-card-shared-app" />
+
           <div class="card-actions">
             <button class="btn btn-sm btn-outline-primary" :disabled="testing || !relay.has_user_token" data-testid="relay-test" @click="runTest">
               {{ testing ? 'Testing…' : 'Test connection' }}
@@ -114,6 +117,7 @@
 import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
 import { useRelayStore } from '@/stores/relay'
 import SettingsToolbar from '../SettingsToolbar.vue'
+import RelaySharedWarning from '../../relay/RelaySharedWarning.vue'
 import RelaySecretPickers from '../../relay/RelaySecretPickers.vue'
 import RelaySetupGuide from '../../relay/RelaySetupGuide.vue'
 
@@ -254,6 +258,7 @@ onBeforeUnmount(() => clearTimeout(oauthTimer))
 .chip--ok { color: #3fb950; border-color: #3fb95066; }
 .chip--missing { color: #d29922; border-color: #d2992266; }
 .card-actions { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+.card-warning { margin: 10px 0; }
 .test-result { margin-top: 10px; padding: 8px 12px; border-radius: 6px; font-size: 13px; }
 .test-result--ok { background: rgba(63, 185, 80, 0.1); border: 1px solid rgba(63, 185, 80, 0.3); }
 .test-result--fail { background: rgba(248, 113, 113, 0.08); border: 1px solid rgba(248, 113, 113, 0.25); color: #f87171; }

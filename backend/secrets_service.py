@@ -11,7 +11,7 @@ from __future__ import annotations
 import asyncio
 from datetime import UTC, datetime, timedelta
 
-from .secret_usage import compute_secret_usage, empty_usage
+from .secret_usage import compute_secret_usage, empty_usage, find_secret_users
 from .slug_utils import slugify_secret
 
 
@@ -82,6 +82,16 @@ class SecretsService:
         for s in secrets:
             s["usage"] = usage_map.get(slugify_secret(s["name"]), empty_usage())
         return {"secrets": secrets}
+
+    async def secret_users(self, names: list[str]) -> dict[str, dict[str, list[str]]]:
+        """Names of the sessions/templates/profiles/MCP servers that use each secret (no values)."""
+        sessions, templates, profiles, mcp_configs = await asyncio.gather(
+            self.session_manager.list_sessions(),
+            self.template_manager.list_templates(),
+            self.profile_manager.list_profiles(area="isolation"),
+            self.mcp_config_manager.list_configs(),
+        )
+        return find_secret_users(names, sessions, templates, profiles, mcp_configs)
 
     async def create_secret(
         self,

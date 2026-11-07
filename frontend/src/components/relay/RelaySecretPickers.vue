@@ -19,12 +19,12 @@
           v-for="s in options(f.key)"
           :key="s.name"
           :value="s.name"
-          :disabled="inUse(s) && s.name !== current[f.key]"
-        >{{ s.name }}{{ inUse(s) && s.name !== current[f.key] ? ' (in use elsewhere)' : '' }}</option>
+        >{{ s.name }}{{ usageNote(s) }}</option>
         <option v-if="current[f.key] && !known(current[f.key])" :value="current[f.key]">
           {{ current[f.key] }} (missing)
         </option>
       </select>
+      <RelaySharedWarning v-if="sharedFor(f.key)" :shared="sharedFor(f.key)" />
       <small v-if="missing[f.key]" class="picker-missing" role="alert" :data-testid="`relay-missing-${f.key}`">
         Credential secret missing: '{{ current[f.key] }}' no longer exists in the vault. Pick another secret.
       </small>
@@ -41,7 +41,7 @@
       <button type="submit" class="btn btn-sm btn-primary" :disabled="!canSubmit || saving" data-testid="relay-secrets-save">
         {{ saving ? 'Saving…' : 'Save credentials' }}
       </button>
-      <small class="text-muted">Either secret can be saved on its own. Secrets used by sessions, templates or profiles cannot be used.</small>
+      <small class="text-muted">Either secret can be saved on its own. Dedicated secrets are recommended; a secret that is also assigned elsewhere can be used, with a warning.</small>
     </div>
   </form>
 </template>
@@ -49,6 +49,8 @@
 <script setup>
 import { computed, onMounted, reactive, watch } from 'vue'
 import { useSecretsStore } from '@/stores/secrets'
+import { useRelayStore } from '@/stores/relay'
+import RelaySharedWarning from './RelaySharedWarning.vue'
 
 const props = defineProps({
   // Public relay record: only secret NAMES and booleans.
@@ -64,6 +66,7 @@ const FIELDS = [
 ]
 const uid = `relay-pick-${Math.random().toString(36).slice(2, 8)}`
 const secretsStore = useSecretsStore()
+const relayStore = useRelayStore()
 
 const current = computed(() => ({
   user: props.relay.user_token_secret || '',
@@ -78,7 +81,34 @@ watch(current, (c) => { selection.user = c.user; selection.app = c.app })
 
 const names = computed(() => new Set(secretsStore.secrets.map(s => s.name)))
 const known = (name) => names.value.has(name)
-const inUse = (s) => Boolean(s.usage?.total)
+const COUNT_LABELS = [['sessions', 'session'], ['templates', 'template'], ['profiles', 'profile'], ['mcp_servers', 'MCP server']]
+// "also assigned to: 2 sessions, 1 template" (counts from the secrets list; informational only)
+function usageNote(s) {
+  const parts = COUNT_LABELS
+    .filter(([k]) => s.usage?.[k])
+    .map(([k, label]) => `${s.usage[k]} ${label}${s.usage[k] === 1 ? '' : 's'}`)
+  return parts.length ? ` (also assigned to: ${parts.join(', ')})` : ''
+}
+
+// Names of where a newly SELECTED (not yet saved) secret is also used, fetched when the selection
+// changes. The saved credential's live warning is shown on the relay card instead.
+const previews = reactive({ user: null, app: null })
+const sharedFor = (key) => {
+  const sel = selection[key]
+  return sel && sel !== current.value[key] ? previews[key] : null
+}
+async function loadPreview(key, name) {
+  previews[key] = null
+  if (!name || name === current.value[key]) return
+  try {
+    const usage = await relayStore.secretUsage(props.relay.relay_id, [name])
+    if (selection[key] === name) previews[key] = usage[name] || null
+  } catch {
+    previews[key] = null
+  }
+}
+watch(() => selection.user, (n) => loadPreview('user', n))
+watch(() => selection.app, (n) => loadPreview('app', n))
 // Only secrets that can hold a pasted token are offered (keeps ssh keys etc. out of the list).
 const options = () => secretsStore.secrets
   .filter(s => !['ssh_key', 'ssh'].includes(s.type))

@@ -108,7 +108,8 @@ SETUP_STEPS: list[dict[str, str]] = [
         "title": "Store the tokens as secrets",
         "detail": "In Settings, Library, Secrets create a secret for each token (type Generic, any "
         "name such as slack-user-token) and paste the token as its value. The relay only "
-        "references secrets by name; use dedicated secrets, not ones assigned to sessions.",
+        "references secrets by name. A dedicated secret is recommended: a secret also assigned to "
+        "sessions works, but those sessions can then call Slack directly with it.",
     },
     {
         "title": "Pick the secrets here",

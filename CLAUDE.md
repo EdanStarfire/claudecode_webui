@@ -290,13 +290,15 @@ Credentials are **references to existing vault secrets**: only secret **names** 
 (`user_token_secret`, `app_token_secret`; the owner creates them in Library -> Secrets). Values live in the
 credential vault, are read in-process via `RelayManager.get_token()` only, are never returned by any API,
 logged, or put in exception text, and never enter containers. `PUT /api/relays/{id}/secrets
-{user_token_secret?, app_token_secret?}` (either alone) checks that the secret exists, that it is not used by any
-session/template/profile/MCP server, that its value has the `xoxp-` / `xapp-` prefix and verifies the user token with
-`auth.test`; there is no token-paste route. Isolation follows the **reference**: names a relay references
-(`relay/validation.py::set_relay_referenced_secrets`, kept in sync by `RelayManager`) are rejected in
-`assigned_secrets` at every tier (422/400 "used by the relay as a credential") and refused by
-`SecretsVault.resolve_secrets_for_assignment`; the `relay-` name prefix stays reserved for secrets the OAuth flow itself
-creates. Deleting a relay deletes only secrets it created (`relay-{id}-*`), never user-owned ones. If a referenced
+{user_token_secret?, app_token_secret?}` (either alone) checks that the secret exists and that its value has the `xoxp-` / `xapp-` prefix, and verifies the user token with
+`auth.test`; there is no token-paste route. **Sharing tradeoff**: the owner may deliberately also assign the same secret to
+sessions (e.g. for troubleshooting), so a secret used elsewhere is selectable. The relay tools themselves never expose the
+token to the agent, but a session that has the secret assigned can call Slack directly with it, bypassing the relay's channel
+policy, footer, trigger refusal and audit log. This is a non-blocking warning, not a rule: `GET /api/relays/{id}` and
+`PUT .../secrets` carry `user_secret_shared` / `app_secret_shared` (consumer NAMES: sessions, templates, profiles,
+MCP servers; null when not shared; computed live) and `GET /api/relays/{id}/secret-usage?name=` previews it for the picker.
+Only the `relay-` name prefix (secrets the OAuth flow itself creates) stays unassignable
+(`validate_assigned_secrets`, `SecretsVault.resolve_secrets_for_assignment`). Deleting a relay deletes only secrets it created (`relay-{id}-*`), never user-owned ones. If a referenced
 secret is deleted, `has_*_token` turns false and `*_secret_missing` true (tools fail with `not_authed`, no crash). OAuth
 (`/oauth/initiate`, user-scope authorize URL without PKCE; the resulting token is stored as a normal relay-prefixed vault secret and referenced by name; exchanged via `oauth.v2.access` through the
 `OAuthCallbackListenerManager` relay hook) works only with a localhost or https redirect URL.
@@ -378,8 +380,8 @@ secret is deleted, `has_*_token` turns false and `*_secret_missing` true (tools 
 
 - **UI**: Settings -> Library -> Relays (`/settings/relays`, `LibraryRelaysSection.vue`) creates the one Slack relay,
   shows `has_user_token` / `has_app_token` chips (never values; "secret missing" when a referenced secret was deleted), runs
-  **Test connection** and holds the credentials form (two pickers listing vault secrets by NAME, secrets used elsewhere are
-  disabled, plus a "Create a secret" link to Library -> Secrets; no token is ever typed here) plus the collapsible **Slack app setup** guide (steps, manifest with Copy /
+  **Test connection** and holds the credentials form (two pickers listing vault secrets by NAME, secrets also assigned elsewhere stay selectable and show an
+  "also assigned to" note plus an amber exposure warning (names), plus a "Create a secret" link to Library -> Secrets; no token is ever typed here) plus the collapsible **Slack app setup** guide (steps, manifest with Copy /
   Download, scope list with reasons). OAuth sits under "Advanced" and renders only on https or localhost. The **Relay**
   area (`RelaySection.vue`, profile area `relay`) is available in profile, template and session editors: relay select,
   footer on/off + text, session-only handle (own endpoint), policy count (read-only until the policy editor).
@@ -396,7 +398,7 @@ secret is deleted, `has_*_token` turns false and `*_secret_missing` true (tools 
 
 1. Settings -> Library -> Relays -> **Create Slack relay**.
 2. Open **Slack app setup**, copy or download the manifest, create a Slack app "From a manifest", install it to the workspace.
-3. Create a Generic secret in Library -> Secrets for the User OAuth Token (`xoxp-`) and, for the inbound stage, one for an app-level token with `connections:write` (`xapp-`); use dedicated secrets (not ones assigned to sessions).
+3. Create a Generic secret in Library -> Secrets for the User OAuth Token (`xoxp-`) and, for the inbound stage, one for an app-level token with `connections:write` (`xapp-`); a dedicated secret is recommended (a secret also assigned to sessions works but exposes the token to them; the UI warns).
 4. Back on Relays pick both secrets, **Save credentials**, then **Test connection**.
 5. In a profile, template or session editor open **Relay**, pick the relay, adjust the footer, optionally set the handle.
 

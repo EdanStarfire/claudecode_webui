@@ -125,23 +125,52 @@ async def test_issue_2103_secret_reference_validation_and_failure_leaves_record(
 
 
 @pytest.mark.asyncio
-async def test_issue_2103_assigned_secret_rejected_as_relay_credential(relay_env):
+async def test_issue_2103_in_use_secret_selectable_with_sharing_warning(relay_env):
     client = relay_env["client"]
     relay = (await client.post("/api/relays", json={"name": "Rig"})).json()
+    rid = relay["relay_id"]
     await _make_secret(client, "shared-slack", USER_TOKEN)
     project = await relay_env["create_test_project"]()
-    session = await relay_env["create_test_session"](project["project_id"])
+    session = await relay_env["create_test_session"](project["project_id"], name="Debug helper")
     r = await client.patch(f"/api/sessions/{session['session_id']}",
                            json={"config": {"assigned_secrets": ["shared-slack"]}})
     assert r.status_code == 200, r.text
-    r = await client.put(f"/api/relays/{relay['relay_id']}/secrets",
-                         json={"user_token_secret": "shared-slack"})
-    assert r.status_code == 400 and "already used" in r.text and "session" in r.text
+    tpl = await client.post("/api/templates", json={"name": "Shared tpl",
+                                                    "config": {"assigned_secrets": ["shared-slack"]}})
+    assert tpl.status_code in (200, 201), tpl.text
+
+    # preview for the picker (names only)
+    usage = (await client.get(f"/api/relays/{rid}/secret-usage", params={"name": "shared-slack"})).json()
+    assert usage["usage"]["shared-slack"]["sessions"] == ["Debug helper"]
+    assert usage["usage"]["shared-slack"]["templates"] == ["Shared tpl"]
+    assert USER_TOKEN not in json.dumps(usage)
+
+    # selecting an in-use secret succeeds; the payload carries the warning data
+    r = await client.put(f"/api/relays/{rid}/secrets", json={"user_token_secret": "shared-slack"})
+    assert r.status_code == 200, r.text
+    body = r.json()
+    assert body["has_user_token"] is True
+    assert body["user_secret_shared"]["sessions"] == ["Debug helper"]
+    assert body["user_secret_shared"]["templates"] == ["Shared tpl"]
+    assert body["app_token_secret"] is None and "app_secret_shared" not in body
     assert USER_TOKEN not in r.text
+
+    # computed live: GET shows it, and it disappears when the other usage is removed
+    got = (await client.get(f"/api/relays/{rid}")).json()
+    assert got["user_secret_shared"]["sessions"] == ["Debug helper"]
+    await client.patch(f"/api/sessions/{session['session_id']}", json={"config": {"assigned_secrets": []}})
+    await client.delete(f"/api/templates/{tpl.json()['template_id']}")
+    got = (await client.get(f"/api/relays/{rid}")).json()
+    assert got["user_secret_shared"] is None
+    # and it appears again if someone assigns it later
+    await client.patch(f"/api/sessions/{session['session_id']}",
+                       json={"config": {"assigned_secrets": ["shared-slack"]}})
+    assert (await client.get(f"/api/relays/{rid}")).json()["user_secret_shared"]["sessions"] == ["Debug helper"]
+    assert (await client.get("/api/relays/missing/secret-usage")).status_code == 404
 
 
 @pytest.mark.asyncio
-async def test_issue_2103_referenced_secret_not_assignable_afterwards(relay_env):
+async def test_issue_2103_relay_referenced_secret_is_assignable_but_relay_prefix_is_not(relay_env):
     client = relay_env["client"]
     relay = (await client.post("/api/relays", json={"name": "Rig"})).json()
     await _make_secret(client, "slack-user", USER_TOKEN)
@@ -149,31 +178,24 @@ async def test_issue_2103_referenced_secret_not_assignable_afterwards(relay_env)
                              json={"user_token_secret": "slack-user"})).status_code == 200
     project = await relay_env["create_test_project"]()
     session = await relay_env["create_test_session"](project["project_id"])
-    msg = "used by the relay as a credential"
-    r = await client.post("/api/sessions", json={"project_id": project["project_id"],
-                                                 "assigned_secrets": ["slack-user"]})
-    assert r.status_code == 422 and msg in r.text
-    r = await client.patch(f"/api/sessions/{session['session_id']}",
-                           json={"config": {"assigned_secrets": ["Slack-User"]}})
-    assert r.status_code == 422 and msg in r.text
-    r = await client.post("/api/templates", json={"name": "T", "config": {"assigned_secrets": ["slack-user"]}})
-    assert r.status_code in (400, 422)
-    r = await client.post("/api/profiles", json={"name": "p", "area": "isolation",
-                                                 "config": {"assigned_secrets": ["slack-user"]}})
-    assert r.status_code == 400
-    # defense in depth at resolve time
-    vault = relay_env["coordinator"].credential_vault
-    assert await vault.resolve_secrets_for_assignment(["slack-user"]) == []
-    # unrelated secrets stay assignable
-    await _make_secret(client, "other", "plain")
-    r = await client.patch(f"/api/sessions/{session['session_id']}",
-                           json={"config": {"assigned_secrets": ["other"]}})
-    assert r.status_code == 200
-    # removing the relay frees the secret again
-    assert (await client.delete(f"/api/relays/{relay['relay_id']}")).status_code == 200
     r = await client.patch(f"/api/sessions/{session['session_id']}",
                            json={"config": {"assigned_secrets": ["slack-user"]}})
-    assert r.status_code == 200
+    assert r.status_code == 200, r.text
+    r = await client.post("/api/sessions", json={"project_id": project["project_id"],
+                                                 "assigned_secrets": ["Slack-User"]})
+    assert r.status_code in (200, 201), r.text
+    r = await client.post("/api/profiles", json={"name": "p", "area": "isolation",
+                                                 "config": {"assigned_secrets": ["slack-user"]}})
+    assert r.status_code in (200, 201)
+    # resolves for assignment like any ordinary secret
+    vault = relay_env["coordinator"].credential_vault
+    resolved = await vault.resolve_secrets_for_assignment(["slack-user"])
+    assert [x["name"] for x in resolved] == ["slack-user"]
+    # the reserved relay- prefix (secrets the relay itself creates) stays unassignable
+    r = await client.patch(f"/api/sessions/{session['session_id']}",
+                           json={"config": {"assigned_secrets": ["relay-abc-user-token"]}})
+    assert r.status_code == 422
+    assert await vault.resolve_secrets_for_assignment(["relay-abc-user-token"]) == []
 
 
 @pytest.mark.asyncio

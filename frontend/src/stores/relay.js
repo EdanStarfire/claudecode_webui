@@ -87,6 +87,13 @@ export const useRelayStore = defineStore('relay', () => {
     return api.get(`/api/relays/${encodeURIComponent(relayId)}/manifest${q}`)
   }
 
+  /** Where candidate credential secrets are also used (consumer NAMES only). */
+  async function secretUsage(relayId, names) {
+    const q = names.map(n => `name=${encodeURIComponent(n)}`).join('&')
+    const result = await api.get(`/api/relays/${encodeURIComponent(relayId)}/secret-usage?${q}`)
+    return result.usage || {}
+  }
+
   async function oauthInitiate(relayId, redirectUri) {
     return api.post(`/api/relays/${encodeURIComponent(relayId)}/oauth/initiate`, {
       redirect_uri: redirectUri,
@@ -111,6 +118,6 @@ export const useRelayStore = defineStore('relay', () => {
   return {
     relays, relay, loaded, loading, error,
     loadRelays, fetchIfEmpty, createRelay, updateRelay, deleteRelay, saveSecrets, testRelay,
-    loadManifest, oauthInitiate, oauthStatus, setSessionHandle, getSessionRelay,
+    loadManifest, secretUsage, oauthInitiate, oauthStatus, setSessionHandle, getSessionRelay,
   }
 })

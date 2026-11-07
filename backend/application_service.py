@@ -1283,6 +1283,9 @@ class ApplicationService:
     async def list_secrets(self) -> dict:
         return await self.coordinator.secrets_service.list_secrets()
 
+    async def secret_users(self, names: list[str]) -> dict:
+        return await self.coordinator.secrets_service.secret_users(names)
+
     async def create_secret(
         self,
         name: str,
