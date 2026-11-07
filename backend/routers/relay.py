@@ -1,6 +1,7 @@
 """Relay endpoints: /api/relays/* and /api/sessions/{id}/relay/* (issue #2103).
 
-Responses never contain token values or vault secret names (only has_* booleans).
+Responses never contain token values. Credentials are references to existing vault secrets:
+the record exposes the referenced secret NAMES plus has_* booleans (false when the secret is gone).
 """
 
 from urllib.parse import urlparse
@@ -18,12 +19,13 @@ from ..relay_manager import (
     RelayNotFoundError,
     RelayTokenError,
 )
+from ..slug_utils import slugify_secret
 from ._models import (
     RelayCreateRequest,
     RelayHandleRequest,
     RelayOAuthInitiateRequest,
     RelayPolicyRequest,
-    RelayTokensRequest,
+    RelaySecretsRequest,
     RelayUpdateRequest,
 )
 
@@ -50,14 +52,14 @@ def build_router(webui) -> APIRouter:
         record = await manager().get_relay(relay_id)
         if record is None:
             raise HTTPException(status_code=404, detail="Relay not found")
-        return record.to_public_dict()
+        return manager().public_dict(record)
 
     # ---- Relay asset CRUD ----
 
     @router.get("/api/relays")
     @handle_exceptions("list relays")
     async def list_relays():
-        return {"relays": [r.to_public_dict() for r in await manager().list_relays()]}
+        return {"relays": [manager().public_dict(r) for r in await manager().list_relays()]}
 
     @router.post("/api/relays", status_code=201)
     @handle_exceptions("create relay", value_error_status=400)
@@ -71,7 +73,7 @@ def build_router(webui) -> APIRouter:
             )
         except RelayConflictError as e:
             raise HTTPException(status_code=409, detail=str(e)) from e
-        return record.to_public_dict()
+        return manager().public_dict(record)
 
     @router.get("/api/relays/{relay_id}")
     @handle_exceptions("get relay")
@@ -90,7 +92,7 @@ def build_router(webui) -> APIRouter:
             )
         except RelayNotFoundError as e:
             raise HTTPException(status_code=404, detail="Relay not found") from e
-        return record.to_public_dict()
+        return manager().public_dict(record)
 
     @router.delete("/api/relays/{relay_id}")
     @handle_exceptions("delete relay")
@@ -101,18 +103,37 @@ def build_router(webui) -> APIRouter:
 
     # ---- Credentials ----
 
-    @router.put("/api/relays/{relay_id}/tokens")
-    @handle_exceptions("store relay tokens", value_error_status=400)
-    async def put_tokens(relay_id: str, request: RelayTokensRequest):
+    @router.put("/api/relays/{relay_id}/secrets")
+    @handle_exceptions("set relay credential secrets", value_error_status=400)
+    async def put_secrets(relay_id: str, request: RelaySecretsRequest):
+        """Reference existing vault secrets as the relay credentials (names only)."""
+
+        async def usage_of(name: str) -> str | None:
+            slug = slugify_secret(name)
+            for s in (await webui.service.list_secrets())["secrets"]:
+                if slugify_secret(s["name"]) == slug:
+                    usage = s.get("usage") or {}
+                    parts = [f"{usage.get(k)} {label}" for k, label in (
+                        ("sessions", "session(s)"), ("templates", "template(s)"),
+                        ("profiles", "profile(s)"), ("mcp_servers", "MCP server(s)"))
+                        if usage.get(k)]
+                    if usage.get("oauth2_dependents"):
+                        parts.append("OAuth2 refresh dependency")
+                    return ", ".join(parts) or None
+            return None
+
         try:
-            record = await manager().set_tokens(
-                relay_id, user_token=request.user_token, app_token=request.app_token
+            record = await manager().set_secret_refs(
+                relay_id,
+                user_token_secret=request.user_token_secret,
+                app_token_secret=request.app_token_secret,
+                usage_of=usage_of,
             )
         except RelayNotFoundError as e:
             raise HTTPException(status_code=404, detail="Relay not found") from e
         except RelayTokenError as e:
             raise HTTPException(status_code=400, detail=str(e)) from e
-        return record.to_public_dict()
+        return manager().public_dict(record)
 
     @router.post("/api/relays/{relay_id}/test")
     @handle_exceptions("test relay")

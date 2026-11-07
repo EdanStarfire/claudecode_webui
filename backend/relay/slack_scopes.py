@@ -105,8 +105,15 @@ SETUP_STEPS: list[dict[str, str]] = [
         "harmless to store now.",
     },
     {
-        "title": "Paste the tokens below",
-        "detail": "Paste each token into its field and save. Token values are never shown again.",
+        "title": "Store the tokens as secrets",
+        "detail": "In Settings, Library, Secrets create a secret for each token (type Generic, any "
+        "name such as slack-user-token) and paste the token as its value. The relay only "
+        "references secrets by name; use dedicated secrets, not ones assigned to sessions.",
+    },
+    {
+        "title": "Pick the secrets here",
+        "detail": "Choose the user-token secret and the app-token secret below and save. The "
+        "values are checked in the Backend (prefix, Slack auth.test) and never shown.",
     },
     {
         "title": "Press Test connection",

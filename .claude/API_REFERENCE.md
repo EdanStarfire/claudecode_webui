@@ -127,15 +127,16 @@ payloads. Archived sessions keep their recorded `working_directory`.
 
 ### Relay Endpoints (issue #2103)
 
-Responses never contain token values or vault secret names; only `has_user_token` / `has_app_token` /
-`has_oauth_client_secret` booleans. One relay per Backend (second `POST` -> 409).
+Responses never contain token values. Credentials are references to existing vault secrets: records carry the
+referenced secret NAMES (`user_token_secret`, `app_token_secret`), `has_user_token` / `has_app_token` (false when the
+referenced secret no longer exists), `user_secret_missing` / `app_secret_missing` and `has_oauth_client_secret`. One relay per Backend (second `POST` -> 409).
 
 | Method | Path | Description |
 |--------|------|-------------|
 | `GET` | `/api/relays` | List relays (`{relays: [...]}`) |
 | `POST` | `/api/relays` | Create (`name`, `adapter_type="slack"`, optional `oauth_client_id`, `oauth_client_secret`); 201, 409 if one exists |
 | `GET`/`PUT`/`DELETE` | `/api/relays/{id}` | Read / rename + OAuth client fields / delete (also deletes its vault secrets) |
-| `PUT` | `/api/relays/{id}/tokens` | Paste-token path: `user_token` (`xoxp-`) and/or `app_token` (`xapp-`); the user token is verified with `auth.test` (records `owner_user_id`, workspace) before it is stored; 400 on bad prefix / rejected token |
+| `PUT` | `/api/relays/{id}/secrets` | Reference existing vault secrets: `{user_token_secret?, app_token_secret?}` (names, either alone). Each secret must exist, must not be used by any session/template/profile/MCP server, and its value must start with `xoxp-` / `xapp-` (read in-process, never returned); the user token is verified with `auth.test` (records `owner_user_id`, workspace). 400 with a message naming the secret on any failure (record untouched), 404 unknown relay. Replaces the removed paste-token route |
 | `POST` | `/api/relays/{id}/test` | `auth.test` with the stored user token -> `{ok, workspace_*, user_id}` |
 | `POST` | `/api/relays/{id}/oauth/initiate` | Best effort. Body `{redirect_uri}` (https, or http on localhost; otherwise 400) -> `{auth_url, state}` |
 | `GET` | `/api/relays/{id}/oauth/status?state=` | `pending` / `complete` / `error` / `unknown` |
@@ -149,8 +150,8 @@ Responses never contain token values or vault secret names; only `has_user_token
 
 Attachment fields (`relay_id`, `relay_footer_enabled`, `relay_footer_template`, `relay_channel_policies`,
 `relay_handle`) travel through the normal profile (area `relay`), template and session config endpoints.
-`assigned_secrets` entries starting with `relay-` are rejected (422 on session create/template update, 400 on
-profile/template config).
+`assigned_secrets` entries starting with `relay-` or naming a secret the relay references are rejected (422 on session
+create/template update, 400 on profile/template config); a secret already used anywhere is refused as a relay credential.
 
 ### Permission Endpoints
 

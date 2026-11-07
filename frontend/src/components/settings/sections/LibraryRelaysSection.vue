@@ -43,10 +43,10 @@
             <dt>Tokens</dt>
             <dd>
               <span class="chip" :class="relay.has_user_token ? 'chip--ok' : 'chip--missing'" data-testid="relay-chip-user">
-                user token {{ relay.has_user_token ? 'set' : 'missing' }}
+                user token {{ chipState(relay.has_user_token, relay.user_secret_missing) }}
               </span>
               <span class="chip" :class="relay.has_app_token ? 'chip--ok' : 'chip--missing'" data-testid="relay-chip-app">
-                app token {{ relay.has_app_token ? 'set' : 'missing' }}
+                app token {{ chipState(relay.has_app_token, relay.app_secret_missing) }}
               </span>
             </dd>
           </dl>
@@ -75,10 +75,10 @@
           <div v-if="actionError" class="msg-error" role="alert">{{ actionError }}</div>
         </div>
 
-        <!-- Credentials -->
+        <!-- Credentials: references to existing vault secrets -->
         <div class="relay-card">
           <h3>Credentials</h3>
-          <RelayTokenForm :saving="savingTokens" :error="tokenError" @submit="saveTokens" />
+          <RelaySecretPickers :relay="relay" :saving="savingSecrets" :error="secretError" @submit="saveSecrets" />
         </div>
 
         <!-- Setup guide -->
@@ -114,7 +114,7 @@
 import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
 import { useRelayStore } from '@/stores/relay'
 import SettingsToolbar from '../SettingsToolbar.vue'
-import RelayTokenForm from '../../relay/RelayTokenForm.vue'
+import RelaySecretPickers from '../../relay/RelaySecretPickers.vue'
 import RelaySetupGuide from '../../relay/RelaySetupGuide.vue'
 
 const store = useRelayStore()
@@ -128,8 +128,10 @@ const testResult = ref(null)
 const actionError = ref('')
 const confirmDelete = ref(false)
 const deleting = ref(false)
-const savingTokens = ref(false)
-const tokenError = ref('')
+const savingSecrets = ref(false)
+const secretError = ref('')
+
+const chipState = (has, missing) => (has ? 'set' : missing ? 'secret missing' : 'missing')
 
 const LOCAL_HOSTS = ['localhost', '127.0.0.1', '::1', '[::1]']
 const oauthAvailable = computed(() =>
@@ -182,15 +184,15 @@ async function remove() {
   }
 }
 
-async function saveTokens(tokens) {
-  savingTokens.value = true
-  tokenError.value = ''
+async function saveSecrets(selection) {
+  savingSecrets.value = true
+  secretError.value = ''
   try {
-    await store.saveTokens(relay.value.relay_id, tokens)
+    await store.saveSecrets(relay.value.relay_id, selection)
   } catch (e) {
-    tokenError.value = e.message
+    secretError.value = e.message
   } finally {
-    savingTokens.value = false
+    savingSecrets.value = false
   }
 }
 

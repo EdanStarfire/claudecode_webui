@@ -75,33 +75,60 @@ describe('LibraryRelaysSection', () => {
     expect(wrapper.find('[data-testid="relay-create-error"]').text()).toBe('A relay already exists')
   })
 
-  it('saves tokens, clears the inputs and never renders the value', async () => {
+  it('offers vault secrets by name only, saves the selection and shows the reference', async () => {
     mockApi([REC])
-    apiMock.put.mockResolvedValue({ ...REC, has_user_token: true })
-    const { wrapper } = renderWithStores(LibraryRelaysSection, { attachTo: document.body })
-    await flush()
-    const input = wrapper.find('[data-testid="relay-user-token"]')
-    await input.setValue('xoxp-supersecret')
-    await wrapper.find('.token-form').trigger('submit')
-    await flush()
-    expect(apiMock.put).toHaveBeenCalledWith('/api/relays/r1/tokens', { user_token: 'xoxp-supersecret' })
-    expect(input.element.value).toBe('')
-    expect(document.body.innerHTML).not.toContain('xoxp-supersecret')
-    expect(wrapper.find('[data-testid="relay-chip-user"]').text()).toContain('set')
-    wrapper.unmount()
-  })
-
-  it('shows the backend token error and still clears the input', async () => {
-    mockApi([REC])
-    apiMock.put.mockRejectedValue(new Error('Slack rejected the user token (invalid_auth)'))
+    const secrets = [
+      { name: 'slack-user', type: 'generic', usage: { total: 0 } },
+      { name: 'in-use', type: 'generic', usage: { total: 2 } },
+      { name: 'deploy-key', type: 'ssh_key', usage: { total: 0 } },
+    ]
+    apiMock.get.mockImplementation((url) => {
+      if (url === '/api/relays') return Promise.resolve({ relays: [REC] })
+      if (url === '/api/secrets') return Promise.resolve({ secrets: secrets.map(s => ({ ...s })) })
+      if (url.includes('/manifest')) return Promise.resolve(MANIFEST)
+      return Promise.resolve({})
+    })
+    apiMock.put.mockResolvedValue({ ...REC, has_user_token: true, user_token_secret: 'slack-user' })
     const { wrapper } = renderWithStores(LibraryRelaysSection)
     await flush()
-    const input = wrapper.find('[data-testid="relay-user-token"]')
-    await input.setValue('xoxp-bad')
-    await wrapper.find('.token-form').trigger('submit')
+    expect(wrapper.find('[data-testid="relay-secret-pickers"] input').exists()).toBe(false)
+    expect(wrapper.find('[data-testid="relay-user-token"]').exists()).toBe(false)
+    const select = wrapper.find('[data-testid="relay-pick-user"]')
+    const opts = select.findAll('option').map(o => o.text())
+    expect(opts).toContain('slack-user')
+    expect(opts.some(o => o.startsWith('in-use') && o.includes('in use elsewhere'))).toBe(true)
+    expect(opts.some(o => o.startsWith('deploy-key'))).toBe(false)
+    expect(select.findAll('option').find(o => o.text().startsWith('in-use')).attributes('disabled')).toBeDefined()
+    expect(wrapper.find('[data-testid="relay-create-secret-link"]').attributes('href')).toContain('/settings/secrets')
+    await select.setValue('slack-user')
+    await wrapper.find('[data-testid="relay-secret-pickers"]').trigger('submit')
     await flush()
-    expect(wrapper.find('[data-testid="relay-token-error"]').text()).toContain('invalid_auth')
-    expect(input.element.value).toBe('')
+    expect(apiMock.put).toHaveBeenCalledWith('/api/relays/r1/secrets', { user_token_secret: 'slack-user' })
+    expect(wrapper.find('[data-testid="relay-chip-user"]').text()).toContain('set')
+  })
+
+  it('shows the backend validation error and keeps the form usable', async () => {
+    mockApi([REC])
+    apiMock.put.mockRejectedValue(new Error("user_token_secret: the value of secret 'x' must start with 'xoxp-'"))
+    apiMock.get.mockImplementation((url) => {
+      if (url === '/api/relays') return Promise.resolve({ relays: [REC] })
+      if (url === '/api/secrets') return Promise.resolve({ secrets: [{ name: 'x', type: 'generic', usage: { total: 0 } }] })
+      return Promise.resolve(MANIFEST)
+    })
+    const { wrapper } = renderWithStores(LibraryRelaysSection)
+    await flush()
+    await wrapper.find('[data-testid="relay-pick-user"]').setValue('x')
+    await wrapper.find('[data-testid="relay-secret-pickers"]').trigger('submit')
+    await flush()
+    expect(wrapper.find('[data-testid="relay-secret-error"]').text()).toContain('xoxp-')
+  })
+
+  it('shows a missing-secret state when the referenced secret was deleted', async () => {
+    mockApi([{ ...REC, user_token_secret: 'gone', user_secret_missing: true, has_user_token: false }])
+    const { wrapper } = renderWithStores(LibraryRelaysSection)
+    await flush()
+    expect(wrapper.find('[data-testid="relay-chip-user"]').text()).toContain('secret missing')
+    expect(wrapper.find('[data-testid="relay-missing-user"]').text()).toContain("'gone'")
   })
 
   it('Test connection renders workspace and user as text', async () => {

@@ -21,10 +21,38 @@ RELAY_CONFIG_FIELDS = frozenset({
 RELAY_SECRET_PREFIX = "relay-"
 
 
+# Names of vault secrets the relay REFERENCES as credentials (user token, app token, OAuth client
+# secret). Process-wide because the validators below are plain pydantic validators with no access
+# to RelayManager; RelayManager keeps it in sync (one relay per Backend).
+_relay_referenced_secrets: frozenset[str] = frozenset()
+
+
+def _norm(name: str) -> str:
+    return name.strip().lower()
+
+
+def set_relay_referenced_secrets(names: Iterable[str | None]) -> None:
+    global _relay_referenced_secrets
+    _relay_referenced_secrets = frozenset(_norm(n) for n in names if n)
+
+
+def is_relay_reserved_secret(name: str) -> bool:
+    """True for relay-created secrets (reserved prefix) and any secret a relay references."""
+    n = _norm(name)
+    return n.startswith(RELAY_SECRET_PREFIX) or n in _relay_referenced_secrets
+
+
 def validate_assigned_secrets(names: Iterable[str] | None) -> None:
-    """Reject relay-owned vault secrets in an ``assigned_secrets`` list."""
+    """Reject relay-reserved or relay-referenced vault secrets in an ``assigned_secrets`` list."""
     for name in names or []:
-        if isinstance(name, str) and name.strip().lower().startswith(RELAY_SECRET_PREFIX):
+        if not isinstance(name, str):
+            continue
+        if _norm(name) in _relay_referenced_secrets:
+            raise ValueError(
+                f"Secret '{name}' is used by the relay as a credential and cannot be assigned to a "
+                "session, template or profile"
+            )
+        if _norm(name).startswith(RELAY_SECRET_PREFIX):
             raise ValueError(
                 f"Secret '{name}' is reserved for the relay and cannot be assigned to a session"
             )

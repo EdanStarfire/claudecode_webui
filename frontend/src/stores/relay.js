@@ -5,10 +5,10 @@ import { api } from '../utils/api'
 /**
  * Relay Store — Slack relay Library asset (issue #2103, UI stage 2a).
  *
- * The Backend is the source of truth. Only public relay records (has_* booleans, never
- * token values) are held here. Token values are passed straight through `saveTokens` to
- * the API and are never stored, logged or returned. Errors are thrown as `Error` so the
- * calling component can render `error.message`.
+ * The Backend is the source of truth. Only public relay records (has_* booleans and the NAMES
+ * of the referenced vault secrets, never token values) are held here: credentials are
+ * references to existing secrets, the browser never handles a token value. Errors are thrown
+ * as `Error` so the calling component can render `error.message`.
  */
 export const useRelayStore = defineStore('relay', () => {
   const relays = ref([])
@@ -61,12 +61,12 @@ export const useRelayStore = defineStore('relay', () => {
     relays.value = relays.value.filter(r => r.relay_id !== relayId)
   }
 
-  /** Write-only: the payload object is not retained; only the public record comes back. */
-  async function saveTokens(relayId, { userToken, appToken }) {
+  /** Reference existing vault secrets by NAME; the Backend validates and verifies them. */
+  async function saveSecrets(relayId, { userSecret, appSecret }) {
     const body = {}
-    if (userToken) body.user_token = userToken
-    if (appToken) body.app_token = appToken
-    const record = await api.put(`/api/relays/${encodeURIComponent(relayId)}/tokens`, body)
+    if (userSecret) body.user_token_secret = userSecret
+    if (appSecret) body.app_token_secret = appSecret
+    const record = await api.put(`/api/relays/${encodeURIComponent(relayId)}/secrets`, body)
     _upsert(record)
     return record
   }
@@ -110,7 +110,7 @@ export const useRelayStore = defineStore('relay', () => {
 
   return {
     relays, relay, loaded, loading, error,
-    loadRelays, fetchIfEmpty, createRelay, updateRelay, deleteRelay, saveTokens, testRelay,
+    loadRelays, fetchIfEmpty, createRelay, updateRelay, deleteRelay, saveSecrets, testRelay,
     loadManifest, oauthInitiate, oauthStatus, setSessionHandle, getSessionRelay,
   }
 })

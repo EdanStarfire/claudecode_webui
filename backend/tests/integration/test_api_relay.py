@@ -54,71 +54,157 @@ async def _make_session(env, name="Planner"):
     return await env["create_test_session"](project["project_id"], name=name)
 
 
+async def _make_secret(client, name, value):
+    r = await client.post("/api/secrets", json={"name": name, "type": "generic",
+                                                "target_hosts": [], "value": value})
+    assert r.status_code in (200, 201), r.text
+
+
 @pytest.mark.asyncio
-async def test_issue_2103_relay_create_one_per_backend_and_no_token_echo(relay_env):
+async def test_issue_2103_relay_create_one_per_backend_and_secret_reference_no_echo(relay_env):
     client = relay_env["client"]
     r = await client.post("/api/relays", json={"name": "Rig", "oauth_client_id": "123.456",
                                                "oauth_client_secret": "client-secret-value"})
     assert r.status_code == 201, r.text
     relay = r.json()
-    assert relay["has_user_token"] is False and "user_token_secret" not in relay
+    assert relay["has_user_token"] is False and relay["user_token_secret"] is None
     assert (await client.post("/api/relays", json={"name": "Second"})).status_code == 409
 
-    r = await client.put(f"/api/relays/{relay['relay_id']}/tokens",
-                         json={"user_token": USER_TOKEN, "app_token": APP_TOKEN})
+    await _make_secret(client, "slack-user", USER_TOKEN)
+    await _make_secret(client, "slack-app", APP_TOKEN)
+    url = f"/api/relays/{relay['relay_id']}/secrets"
+    r = await client.put(url, json={"user_token_secret": "slack-user", "app_token_secret": "slack-app"})
     assert r.status_code == 200, r.text
     body = r.json()
     assert body["has_user_token"] and body["has_app_token"]
+    assert body["user_token_secret"] == "slack-user" and body["app_token_secret"] == "slack-app"
     assert body["owner_user_id"] == "U01OWNER" and body["workspace_name"] == "edanstestingrig"
+    # auth.test ran against the referenced value
+    assert f"Bearer {USER_TOKEN}" in relay_env["seen_auth"]
 
-    # No endpoint returns a token value or a secret name
-    for path in ("/api/relays", f"/api/relays/{relay['relay_id']}"):
+    # No endpoint returns a token value; the vault values are untouched and the record holds names
+    for path in ("/api/relays", f"/api/relays/{relay['relay_id']}", "/api/secrets"):
         text = (await client.get(path)).text
-        for needle in (USER_TOKEN, APP_TOKEN, "client-secret-value", "relay-"):
+        for needle in (USER_TOKEN, APP_TOKEN, "client-secret-value"):
             assert needle not in text
     assert USER_TOKEN not in r.text and APP_TOKEN not in r.text
-    # Nor the on-disk relay record
     files = list((relay_env["data_dir"] / "relays").glob("*.json"))
-    assert len(files) == 1
     disk = files[0].read_text()
     assert USER_TOKEN not in disk and APP_TOKEN not in disk
-    assert json.loads(disk)["user_token_secret"] == f"relay-{relay['relay_id']}-user-token"
-    # Values live in the vault (keyring), not the secrets API listing
-    assert relay_env["keyring"][f"relay-{relay['relay_id']}-user-token"] == USER_TOKEN
+    assert json.loads(disk)["user_token_secret"] == "slack-user"
+    assert relay_env["keyring"]["slack-user"] == USER_TOKEN
 
     r = await client.post(f"/api/relays/{relay['relay_id']}/test")
     assert r.json()["ok"] is True and USER_TOKEN not in r.text
-    # The adapter used the stored token
-    assert f"Bearer {USER_TOKEN}" in relay_env["seen_auth"]
+    # the old paste-token route is gone
+    assert (await client.put(f"/api/relays/{relay['relay_id']}/tokens",
+                             json={"user_token": USER_TOKEN})).status_code in (404, 405)
 
 
 @pytest.mark.asyncio
-async def test_issue_2103_tokens_validation_and_bad_token_not_stored(relay_env):
+async def test_issue_2103_secret_reference_validation_and_failure_leaves_record(relay_env):
     client = relay_env["client"]
     relay = (await client.post("/api/relays", json={"name": "Rig"})).json()
-    url = f"/api/relays/{relay['relay_id']}/tokens"
-    assert (await client.put(url, json={"user_token": "xoxb-wrong-prefix"})).status_code == 400
-    assert (await client.put(url, json={"app_token": "xoxp-wrong"})).status_code == 400
+    url = f"/api/relays/{relay['relay_id']}/secrets"
+    await _make_secret(client, "wrong-prefix", "xoxb-wrong-prefix-value")
+    await _make_secret(client, "rejected", "xoxp-rejected-by-slack")
+    await _make_secret(client, "app-wrong", "xoxp-not-an-app-token")
     assert (await client.put(url, json={})).status_code == 400
-    r = await client.put(url, json={"user_token": "xoxp-rejected-by-slack"})
+    r = await client.put(url, json={"user_token_secret": "does-not-exist"})
+    assert r.status_code == 400 and "not found" in r.text
+    r = await client.put(url, json={"user_token_secret": "wrong-prefix"})
+    assert r.status_code == 400 and "xoxp-" in r.text and "xoxb-wrong" not in r.text
+    r = await client.put(url, json={"app_token_secret": "app-wrong"})
+    assert r.status_code == 400 and "xapp-" in r.text
+    r = await client.put(url, json={"user_token_secret": "rejected"})
     assert r.status_code == 400 and "invalid_auth" in r.text and "rejected-by-slack" not in r.text
-    assert (await client.get(f"/api/relays/{relay['relay_id']}")).json()["has_user_token"] is False
-    assert not relay_env["keyring"]
-    assert (await client.put("/api/relays/missing/tokens", json={"user_token": USER_TOKEN})).status_code == 404
+    got = (await client.get(f"/api/relays/{relay['relay_id']}")).json()
+    assert got["has_user_token"] is False and got["user_token_secret"] is None
+    assert (await client.put("/api/relays/missing/secrets",
+                             json={"user_token_secret": "x"})).status_code == 404
 
 
 @pytest.mark.asyncio
-async def test_issue_2103_delete_relay_cleans_vault(relay_env):
+async def test_issue_2103_assigned_secret_rejected_as_relay_credential(relay_env):
     client = relay_env["client"]
     relay = (await client.post("/api/relays", json={"name": "Rig"})).json()
-    await client.put(f"/api/relays/{relay['relay_id']}/tokens",
-                     json={"user_token": USER_TOKEN, "app_token": APP_TOKEN})
-    assert len(relay_env["keyring"]) == 2
+    await _make_secret(client, "shared-slack", USER_TOKEN)
+    project = await relay_env["create_test_project"]()
+    session = await relay_env["create_test_session"](project["project_id"])
+    r = await client.patch(f"/api/sessions/{session['session_id']}",
+                           json={"config": {"assigned_secrets": ["shared-slack"]}})
+    assert r.status_code == 200, r.text
+    r = await client.put(f"/api/relays/{relay['relay_id']}/secrets",
+                         json={"user_token_secret": "shared-slack"})
+    assert r.status_code == 400 and "already used" in r.text and "session" in r.text
+    assert USER_TOKEN not in r.text
+
+
+@pytest.mark.asyncio
+async def test_issue_2103_referenced_secret_not_assignable_afterwards(relay_env):
+    client = relay_env["client"]
+    relay = (await client.post("/api/relays", json={"name": "Rig"})).json()
+    await _make_secret(client, "slack-user", USER_TOKEN)
+    assert (await client.put(f"/api/relays/{relay['relay_id']}/secrets",
+                             json={"user_token_secret": "slack-user"})).status_code == 200
+    project = await relay_env["create_test_project"]()
+    session = await relay_env["create_test_session"](project["project_id"])
+    msg = "used by the relay as a credential"
+    r = await client.post("/api/sessions", json={"project_id": project["project_id"],
+                                                 "assigned_secrets": ["slack-user"]})
+    assert r.status_code == 422 and msg in r.text
+    r = await client.patch(f"/api/sessions/{session['session_id']}",
+                           json={"config": {"assigned_secrets": ["Slack-User"]}})
+    assert r.status_code == 422 and msg in r.text
+    r = await client.post("/api/templates", json={"name": "T", "config": {"assigned_secrets": ["slack-user"]}})
+    assert r.status_code in (400, 422)
+    r = await client.post("/api/profiles", json={"name": "p", "area": "isolation",
+                                                 "config": {"assigned_secrets": ["slack-user"]}})
+    assert r.status_code == 400
+    # defense in depth at resolve time
+    vault = relay_env["coordinator"].credential_vault
+    assert await vault.resolve_secrets_for_assignment(["slack-user"]) == []
+    # unrelated secrets stay assignable
+    await _make_secret(client, "other", "plain")
+    r = await client.patch(f"/api/sessions/{session['session_id']}",
+                           json={"config": {"assigned_secrets": ["other"]}})
+    assert r.status_code == 200
+    # removing the relay frees the secret again
     assert (await client.delete(f"/api/relays/{relay['relay_id']}")).status_code == 200
-    assert relay_env["keyring"] == {}
+    r = await client.patch(f"/api/sessions/{session['session_id']}",
+                           json={"config": {"assigned_secrets": ["slack-user"]}})
+    assert r.status_code == 200
+
+
+@pytest.mark.asyncio
+async def test_issue_2103_delete_relay_keeps_user_secrets_and_missing_secret_state(relay_env):
+    client = relay_env["client"]
+    manager = relay_env["coordinator"].relay_manager
+    relay = (await client.post("/api/relays", json={"name": "Rig"})).json()
+    await _make_secret(client, "slack-user", USER_TOKEN)
+    await _make_secret(client, "slack-app", APP_TOKEN)
+    await client.put(f"/api/relays/{relay['relay_id']}/secrets",
+                     json={"user_token_secret": "slack-user", "app_token_secret": "slack-app"})
+    # deleting the referenced secret => clear missing state, tools get a clear error, no crash
+    assert (await client.delete("/api/secrets/slack-app")).status_code == 200
+    got = (await client.get(f"/api/relays/{relay['relay_id']}")).json()
+    assert got["has_app_token"] is False and got["app_token_secret"] == "slack-app"
+    assert got["app_secret_missing"] is True and got["user_secret_missing"] is False
+    assert got["has_user_token"] is True
+    from backend.relay.adapter import RelayError
+    with pytest.raises(RelayError) as exc:
+        manager.get_token(relay["relay_id"], "app")
+    assert exc.value.code == "not_authed"
+    assert (await client.delete("/api/secrets/slack-user")).status_code == 200
+    r = await client.post(f"/api/relays/{relay['relay_id']}/test")
+    assert r.status_code == 200 and r.json() == {"ok": False, "error": "not_authed"}
+    # recreate and delete the relay: user-owned secrets survive
+    await _make_secret(client, "slack-user", USER_TOKEN)
+    await client.put(f"/api/relays/{relay['relay_id']}/secrets", json={"user_token_secret": "slack-user"})
+    assert (await client.delete(f"/api/relays/{relay['relay_id']}")).status_code == 200
+    assert relay_env["keyring"]["slack-user"] == USER_TOKEN
     assert (await client.get("/api/relays")).json() == {"relays": []}
     assert (await client.delete(f"/api/relays/{relay['relay_id']}")).status_code == 404
-    # A new relay may be created again
     assert (await client.post("/api/relays", json={"name": "Rig2"})).status_code == 201
 
 
@@ -311,6 +397,7 @@ async def test_issue_2103_oauth_callback_exchanges_and_stores_user_token(relay_e
     assert await listener.complete_and_broadcast(init["state"], "the-code") == relay["relay_id"]
     got = (await client.get(f"/api/relays/{relay['relay_id']}")).json()
     assert got["has_user_token"] and got["owner_user_id"] == "U01OWNER"
+    assert got["user_token_secret"] == f"relay-{relay['relay_id']}-user-token"
     assert relay_env["keyring"][f"relay-{relay['relay_id']}-user-token"] == USER_TOKEN
     status = (await client.get(f"/api/relays/{relay['relay_id']}/oauth/status", params={"state": init["state"]})).json()
     assert status["status"] == "complete"

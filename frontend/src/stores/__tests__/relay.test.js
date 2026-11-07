@@ -37,14 +37,14 @@ describe('relay store', () => {
     expect(store.relays).toEqual([])
   })
 
-  it('saveTokens sends only provided tokens and never stores them', async () => {
-    apiMock.put.mockResolvedValue({ ...REC, has_user_token: true })
+  it('saveSecrets sends only the selected secret NAMES', async () => {
+    apiMock.put.mockResolvedValue({ ...REC, has_user_token: true, user_token_secret: 'slack-user' })
     const store = useRelayStore()
     store.relays = [REC]
-    await store.saveTokens('r1', { userToken: 'xoxp-secret-value', appToken: '' })
-    expect(apiMock.put).toHaveBeenCalledWith('/api/relays/r1/tokens', { user_token: 'xoxp-secret-value' })
+    await store.saveSecrets('r1', { userSecret: 'slack-user', appSecret: '' })
+    expect(apiMock.put).toHaveBeenCalledWith('/api/relays/r1/secrets', { user_token_secret: 'slack-user' })
     expect(store.relays[0].has_user_token).toBe(true)
-    expect(JSON.stringify(store.$state)).not.toContain('xoxp-secret-value')
+    expect(store.saveTokens).toBeUndefined()
   })
 
   it('testRelay refreshes the record after the test', async () => {

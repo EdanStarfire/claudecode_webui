@@ -14,7 +14,7 @@ import logging
 import secrets
 import time
 import uuid
-from collections.abc import Callable
+from collections.abc import Awaitable, Callable
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
@@ -28,7 +28,7 @@ from .models.secret_record import SecretRecord, SecretType
 from .relay.adapter import RelayAdapter, RelayError
 from .relay.slack_adapter import SlackAdapter
 from .relay.slack_scopes import required_scopes
-from .relay.validation import RELAY_SECRET_PREFIX
+from .relay.validation import RELAY_SECRET_PREFIX, set_relay_referenced_secrets
 from .secrets_keyring import get_secret_value
 from .slug_utils import slugify
 
@@ -59,7 +59,10 @@ class RelayNotFoundError(KeyError):
 
 
 class RelayTokenError(ValueError):
-    """Token rejected (prefix or provider verification). Message never contains the token."""
+    """Credential rejected (missing secret, prefix, in use, or provider verification).
+
+    The message names secrets by NAME only and never contains a value.
+    """
 
 
 AdapterFactory = Callable[[Callable[[], Any]], RelayAdapter]
@@ -99,6 +102,26 @@ class RelayManager:
                 self.relays[record.relay_id] = record
             except Exception:
                 logger.exception("Failed to load relay file %s", path.name)
+        self._sync_reserved_secrets()
+
+    def _sync_reserved_secrets(self) -> None:
+        """Publish the referenced secret names so they can never be assigned to sessions."""
+        set_relay_referenced_secrets(
+            name
+            for r in self.relays.values()
+            for name in (r.user_token_secret, r.app_token_secret, r.oauth_client_secret_secret)
+        )
+
+    def public_dict(self, record: RelayRecord) -> dict[str, Any]:
+        """API shape: referenced secret NAMES plus presence booleans that reflect whether the
+        referenced vault secret currently exists (deleted/renamed secret => has_* False)."""
+        data = record.to_public_dict()
+        for field, kind in (("user_token_secret", "user"), ("app_token_secret", "app")):
+            name = getattr(record, field)
+            data[field] = name
+            data[f"{kind}_secret_missing"] = bool(name) and not self._vault.secret_exists(name)
+            data[f"has_{kind}_token"] = self.has_token(record.relay_id, kind)
+        return data
 
     def _path(self, record: RelayRecord) -> Path:
         return self._dir / f"{slugify(record.name) or record.relay_id}.json"
@@ -146,6 +169,7 @@ class RelayManager:
             )
         self._save(record)
         self.relays[record.relay_id] = record
+        self._sync_reserved_secrets()
         return record
 
     async def update_relay(
@@ -177,11 +201,15 @@ class RelayManager:
         record = self.relays.get(relay_id)
         if record is None:
             return False
+        # Only secrets this relay created itself (OAuth flow, client secret) are deleted; secrets the
+        # owner created and merely referenced stay in the vault.
+        owned_prefix = f"{RELAY_SECRET_PREFIX}{relay_id}-"
         for name in (record.user_token_secret, record.app_token_secret, record.oauth_client_secret_secret):
-            if name:
+            if name and name.startswith(owned_prefix):
                 await self._vault.delete_secret(name)
         self._path(record).unlink(missing_ok=True)
         del self.relays[relay_id]
+        self._sync_reserved_secrets()
         return True
 
     # --------------------------------------------------------------- secrets
@@ -212,7 +240,8 @@ class RelayManager:
 
     def has_token(self, relay_id: str, kind: str = "user") -> bool:
         record = self.relays.get(relay_id)
-        return bool(record and (record.user_token_secret if kind == "user" else record.app_token_secret))
+        name = record and (record.user_token_secret if kind == "user" else record.app_token_secret)
+        return bool(name) and self._vault.secret_exists(name)
 
     def adapter_for(self, relay_id: str) -> RelayAdapter:
         """Adapter that fetches the stored user token on every call."""
@@ -224,33 +253,57 @@ class RelayManager:
 
         return self._adapter_factory(_token)
 
-    async def set_tokens(
-        self, relay_id: str, user_token: str | None = None, app_token: str | None = None
+    async def set_secret_refs(
+        self,
+        relay_id: str,
+        user_token_secret: str | None = None,
+        app_token_secret: str | None = None,
+        usage_of: Callable[[str], Awaitable[str | None]] | None = None,
     ) -> RelayRecord:
-        """Paste-token path: prefix check, verify the user token with auth.test, then store."""
-        record = self._require(relay_id)
-        if user_token is None and app_token is None:
-            raise ValueError("Provide user_token and/or app_token")
-        if user_token is not None and not user_token.startswith(USER_TOKEN_PREFIX):
-            raise RelayTokenError(f"user_token must start with '{USER_TOKEN_PREFIX}'")
-        if app_token is not None and not app_token.startswith(APP_TOKEN_PREFIX):
-            raise RelayTokenError(f"app_token must start with '{APP_TOKEN_PREFIX}'")
+        """Reference existing vault secrets as the relay's credentials (either alone).
 
-        # Verify first, then store both secrets, and only then mutate the record, so a
-        # failure part-way leaves the record untouched.
-        info = await self._verify_user_token(user_token) if user_token is not None else None
-        if app_token is not None:
-            app_secret = await self._store_secret(relay_id, "app-token", app_token)
-        if user_token is not None:
-            user_secret = await self._store_secret(relay_id, "user-token", user_token)
+        Each secret must exist, must not be used anywhere else (``usage_of(name)`` returns a
+        description of the use or None), and its value (read in-process, never returned) must carry
+        the expected prefix. The user token is verified with ``auth.test`` (records owner/workspace).
+        Only the secret NAMES are stored; a failure leaves the record untouched.
+        """
+        record = self._require(relay_id)
+        if user_token_secret is None and app_token_secret is None:
+            raise ValueError("Provide user_token_secret and/or app_token_secret")
+        values: dict[str, str] = {}
+        for label, name, prefix in (
+            ("user_token_secret", user_token_secret, USER_TOKEN_PREFIX),
+            ("app_token_secret", app_token_secret, APP_TOKEN_PREFIX),
+        ):
+            if name is None:
+                continue
+            name = name.strip()
+            if not name or not self._vault.secret_exists(name):
+                raise RelayTokenError(f"{label}: secret '{name}' was not found in the vault")
+            if usage_of is not None:
+                used = await usage_of(name)
+                if used:
+                    raise RelayTokenError(
+                        f"{label}: secret '{name}' is already used ({used}); a relay credential "
+                        "must not be assigned anywhere else. Create a dedicated secret."
+                    )
+            value = await asyncio.to_thread(get_secret_value, name)
+            if not value:
+                raise RelayTokenError(f"{label}: secret '{name}' has no value")
+            if not value.startswith(prefix):
+                raise RelayTokenError(f"{label}: the value of secret '{name}' must start with '{prefix}'")
+            values[label] = value
+
+        info = await self._verify_user_token(values["user_token_secret"]) if "user_token_secret" in values else None
         if info is not None:
             record.owner_user_id = info.user_id or None
             record.workspace_id = info.team_id or None
             record.workspace_name = info.team
-            record.user_token_secret = user_secret
-        if app_token is not None:
-            record.app_token_secret = app_secret
+            record.user_token_secret = user_token_secret.strip()
+        if "app_token_secret" in values:
+            record.app_token_secret = app_token_secret.strip()
         self._save(record)
+        self._sync_reserved_secrets()
         return record
 
     async def _verify_user_token(self, user_token: str):
@@ -349,7 +402,14 @@ class RelayManager:
             token = (data.get("authed_user") or {}).get("access_token")
             if not token or not token.startswith(USER_TOKEN_PREFIX):
                 raise ValueError("Slack did not return a user token (check the user_scope configuration)")
-            await self.set_tokens(record.relay_id, user_token=token)
+            info = await self._verify_user_token(token)
+            # The token becomes a normal (relay-prefixed) vault secret, referenced by name.
+            record.user_token_secret = await self._store_secret(record.relay_id, "user-token", token)
+            record.owner_user_id = info.user_id or None
+            record.workspace_id = info.team_id or None
+            record.workspace_name = info.team
+            self._save(record)
+            self._sync_reserved_secrets()
         except Exception as e:
             self._oauth_results[state] = {"status": "error", "error": str(e)}
             raise

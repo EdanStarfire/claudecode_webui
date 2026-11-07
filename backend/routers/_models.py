@@ -725,9 +725,9 @@ class RelayUpdateRequest(BaseModel):
     oauth_client_secret: str | None = None
 
 
-class RelayTokensRequest(BaseModel):
-    user_token: str | None = None
-    app_token: str | None = None
+class RelaySecretsRequest(BaseModel):
+    user_token_secret: str | None = None  # NAME of an existing vault secret
+    app_token_secret: str | None = None
 
 
 class RelayOAuthInitiateRequest(BaseModel):
