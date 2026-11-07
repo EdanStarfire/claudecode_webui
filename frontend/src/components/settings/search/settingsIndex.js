@@ -77,6 +77,14 @@ export const settingsIndex = [
   { section: 'profiles', fieldKey: 'profile_features',    label: 'Features' },
   { section: 'profiles', fieldKey: 'profile_mcp',         label: 'MCP Servers' },
   { section: 'profiles', fieldKey: 'profile_isolation',   label: 'Isolation' },
+  { section: 'profiles', fieldKey: 'profile_relay',       label: 'Relay' },
+
+  // Relays section (LibraryRelaysSection)
+  { section: 'relays', fieldKey: 'relay_name',          label: 'Relay Name' },
+  { section: 'relays', fieldKey: 'relay_tokens',        label: 'Slack Tokens' },
+  { section: 'relays', fieldKey: 'relay_test',          label: 'Test Connection' },
+  { section: 'relays', fieldKey: 'relay_manifest',      label: 'Slack App Manifest' },
+  { section: 'relays', fieldKey: 'relay_oauth',         label: 'Relay OAuth' },
 
   // Secrets section (LibrarySecretsSection + SecretGeneralSection)
   { section: 'secrets', fieldKey: 'secret_name',          label: 'Secret Name' },
@@ -155,4 +163,11 @@ export const settingsIndex = [
   { section: 'edit-isolation', fieldKey: 'env_scrub_enabled',              label: 'Scrub Subprocess Credentials' },
   { section: 'edit-isolation', fieldKey: 'recording_enabled',              label: 'Record Session' },
   { section: 'edit-isolation', fieldKey: 'max_subagent_spawn_depth',       label: 'Max Subagent Spawn Depth' },
+
+  // Relay section
+  { section: 'edit-relay', fieldKey: 'relay_id',               label: 'Relay' },
+  { section: 'edit-relay', fieldKey: 'relay_footer_enabled',   label: 'Relay Footer' },
+  { section: 'edit-relay', fieldKey: 'relay_footer_template',  label: 'Relay Footer Text' },
+  { section: 'edit-relay', fieldKey: 'relay_handle',           label: 'Relay Handle' },
+  { section: 'edit-relay', fieldKey: 'relay_channel_policies', label: 'Channel Policies' },
 ]

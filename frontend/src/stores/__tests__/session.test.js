@@ -1060,3 +1060,17 @@ describe('session store — setProviderModel (issue #2333)', () => {
     expect(store.getSession('sess-1').restart_required).toEqual(['Docker isolation changed'])
   })
 })
+
+describe('patchSession relay runtime keys (issue #2103)', () => {
+  it('omits relay_handle and relay_channel_policies from a whole-config PATCH', async () => {
+    const { setActivePinia, createPinia } = await import('pinia')
+    setActivePinia(createPinia())
+    const { useSessionStore } = await import('@/stores/session')
+    const { api } = await import('@/utils/api')
+    const spy = vi.spyOn(api, 'patch').mockResolvedValue({ session: {} })
+    const store = useSessionStore()
+    await store.patchSession('s1', { config: { model: 'x', relay_handle: 'h', relay_channel_policies: { C1: 'auto' } } })
+    expect(spy).toHaveBeenCalledWith('/api/sessions/s1', { config: { model: 'x' } })
+    spy.mockRestore()
+  })
+})

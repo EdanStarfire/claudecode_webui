@@ -801,7 +801,15 @@ export const useSessionStore = defineStore('session', () => {
    */
   async function patchSession(sessionId, updates) {
     try {
-      const response = await api.patch(`/api/sessions/${sessionId}`, updates)
+      // Issue #2103: the handle and channel policies are runtime-managed (own endpoints, live
+      // edits). A whole-config save must omit them so a stale local copy never overwrites them;
+      // the backend keeps the stored values for omitted keys.
+      let body = updates
+      if (updates?.config && ('relay_handle' in updates.config || 'relay_channel_policies' in updates.config)) {
+        const { relay_handle: _h, relay_channel_policies: _p, ...config } = updates.config
+        body = { ...updates, config }
+      }
+      const response = await api.patch(`/api/sessions/${sessionId}`, body)
       // Merge only the fields actually requested, preferring the server-confirmed value for
       // each — this avoids clobbering unrelated live fields (e.g. is_processing) with a
       // response snapshot, and preserves the fallback-to-request behavior for callers that

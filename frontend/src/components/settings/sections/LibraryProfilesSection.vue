@@ -85,6 +85,7 @@ const PROFILE_AREAS = [
   { key: 'hooks',         label: 'Hooks' },
   { key: 'isolation',     label: 'Isolation' },
   { key: 'features',      label: 'Features' },
+  { key: 'relay',         label: 'Relay' },
 ]
 
 function profilesByArea(areaKey) {

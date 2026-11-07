@@ -80,7 +80,7 @@ const SECTION_KEY  = 'model-tuning'
 const AREA_LABEL = {
   model: 'Model Tuning', permissions: 'Tools & Permissions',
   system_prompt: 'System Prompt', mcp: 'MCP Servers',
-  isolation: 'Isolation', features: 'Features',
+  isolation: 'Isolation', features: 'Features', relay: 'Relay',
 }
 
 const route = useRoute()

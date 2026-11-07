@@ -63,6 +63,7 @@ import LibraryProvidersSection from './sections/LibraryProvidersSection.vue'
 import LibraryTemplatesSection from './sections/LibraryTemplatesSection.vue'
 import LibraryProfilesSection from './sections/LibraryProfilesSection.vue'
 import LibrarySecretsSection from './sections/LibrarySecretsSection.vue'
+import LibraryRelaysSection from './sections/LibraryRelaysSection.vue'
 import LibrarySchedulesSection from './sections/LibrarySchedulesSection.vue'
 import GeneralSection from './sections/GeneralSection.vue'
 import ScheduleGeneralSection from './sections/ScheduleGeneralSection.vue'
@@ -74,6 +75,7 @@ import HooksSection from './sections/HooksSection.vue'
 import FeaturesSection from './sections/FeaturesSection.vue'
 import SystemPromptSection from './sections/SystemPromptSection.vue'
 import IsolationSection from './sections/IsolationSection.vue'
+import RelaySection from './sections/RelaySection.vue'
 
 const route = useRoute()
 const router = useRouter()
@@ -99,6 +101,7 @@ const EDIT_SECTION_MAP = {
   'features':          FeaturesSection,
   'system-prompt':     SystemPromptSection,
   'isolation':         IsolationSection,
+  'relay':             RelaySection,
 }
 
 const sectionComponent = computed(() => {
@@ -123,6 +126,7 @@ const sectionComponent = computed(() => {
     case '/settings/templates':     return LibraryTemplatesSection
     case '/settings/profiles':      return LibraryProfilesSection
     case '/settings/secrets':       return LibrarySecretsSection
+    case '/settings/relays':        return LibraryRelaysSection
     case '/settings/schedules':     return LibrarySchedulesSection
     default:                        return null
   }

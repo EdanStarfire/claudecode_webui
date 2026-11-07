@@ -72,6 +72,12 @@ export const CONFIG_FIELDS_LIST = Object.freeze([
   'inject_timestamps_enabled',
   'timestamp_injection_frequency',
   'timestamp_injection_timezone',
+  // relay area (issue #2103)
+  'relay_id',
+  'relay_footer_enabled',
+  'relay_footer_template',
+  'relay_channel_policies',
+  'relay_handle',
 ])
 
 /** Default value for each CONFIG_FIELD — mirrors SessionConfig defaults. */
@@ -134,6 +140,11 @@ export const FIELD_DEFAULTS = Object.freeze({
   inject_timestamps_enabled: false,
   timestamp_injection_frequency: 'every_message',
   timestamp_injection_timezone: 'UTC',
+  relay_id: null,
+  relay_footer_enabled: null,
+  relay_footer_template: null,
+  relay_channel_policies: null,
+  relay_handle: null,
 })
 
 /** Reverse lookup: field name → profile area key. */
@@ -203,6 +214,12 @@ const _FIELD_TO_AREA = Object.freeze({
   inject_timestamps_enabled: 'features',
   timestamp_injection_frequency: 'features',
   timestamp_injection_timezone: 'features',
+  // relay
+  relay_id: 'relay',
+  relay_footer_enabled: 'relay',
+  relay_footer_template: 'relay',
+  relay_channel_policies: 'relay',
+  relay_handle: 'relay',
 })
 
 /** Return the profile area for a CONFIG_FIELD, or null if unknown. */

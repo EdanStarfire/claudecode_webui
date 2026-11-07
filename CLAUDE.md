@@ -367,6 +367,32 @@ any API, logged, or put in exception text, and never enter containers (`relay-*`
 - **Audit** (`relay/audit.py`): `data/relays/{relay_id}/audit.jsonl`, 10 MB x 5 rotation, whitelisted fields only
   (text is a sha256 + 200-char preview), covers post/reply/upload/react/mark_read outcomes, denied attempts and
   policy changes; `GET /api/relays/{id}/audit`.
+### Settings UI and Slack app manifest (UI stage 2a)
+
+- **UI**: Settings -> Library -> Relays (`/settings/relays`, `LibraryRelaysSection.vue`) creates the one Slack relay,
+  shows `has_user_token` / `has_app_token` chips (never values), runs **Test connection** and holds the credentials form
+  (password inputs, cleared on submit) plus the collapsible **Slack app setup** guide (steps, manifest with Copy /
+  Download, scope list with reasons). OAuth sits under "Advanced" and renders only on https or localhost. The **Relay**
+  area (`RelaySection.vue`, profile area `relay`) is available in profile, template and session editors: relay select,
+  footer on/off + text, session-only handle (own endpoint), policy count (read-only until the policy editor).
+- **Manifest**: `GET /api/relays/{id}/manifest` is generated from `backend/relay/slack_scopes.py` (`USER_SCOPES_*`,
+  `USER_EVENTS_INBOUND`, `METHOD_SCOPES`). `test_relay_manifest.py` fails when `slack_adapter.py` calls a Slack method
+  with no scope entry or a scope is unused; OAuth requests the same scope list. The app is "ccWebUI Relay", acts with the
+  owner's own user token, has **no bot user and no bot scopes**; inbound events + Socket Mode are included by default
+  (toggle) so the owner does not reinstall later. The app-level token (`connections:write`) is created in the Slack UI.
+- **Restart semantics**: attaching a relay (`relay_id` unset -> set) to a running session that launched without one adds the
+  `relay_not_attached` reason to `restart_required` (existing amber banner / restart chip), because the MCP server is attached
+  only at launch. Footer, handle, policies and switching or clearing `relay_id` are read live per call: no restart.
+
+#### Relay setup (owner walkthrough)
+
+1. Settings -> Library -> Relays -> **Create Slack relay**.
+2. Open **Slack app setup**, copy or download the manifest, create a Slack app "From a manifest", install it to the workspace.
+3. Paste the User OAuth Token (`xoxp-`) and, for the inbound stage, an app-level token with `connections:write` (`xapp-`); press **Test connection**.
+4. In a profile, template or session editor open **Relay**, pick the relay, adjust the footer, optionally set the handle.
+
+Paste-token is the primary path; OAuth needs an https or localhost redirect URL.
+
 Slack's 2026 API terms (retention, Marketplace distribution) are still to be reviewed before release.
 
 ## Verifying Configuration

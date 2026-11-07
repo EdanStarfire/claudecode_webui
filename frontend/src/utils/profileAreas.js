@@ -1,7 +1,7 @@
 /**
  * Profile area key constants.
  *
- * Single source of truth for the 7 configuration profile areas used
+ * Single source of truth for the 8 configuration profile areas used
  * across stores, composables, and components. Mirrors the backend's
  * PROFILE_AREAS keys defined in src/config_resolution.py.
  */
@@ -14,6 +14,7 @@ export const PROFILE_AREAS = Object.freeze([
   'hooks',
   'isolation',
   'features',
+  'relay',
 ])
 
 export const PROFILE_AREA_LABELS = Object.freeze({
@@ -24,4 +25,5 @@ export const PROFILE_AREA_LABELS = Object.freeze({
   hooks: 'Hooks',
   isolation: 'Isolation',
   features: 'Features',
+  relay: 'Relay',
 })

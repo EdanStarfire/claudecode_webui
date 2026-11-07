@@ -27,6 +27,7 @@ from .models.relay import RelayRecord
 from .models.secret_record import SecretRecord, SecretType
 from .relay.adapter import RelayAdapter, RelayError
 from .relay.slack_adapter import SlackAdapter
+from .relay.slack_scopes import required_scopes
 from .relay.validation import RELAY_SECRET_PREFIX
 from .secrets_keyring import get_secret_value
 from .slug_utils import slugify
@@ -38,16 +39,8 @@ APP_TOKEN_PREFIX = "xapp-"
 
 SLACK_AUTHORIZE_URL = "https://slack.com/oauth/v2/authorize"
 SLACK_OAUTH_ACCESS_URL = "https://slack.com/api/oauth.v2.access"
-# User-token scopes from the stage-1 spike (issue #2103 comment 3).
-SLACK_USER_SCOPES = (
-    "chat:write", "files:write", "reactions:write",
-    "channels:history", "groups:history", "im:history", "mpim:history",
-    "channels:read", "groups:read", "im:read", "mpim:read",
-    "channels:write", "groups:write", "im:write", "mpim:write",
-    "search:read", "search:read.public", "search:read.private", "search:read.im",
-    "search:read.mpim", "search:read.files",
-    "users:read", "users.profile:read",
-)
+# OAuth requests exactly the scopes of the Slack app manifest (relay/slack_scopes.py).
+SLACK_USER_SCOPES = tuple(required_scopes())
 OAUTH_FLOW_TYPE = "relay_oauth"
 _OAUTH_TTL_SECONDS = 600
 

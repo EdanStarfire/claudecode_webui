@@ -411,6 +411,7 @@ const PROFILE_AREAS = [
   { key: 'hooks',         label: 'Hooks' },
   { key: 'isolation',     label: 'Isolation' },
   { key: 'features',      label: 'Features' },
+  { key: 'relay',         label: 'Relay' },
 ]
 
 const AREA_TO_SECTION = {
@@ -421,6 +422,7 @@ const AREA_TO_SECTION = {
   features:      'features',
   system_prompt: 'system-prompt',
   isolation:     'isolation',
+  relay:         'relay',
 }
 
 function templateProfileFor(areaKey) {

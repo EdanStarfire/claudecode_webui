@@ -11,6 +11,7 @@ from shared.exception_handlers import handle_exceptions
 
 from ..relay.handles import HandleConflictError
 from ..relay.service import SessionNotFoundError
+from ..relay.slack_scopes import build_manifest_response
 from ..relay_manager import (
     OAUTH_HTTPS_LIMITATION,
     RelayConflictError,
@@ -137,6 +138,13 @@ def build_router(webui) -> APIRouter:
         if await manager().get_relay(relay_id) is None:
             raise HTTPException(status_code=404, detail="Relay not found")
         return manager().oauth_status(state)
+
+    @router.get("/api/relays/{relay_id}/manifest")
+    @handle_exceptions("get relay manifest")
+    async def get_manifest(relay_id: str, include_inbound: bool = True):
+        if await manager().get_relay(relay_id) is None:
+            raise HTTPException(status_code=404, detail="Relay not found")
+        return build_manifest_response(include_inbound)
 
     # ---- Audit log ----
 

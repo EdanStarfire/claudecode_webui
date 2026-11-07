@@ -24,6 +24,11 @@ TIER_FIELDS: tuple[str, ...] = (
     "provider_default_tier",
 )
 
+RELAY_NOT_ATTACHED_REASON = (
+    "Relay attached: its tools are added when the session next starts. "
+    "Footer, handle and policy edits apply immediately."
+)
+
 ROUTING_SINGLE = "single"
 ROUTING_TIER = "tier"
 
@@ -55,11 +60,12 @@ class LaunchSnapshot:
     live_alias: str | None         # alias the session is serving NOW (single routing); updated on a live switch
     wants_compact_window: bool     # launcher derives CLAUDE_CODE_AUTO_COMPACT_WINDOW (no user extra_env override)
     compact_window: int | None     # the derived window emitted at launch (None = nothing emitted)
+    relay_wanted: bool = False     # the relay MCP server was attached at launch (issue #2103)
 
 
 def build_launch_snapshot(
     cfg, *, litellm_routed: bool, live_alias: str | None,
-    wants_compact_window: bool, compact_window: int | None,
+    wants_compact_window: bool, compact_window: int | None, relay_wanted: bool = False,
 ) -> LaunchSnapshot:
     return LaunchSnapshot(
         routing=routing_kind(cfg) if litellm_routed else None,
@@ -69,6 +75,7 @@ def build_launch_snapshot(
         live_alias=live_alias,
         wants_compact_window=wants_compact_window,
         compact_window=compact_window,
+        relay_wanted=relay_wanted,
     )
 
 
@@ -86,6 +93,11 @@ def compute_restart_reasons(
     """
     reasons: list[str] = []
     kind = routing_kind(cfg)
+
+    # Issue #2103: the relay MCP server is attached once at launch. Everything else about the
+    # relay (footer, handle, policies, switching or clearing relay_id) is read live per call.
+    if getattr(cfg, "relay_id", None) and not snap.relay_wanted:
+        reasons.append(RELAY_NOT_ATTACHED_REASON)
 
     if kind != snap.routing and not (snap.routing is None and kind is None):
         reasons.append(

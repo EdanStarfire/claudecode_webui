@@ -66,7 +66,7 @@ Hash-based routing (`createWebHashHistory`):
 
 Any of the three session routes accepts `?msg=<message_id>` (issue #2030 stage 3 PR 3F): `MessageList.vue` lands on that message after the newest window loaded — scrolled to when loaded, otherwise ONE bounded `around_id` island through `historyBackfill.jumpAround` (slow link: one confirm naming the ~0.5 MB window) — aligns it to the top and pulses its row; the param stays in the URL (a refresh re-lands) until another navigation (`beginTurnJump`) drops it. An unknown / expired / hidden id shows the notice "Couldn't find that message in the history" (`historyBackfill.showNotice`, the overlay described under `useHistoryBackfill.js`) and drops the param. "Copy link to message" (`components/messages/CopyLinkButton.vue`, in the header line of user and assistant messages; `utils/messageLink.js` builds `<origin>/<path>#<route>?msg=<id>` for the live, archive and deleted-agent views and copies with an `execCommand` fallback for plain http). A cold load of an archive route waits for the session list (`SessionView.waitForProjectId`) instead of showing nothing.
 
-## Pinia Stores (23)
+## Pinia Stores (24)
 
 ### Core Stores (6)
 
@@ -163,6 +163,10 @@ Any of the three session routes accepts `?msg=<message_id>` (issue #2030 stage 3
 
 #### `secrets.js` — Host-level secrets vault
 - Secrets CRUD with backend status, OAuth2 token health tracking, and refresh event handlers
+
+#### `relay.js` — Relay Library asset (issue #2103, UI stage 2a)
+- `relays` / `relay` (one per Backend), `loadRelays`, `createRelay`, `deleteRelay`, `saveTokens`, `testRelay`, `loadManifest`, `oauthInitiate`/`oauthStatus`, `setSessionHandle`. Holds only public records (`has_*` booleans); token values pass through `saveTokens` to the API and are never stored, logged or echoed. Errors are thrown as `Error(message)` for the caller to render as text.
+- UI: `LibraryRelaysSection.vue` (`/settings/relays`: create, token chips, Test connection, delete, `RelayTokenForm` with password inputs cleared on submit, `RelaySetupGuide` manifest viewer with Copy/Download and scope list, OAuth under Advanced only on https/localhost) and `RelaySection.vue` (the `relay` edit area for profile/template/session: relay select, footer toggle/text, session-only handle saved via `PUT /api/sessions/{id}/relay/handle`, read-only policy count; `relay_handle`/`relay_channel_policies` are never sent by the form). Footer/handle/policy edits are live; only attaching a relay to a running session that launched without one needs a restart (backend `relay_not_attached` reason, shown as the existing restart chip). The profile-area lists are hard-coded in several components; `utils/__tests__/relayAreaConsistency.test.js` guards them.
 
 ### Analytics, Audit & Usage Stores (3)
 

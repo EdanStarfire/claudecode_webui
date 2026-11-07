@@ -173,6 +173,16 @@ which mode is active for a given session.
 - 12 built-in skills auto-deployed to `~/.claude/skills/`
 - Custom skill creation
 - Self-update and server restart from UI
+- 💬 Slack relay (Settings -> Library -> Relays): agent sessions read and post in Slack as you, with per-channel policies
+
+### Relay setup
+
+1. Settings -> Library -> Relays -> **Create Slack relay**.
+2. Open **Slack app setup**: copy or download the generated manifest (app "ccWebUI Relay", your own user token, no bot) and create a Slack app **From a manifest**; install it to your workspace.
+3. Paste the User OAuth Token (`xoxp-`) and an app-level token with `connections:write` (`xapp-`, used by the upcoming inbound stage) and press **Test connection**. Token values are never shown again.
+4. In a profile, template or session, open the **Relay** area to attach the relay, set the footer and (sessions) the `!handle`.
+
+Pasting tokens is the primary path; OAuth under *Advanced* needs an https or localhost URL. Inbound scopes are pre-granted by the manifest so you will not need to reinstall later.
 
 ---
 
