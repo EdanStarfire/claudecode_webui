@@ -1,7 +1,7 @@
 <template>
   <div class="policies-summary" data-testid="relay-policies-summary">
     <strong>{{ count }}</strong> channel {{ count === 1 ? 'policy' : 'policies' }} on this tier.
-    <span class="note">Managed in the policy editor; not changed from this form.</span>
+    <span class="note">Policy editor arrives in the next update.</span>
   </div>
 </template>
 
