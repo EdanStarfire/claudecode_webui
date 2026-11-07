@@ -8,8 +8,8 @@
       wants to use <code>{{ displayName }}</code>
     </div>
     <div class="perm-card-actions">
-      <template v-if="isAskUserQuestion">
-        <span class="perm-card-directive">Go to context to review questions</span>
+      <template v-if="isAskUserQuestion || isRelayPrompt">
+        <span class="perm-card-directive">{{ isRelayPrompt ? 'Go to context to review the Slack request' : 'Go to context to review questions' }}</span>
         <a href="#" class="perm-view-link" @click.prevent="$emit('view')">View in context</a>
       </template>
       <template v-else>
@@ -51,6 +51,9 @@ const displayName = computed(() => props.perm.toolCall.permission?.display_name 
 // AskUserQuestionToolHandler), not a binary allow/deny — same check as
 // PermissionPrompt.vue:298 and TimelineDetail.vue:170.
 const isAskUserQuestion = computed(() => props.perm.toolCall.name === 'AskUserQuestion')
+
+// Issue #2103: relay prompts need their own UI (channel + preview, or a policy choice).
+const isRelayPrompt = computed(() => !!props.perm.toolCall.relayPrompt)
 </script>
 
 <style scoped>

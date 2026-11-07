@@ -57,6 +57,8 @@ def build_router(webui) -> APIRouter:
                 response["apply_suggestions"] = request.apply_suggestions
             if request.selected_suggestions is not None:
                 response["selected_suggestions"] = request.selected_suggestions
+            if request.relay_choice is not None:
+                response["relay_choice"] = request.relay_choice.model_dump()
         else:
             if request.clarification_message:
                 response = {

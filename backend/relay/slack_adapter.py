@@ -36,10 +36,39 @@ _MAX_PAGES = 20
 TokenProvider = Callable[[], Awaitable[str]]
 
 
+def _leaf_text(node: Any) -> str:
+    """Concatenated ``text`` values inside a rich_text tree (``link`` elements use ``url``)."""
+    if isinstance(node, list):
+        return "".join(_leaf_text(n) for n in node)
+    if not isinstance(node, dict):
+        return ""
+    if isinstance(node.get("text"), str):
+        return node["text"]
+    if node.get("type") == "link":
+        return node.get("text") or node.get("url") or ""
+    return _leaf_text(node.get("elements"))
+
+
+def _text_from_blocks(blocks: Any) -> str:
+    """Plain text of ``section`` / ``rich_text`` blocks (``context`` blocks, e.g. our footer,
+    are skipped). Slack's search.messages returns ``text: ""`` for messages posted with blocks."""
+    parts: list[str] = []
+    for block in blocks if isinstance(blocks, list) else []:
+        if not isinstance(block, dict):
+            continue
+        if block.get("type") == "section":
+            text = (block.get("text") or {}).get("text")
+            if isinstance(text, str):
+                parts.append(text)
+        elif block.get("type") == "rich_text":
+            parts.append(_leaf_text(block.get("elements")))
+    return "\n".join(p for p in parts if p)
+
+
 def _parse_message(raw: dict, channel: str | None = None) -> RelayMessage:
     return RelayMessage(
         ts=raw.get("ts", ""),
-        text=raw.get("text", ""),
+        text=raw.get("text") or _text_from_blocks(raw.get("blocks")),
         user=raw.get("user") or raw.get("username"),
         thread_ts=raw.get("thread_ts"),
         channel=channel or (raw["channel"] if isinstance(raw.get("channel"), str) else None),

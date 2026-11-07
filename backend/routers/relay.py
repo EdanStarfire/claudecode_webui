@@ -138,6 +138,24 @@ def build_router(webui) -> APIRouter:
             raise HTTPException(status_code=404, detail="Relay not found")
         return manager().oauth_status(state)
 
+    # ---- Audit log ----
+
+    @router.get("/api/relays/{relay_id}/audit")
+    @handle_exceptions("get relay audit", value_error_status=400)
+    async def get_audit(
+        relay_id: str,
+        session_id: str | None = None,
+        channel: str | None = None,
+        limit: int = 100,
+        before: str | None = None,
+    ):
+        if await manager().get_relay(relay_id) is None:
+            raise HTTPException(status_code=404, detail="Relay not found")
+        records = await webui.service.relay_audit.query(
+            relay_id, session_id=session_id, channel=channel, limit=limit, before=before
+        )
+        return {"records": records}
+
     # ---- Per-session attachment ----
 
     @router.get("/api/sessions/{session_id}/relay")

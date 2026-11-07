@@ -36,13 +36,18 @@ from backend.template_manager import TemplateManager
 
 from .data_storage import DataStorageManager
 from .legion_system import LegionSystem
+from .mcp.relay_mcp_tools import RelayMCPTools
 from .message_parser import MessageParser, MessageProcessor
 from .oauth_refresh_manager import OAuthRefreshManager
 from .oauth_secret_bundle_manager import OAuthSecretBundleManager
 from .pending_store import PendingStore
 from .project_manager import ProjectManager
 from .queue_manager import QueueManager
+from .relay.audit import RelayAuditLog
+from .relay.gate import RelayPolicyGate
+from .relay.grants import GrantStore
 from .relay.handles import RelayHandleIndex
+from .relay.permission_bridge import RelayPermissionBridge
 from .relay.service import RelayService
 from .relay_manager import RelayManager
 from .secrets_service import SecretsService
@@ -52,6 +57,18 @@ from .vault_refresh_manager import VaultRefreshManager
 if TYPE_CHECKING:
     from .session_coordinator import SessionCoordinator
     from .tenant_context import TenantContext
+
+
+@dataclass
+class RelayRuntime:
+    """Issue #2103: the relay collaborators the coordinator exposes as properties."""
+
+    manager: RelayManager
+    service: RelayService
+    audit: RelayAuditLog
+    gate: RelayPolicyGate
+    bridge: RelayPermissionBridge
+    mcp_tools: RelayMCPTools
 
 
 @dataclass
@@ -84,6 +101,7 @@ class CoreManagers:
     # Issue #2103: relay asset, handle index and the live policy/handle service.
     relay_manager: RelayManager
     relay_service: RelayService
+    relay: RelayRuntime
 
 
 def build_core_managers(
@@ -142,6 +160,16 @@ def build_core_managers(
         session_manager, template_manager, profile_manager,
     )
     oauth_callback_listener_manager.set_relay_oauth(relay_manager)
+    relay_audit = RelayAuditLog(data_dir)
+    relay_gate = RelayPolicyGate(relay_service, relay_manager, session_manager, GrantStore())
+    relay = RelayRuntime(
+        manager=relay_manager,
+        service=relay_service,
+        audit=relay_audit,
+        gate=relay_gate,
+        bridge=RelayPermissionBridge(relay_gate, relay_service, relay_audit),
+        mcp_tools=RelayMCPTools(relay_gate, relay_audit),
+    )
 
     return CoreManagers(
         session_manager=session_manager,
@@ -166,6 +194,7 @@ def build_core_managers(
         pending_store=pending_store,
         relay_manager=relay_manager,
         relay_service=relay_service,
+        relay=relay,
     )
 
 

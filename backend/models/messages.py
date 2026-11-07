@@ -82,6 +82,8 @@ class PermissionInfo:
     title: str | None = None
     display_name: str | None = None
     description: str | None = None
+    # Issue #2103: relay prompt metadata (kind ask_send | choose_policy, channel, preview)
+    relay_prompt: dict[str, Any] | None = None
 
     def to_dict(self) -> dict[str, Any]:
         """Serialize to dict for storage/WebSocket."""
@@ -100,6 +102,8 @@ class PermissionInfo:
             result["display_name"] = self.display_name
         if self.description is not None:
             result["description"] = self.description
+        if self.relay_prompt is not None:
+            result["relay_prompt"] = self.relay_prompt
         return result
 
     @classmethod
@@ -114,6 +118,7 @@ class PermissionInfo:
             title=data.get("title"),
             display_name=data.get("display_name"),
             description=data.get("description"),
+            relay_prompt=data.get("relay_prompt"),
         )
 
 

@@ -280,8 +280,7 @@ class SessionCoordinator:
         self.oauth_secret_bundle_manager = core.oauth_secret_bundle_manager
         self.queue_manager = core.queue_manager
         self.pending_store = core.pending_store
-        self.relay_manager = core.relay_manager
-        self.relay_service = core.relay_service
+        self.relay = core.relay  # issue #2103: RelayRuntime (manager/service/audit/gate/bridge/tools)
 
         # Active SDK instances
         self._active_sdks: dict[str, ClaudeSDK] = {}
@@ -674,7 +673,7 @@ class SessionCoordinator:
             await self.profile_manager.load_profiles(template_manager=self.template_manager)
             coord_logger.info("Loaded configuration profiles")
             await self._migrate_stale_mcp_snapshots()  # issue #1660
-            await self.relay_service.initialize()  # issue #2103
+            await self.relay.service.initialize()  # issue #2103
 
             # Load global MCP server configs (issue #676)
             await self.mcp_config_manager.load_configs()
@@ -2598,6 +2597,14 @@ class SessionCoordinator:
 
     async def unregister_uploaded_file(self, session_id: str, file_path: str) -> None:
         return await self._session_resources.unregister_uploaded_file(session_id, file_path)
+
+    # Issue #2103: relay collaborators (built in coordinator_builder, held as one RelayRuntime)
+    relay_manager = property(lambda self: self.relay.manager)
+    relay_service = property(lambda self: self.relay.service)
+    relay_audit = property(lambda self: self.relay.audit)
+    relay_gate = property(lambda self: self.relay.gate)
+    relay_bridge = property(lambda self: self.relay.bridge)
+    relay_mcp_tools = property(lambda self: self.relay.mcp_tools)
 
     def is_uploaded_file(self, session_id: str, file_path: str) -> bool:
         return self._session_resources.is_uploaded_file(session_id, file_path)

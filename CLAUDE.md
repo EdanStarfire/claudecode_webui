@@ -315,7 +315,44 @@ any API, logged, or put in exception text, and never enter containers (`relay-*`
   `<!here>` is refused. Footer templates are validated with it (<= 500 chars; variables `{session_name}`,
   `{session_handle}`, `{session_link}`).
 
-Stage 1b adds the MCP tools, permission integration, footer rendering and audit log on top of these seams.
+### Outbound tools, permission integration, audit (outbound stage 1b)
+
+- **MCP server `relay`** (`backend/mcp/relay_mcp_tools.py`): `post`, `reply`, `read_thread`, `search`,
+  `upload_file`, `react`, `mark_read` (no edit/delete). Attached by `session_launcher` only when the
+  effective config has `relay_id` and the relay has a user token. `mcp__relay` is deliberately **not** in the
+  auto-allow list, so every call reaches the permission callback. `channel` accepts an ID, `#name`, or a user ID
+  (`U…`, DM via `conversations.open`) and is resolved to a canonical ID before any policy check.
+- **Two gates, one decision** (`relay/gate.py`): the permission pre-hook
+  (`relay/permission_bridge.py`, top of `permission_callback` for `mcp__relay__*`) allows reads and `auto` sends
+  without UI, denies `blocked` / `read_only`-send and `!handle` text, and prompts for `ask` / unlisted channels
+  (`tool_call.permission.relay_prompt`, kinds `ask_send` / `choose_policy`, UI `RelayPermissionPrompt.vue`).
+  The **handler re-checks policy and is authoritative**: an `ask` send or unlisted channel needs a one-shot
+  grant (`relay/grants.py`; bound to session + tool + canonical input hash, 60 s, single use) that only an
+  approved prompt creates. Under `bypassPermissions`, pre-approved allow rules (`mcp__relay__post` in
+  settings) or `deny_unattended_permission_prompts` no prompt can be answered, so
+  `ask` / unlisted sends **fail closed** (`approval_required` / `policy_unset`); set the channel to `auto`
+  explicitly or switch permission mode. Reads of already-readable channels work in every mode.
+- **Prompt answers** (`relay_choice` on the permission REST call): `Allow and set channel to auto` persists
+  `auto` at SESSION tier live (no restart); `choose_policy` persists the chosen policy, and a policy that forbids
+  the action (e.g. `read_only` for a send) denies it. Deny persists nothing. Relay prompts never offer
+  permission-rule suggestions.
+- **Refusals** are `is_error` results with a human block plus a JSON block
+  `{"error":"relay_policy","code":...,"channel","action","policy"}`; codes: `channel_blocked`,
+  `send_not_permitted`, `approval_required`, `policy_unset`, `trigger_syntax_refused`, `channel_unresolved`,
+  `no_readable_channels`. Blocked channels only say "not accessible to this session".
+- **Search** (`relay/search.py`) is scoped with `in:` filters to read_only/ask/auto channels (chunks of 10;
+  Slack treats several `in:` as OR), then post-filtered from result metadata against the same set. Unlisted
+  channels are excluded (a note gives the count) rather than prompting. **Untrusted wrapper**: `search` and
+  `read_thread` text is returned inside `UNTRUSTED_OPEN` / `UNTRUSTED_CLOSE` (`relay/safety.py`), any
+  `[END UNTRUSTED` in content is neutralised to `[END_UNTRUSTED`, empty results are wrapped too.
+- **Outbound tagging**: every `post` / `reply` carries Slack metadata `event_type=cc_webui_agent_message` with
+  `session_id`, `handle`, `relay_id`; a footer (default on, `relay_footer_enabled`) is a `context` block after the
+  body `section` blocks (`{session_link}` renders empty: the Backend does not know a public URL). Footers show the
+  handle as plain text and sanitise `!word` out of the session name (`strip_trigger_syntax`). Uploads carry the
+  footer in the file comment and **no metadata** (Slack's external upload API cannot attach any).
+- **Audit** (`relay/audit.py`): `data/relays/{relay_id}/audit.jsonl`, 10 MB x 5 rotation, whitelisted fields only
+  (text is a sha256 + 200-char preview), covers post/reply/upload/react/mark_read outcomes, denied attempts and
+  policy changes; `GET /api/relays/{id}/audit`.
 Slack's 2026 API terms (retention, Marketplace distribution) are still to be reviewed before release.
 
 ## Verifying Configuration
