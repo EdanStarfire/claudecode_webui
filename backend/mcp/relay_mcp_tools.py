@@ -326,6 +326,16 @@ class RelayMCPTools:
         )
 
     @staticmethod
+    def _limit(value: Any, default: int, maximum: int) -> int:
+        """Bounded integer ``limit``; raises GateError(invalid_arguments) on non-numeric input."""
+        if value in (None, ""):
+            return default
+        try:
+            return max(1, min(int(value), maximum))
+        except (TypeError, ValueError):
+            raise GateError("invalid_arguments", "'limit' must be an integer.") from None
+
+    @staticmethod
     def _require_ts(value: Any, field: str) -> str:
         if not isinstance(value, str) or not _TS_RE.match(value):
             raise GateError("invalid_arguments", f"'{field}' must be a Slack timestamp like 1700000000.000100.")
@@ -384,12 +394,12 @@ class RelayMCPTools:
     async def handle_read_thread(self, session_id: str, args: dict[str, Any]) -> dict[str, Any]:
         try:
             thread_ts = self._require_ts(args.get("thread_ts"), "thread_ts")
+            limit = self._limit(args.get("limit"), 50, MAX_THREAD_LIMIT)
         except GateError as e:
             return error_result(e.code, e.message, None, "read_thread", None)
         ctx, res, _, err = await self._gated(session_id, "read_thread", args)
         if err:
             return err
-        limit = max(1, min(int(args.get("limit") or 50), MAX_THREAD_LIMIT))
         try:
             page = await ctx.adapter.read_thread(res.channel_id, thread_ts, limit, args.get("cursor"))
         except RelayError as e:
@@ -412,7 +422,7 @@ class RelayMCPTools:
                 None, "search", None,
             )
         try:
-            outcome = await self.search_service.search(ctx, query, int(args.get("limit") or 20))
+            outcome = await self.search_service.search(ctx, query, self._limit(args.get("limit"), 20, 50))
         except GateError as e:
             return error_result(e.code, e.message, None, "search", None)
         except RelayError as e:
@@ -434,15 +444,20 @@ class RelayMCPTools:
                 raise GateError("invalid_arguments", "'comment' must be a string.")
         except GateError as e:
             return error_result(e.code, e.message, None, "upload_file", None)
+        # Validate the file before the gate: authorize() consumes a one-shot approval grant, which
+        # must not be spent on a call that then fails on its own arguments.
+        ctx = await self.gate.context(session_id)
+        if ctx is not None:
+            session_dir = await self.gate.sessions.get_session_directory(session_id)
+            try:
+                path = validate_upload_path(args.get("path"), ctx.session_info, session_dir)
+            except GateError as e:
+                return error_result(e.code, e.message, None, "upload_file", None)
         ctx, res, approval, err = await self._gated(session_id, "upload_file", args)
         if err:
             return err
-        session_dir = await self.gate.sessions.get_session_directory(session_id)
         try:
-            path = validate_upload_path(args.get("path"), ctx.session_info, session_dir)
             footer = self._footer(ctx)
-        except GateError as e:
-            return error_result(e.code, e.message, res.channel_id, "upload_file", res.policy)
         except FooterError:
             return error_result(
                 "trigger_syntax_refused",

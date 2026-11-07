@@ -269,3 +269,9 @@ def test_relay_not_in_auto_allow_list():
     src = inspect.getsource(session_launcher)
     assert 'mcp_tools_list.append("mcp__relay")' not in src
     assert 'relay_mcp_tools.create_server_if_attached' in src
+
+
+async def test_permission_callback_denies_relay_tool_when_bridge_missing():
+    cb = PermissionService(SimpleNamespace(), {}).create_permission_callback("s1")
+    result = await cb("mcp__relay__post", {"channel": CH_AUTO, "text": "x"}, None)
+    assert result["behavior"] == "deny"

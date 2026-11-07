@@ -86,6 +86,9 @@ class PermissionService:
             relay_gate_result = None
             if tool_name.startswith("mcp__relay__"):
                 relay_bridge = getattr(self.coordinator, "relay_bridge", None)
+                if relay_bridge is None:
+                    logger.error("Relay bridge unavailable; denying %s", tool_name)
+                    return {"behavior": "deny", "message": "Relay policy check unavailable."}
             if relay_bridge is not None:
                 try:
                     relay_gate_result = await relay_bridge.pre_hook(

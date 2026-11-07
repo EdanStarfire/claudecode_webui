@@ -2445,7 +2445,7 @@ export const useMessageStore = defineStore('message', () => {
       if (toolCall.permission) {
         existing.suggestions = toolCall.permission.suggestions || []
         // Issue #2103: relay prompt metadata (ask_send / choose_policy)
-        if (toolCall.permission.relay_prompt) existing.relayPrompt = toolCall.permission.relay_prompt
+        existing.relayPrompt = toolCall.permission.relay_prompt || null
         existing.permissionRequestId = toolCall.request_id ?? existing.permissionRequestId  // request_id is added by backend for correlation
       }
       // Populate permissionToToolMap for handlePermissionResponse correlation

@@ -306,3 +306,41 @@ async def test_slack_error_is_reported_and_audited(env):
     assert result["is_error"] and "channel_not_found" in result["content"][0]["text"]
     recs = await env.audit.query("relay1")
     assert recs[0]["outcome"] == "error" and recs[0]["code"] == "channel_not_found"
+
+
+# ------------------------------------------------------- review follow-ups (outbound-1b)
+
+
+async def test_grid_user_id_resolves_to_dm_not_channel(env):
+    result = await env.tools.handle_post("s1", "post", {"channel": "W0GRIDUSR1", "text": "hi"})
+    assert not result.get("is_error")
+    assert ("open_dm", "W0GRIDUSR1") in env.adapter.calls
+    assert env.adapter.network_calls()[0][1] == SELF_DM  # policy applied to the DM's own ID
+
+
+async def test_upload_filename_trigger_syntax_refused(env):
+    (env.workdir / "!deploy-prod.txt").write_text("data")
+    result = await env.tools.handle_upload("s1", {"channel": CH_AUTO, "path": "!deploy-prod.txt"})
+    assert err_code(result) == "trigger_syntax_refused"
+    assert env.adapter.network_calls() == []
+
+
+async def test_non_numeric_limit_is_invalid_arguments_and_keeps_grant(env):
+    args = {"channel": CH_UNLISTED, "thread_ts": TS, "limit": "all"}
+    env.gate.grants.add("s1", "read_thread", args, "prompt_allow")
+    assert err_code(await env.tools.handle_read_thread("s1", args)) == "invalid_arguments"
+    assert err_code(await env.tools.handle_search("s1", {"query": "x", "limit": "ten"})) == "invalid_arguments"
+    assert env.gate.grants.consume("s1", "read_thread", args) is not None  # not burned
+
+
+async def test_failed_upload_validation_does_not_consume_grant(env):
+    args = {"channel": CH_ASK, "path": "missing.txt"}
+    env.gate.grants.add("s1", "upload_file", args, "prompt_allow")
+    assert err_code(await env.tools.handle_upload("s1", args)) == "invalid_path"
+    assert env.gate.grants.consume("s1", "upload_file", args) is not None
+
+
+async def test_prompt_preview_shows_full_text(env):
+    text = "a" * 2000 + "TAIL"
+    result = await env.gate.evaluate("s1", "mcp__relay__post", {"channel": CH_ASK, "text": text})
+    assert result.prompt["text_preview"] == text

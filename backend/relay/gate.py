@@ -12,6 +12,7 @@ import json
 import re
 import time
 from dataclasses import dataclass, field
+from pathlib import PurePath
 from typing import TYPE_CHECKING, Any
 
 from .adapter import RelayAdapter, RelayError
@@ -44,10 +45,11 @@ TOOL_ACTIONS: dict[str, str | None] = {
     "search": None,
 }
 WRITE_TOOLS = frozenset({"post", "reply", "upload_file", "react", "mark_read"})
-_USER_ID_RE = re.compile(r"^@?(U[A-Z0-9]{6,})\Z")
+# U… (and Enterprise Grid W…) are user IDs, never conversation IDs: they resolve to a DM.
+_USER_ID_RE = re.compile(r"^@?([UW][A-Z0-9]{6,})\Z")
 _NAME_RE = re.compile(r"^#?([a-z0-9][a-z0-9._-]{0,79})\Z")
 _NAME_CACHE_TTL = 300.0
-PREVIEW_LEN = 500
+PREVIEW_LEN = 40000  # the prompt shows everything that will be sent (bodies are capped at 35000)
 
 
 def tool_short_name(tool_name: str) -> str | None:
@@ -172,10 +174,10 @@ class RelayPolicyGate:
         if not isinstance(ref, str) or not ref.strip():
             raise GateError("channel_unresolved", "A 'channel' argument is required.")
         ref = ref.strip()
-        if CHANNEL_ID_RE.match(ref):
+        user = _USER_ID_RE.match(ref)
+        if CHANNEL_ID_RE.match(ref) and not user:
             return ref
         try:
-            user = _USER_ID_RE.match(ref)
             if user:
                 return await ctx.adapter.open_dm(user.group(1))
             named = _NAME_RE.match(ref)
@@ -220,7 +222,9 @@ class RelayPolicyGate:
         if tool in ("post", "reply"):
             return [str(args.get("text") or "")]
         if tool == "upload_file":
-            return [str(args.get("comment") or "")]
+            # the file name is posted too (upload title / filename)
+            name = PurePath(str(args.get("path") or "")).name
+            return [str(args.get("comment") or ""), name]
         return []
 
     @staticmethod
