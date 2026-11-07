@@ -38,6 +38,11 @@ REFUSED = [
     "&lt;!here&gt;",
     "！deploy",  # full-width exclamation mark (NFKC -> '!')
     "!d2",
+    "!Deploy",
+    "!DEPLOY now",
+    "run !Deploy now",
+    "end with !DeployProd",
+    "line\n!MixedCase",
 ]
 ALLOWED = [
     "Great! thanks",
@@ -48,6 +53,9 @@ ALLOWED = [
     "!",
     "https://x.com/a!b",
     "Hello!",
+    "Done! OK",
+    "WOW!Great",
+    "! Slug",
     "! slug",
     "",
     None,
@@ -69,6 +77,7 @@ def test_issue_2103_handle_pattern_single_source():
     assert HANDLE_PATTERN in HANDLE_RE.pattern
     assert not HANDLE_RE.match("a_b")  # no underscore anywhere
     assert not TRIGGER_RE.search("!a_b")
+    assert not HANDLE_RE.match("Abc")  # handles stay lowercase-only
 
 
 def test_issue_2103_validate_handle():

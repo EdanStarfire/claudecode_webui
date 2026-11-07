@@ -18,8 +18,9 @@ HANDLE_PATTERN = r"[a-z0-9][a-z0-9-]{1,31}"
 HANDLE_RE = re.compile(rf"^{HANDLE_PATTERN}\Z")  # \Z: "$" would accept a trailing newline
 
 # ``!handle`` anywhere in text: not preceded by a word char or ``!``, not followed
-# by a word char or ``-``. Whitespace variants (``! slug``) are not triggers.
-TRIGGER_RE = re.compile(rf"(?<![\w!])!({HANDLE_PATTERN})(?![\w-])")
+# by a word char or ``-``. Case-insensitive (``!Deploy`` is refused too; inbound matches by
+# lowercasing); handles themselves stay lowercase-only. Whitespace variants are not triggers.
+TRIGGER_RE = re.compile(rf"(?<![\w!])!({HANDLE_PATTERN})(?![\w-])", re.IGNORECASE)
 
 # Slack special mentions are also refused (they match TRIGGER_RE via ``<!here>``).
 RESERVED_HANDLES = frozenset({"all", "here", "channel", "everyone", "subteam"})

@@ -310,7 +310,8 @@ any API, logged, or put in exception text, and never enter containers (`relay-*`
   keeps the existing values.
 - **Trigger rule**: `!handle` is the inbound instruction syntax, so outbound text must not contain it.
   `relay/safety.py::contains_trigger_syntax()` (regex `(?<![\w!])!({HANDLE_PATTERN})(?![\w-])`, one shared
-  `HANDLE_PATTERN`) runs on the raw, HTML-unescaped and NFKC forms; code spans/fences are not exempt and Slack
+  `HANDLE_PATTERN`, case-insensitive: `!Deploy` is refused too; handles stay lowercase) runs on the raw,
+  HTML-unescaped and NFKC forms; code spans/fences are not exempt and Slack
   `<!here>` is refused. Footer templates are validated with it (<= 500 chars; variables `{session_name}`,
   `{session_handle}`, `{session_link}`).
 
