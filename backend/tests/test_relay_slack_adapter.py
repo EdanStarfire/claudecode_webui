@@ -261,3 +261,39 @@ async def test_issue_2103_start_events_reserved():
     adapter = make_adapter(lambda r: httpx.Response(200, json={"ok": True}))
     with pytest.raises(NotImplementedError):
         await adapter.start_events(lambda e: None)
+
+
+async def test_issue_2103_user_info_prefers_display_name():
+    def handler(request):
+        assert request.url.path.endswith("users.info") and _form(request) == {"user": "U0A"}
+        return httpx.Response(200, json={"ok": True, "user": {
+            "id": "U0A", "name": "alice", "real_name": "Alice Real",
+            "profile": {"display_name": "", "real_name": "Alice Profile"}, "is_bot": False}})
+
+    info = await make_adapter(handler).user_info("U0A")
+    assert (info.id, info.name, info.is_bot) == ("U0A", "Alice Profile", False)
+
+
+async def test_issue_2103_search_text_falls_back_to_blocks():
+    """search.messages returns text "" for block messages: use section/rich_text, skip footer."""
+    match = {
+        "channel": {"id": "C0AUTO0001"}, "ts": "1.1", "text": "",
+        "blocks": [
+            {"type": "section", "text": {"type": "mrkdwn", "text": "body one"}},
+            {"type": "section", "text": {"type": "mrkdwn", "text": "body two"}},
+            {"type": "context", "elements": [{"type": "mrkdwn", "text": "footer"}]},
+        ],
+    }
+    rich = {
+        "channel": {"id": "C0AUTO0001"}, "ts": "1.2", "text": "",
+        "blocks": [{"type": "rich_text", "elements": [{"type": "rich_text_section", "elements": [
+            {"type": "text", "text": "hi "}, {"type": "link", "url": "https://x.y"},
+        ]}]}],
+    }
+    plain = {"channel": {"id": "C0AUTO0001"}, "ts": "1.3", "text": "kept"}
+
+    def handler(request):
+        return httpx.Response(200, json={"ok": True, "messages": {"matches": [match, rich, plain]}})
+
+    results = await make_adapter(handler).search("q", ["C0AUTO0001"])
+    assert [r.text for r in results] == ["body one\nbody two", "hi https://x.y", "kept"]

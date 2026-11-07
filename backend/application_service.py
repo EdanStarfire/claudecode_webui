@@ -54,6 +54,10 @@ class ApplicationService:
     def relay_service(self):
         return self.coordinator.relay_service
 
+    @property
+    def relay_audit(self):
+        return self.coordinator.relay_audit
+
     # =========================================================================
     # Internal helpers
     # =========================================================================

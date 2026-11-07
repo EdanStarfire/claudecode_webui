@@ -1,0 +1,107 @@
+"""Permission-callback integration for relay tools (issue #2103).
+
+``pre_hook`` runs at the top of the permission callback for ``mcp__relay__*`` tools:
+reads on readable channels and ``auto`` sends are allowed without UI, blocked/read_only
+sends are denied, and ``ask`` / unlisted channels fall through into the normal prompt flow
+carrying ``relay_prompt`` metadata. ``apply_response`` turns the user's answer
+(``relay_choice``) into a one-shot grant plus an optional SESSION-tier policy change.
+"""
+
+from __future__ import annotations
+
+import logging
+from typing import TYPE_CHECKING, Any
+
+from .audit import RelayAuditLog
+from .gate import WRITE_TOOLS, GateResult, RelayPolicyGate, tool_short_name
+from .policy import DENY, POLICY_VALUES, decide
+
+if TYPE_CHECKING:
+    from .service import RelayService
+
+logger = logging.getLogger(__name__)
+
+
+class RelayPermissionBridge:
+    def __init__(
+        self, gate: RelayPolicyGate, service: RelayService, audit: RelayAuditLog
+    ) -> None:
+        self.gate = gate
+        self.service = service
+        self.audit = audit
+
+    @staticmethod
+    def handles(tool_name: str) -> bool:
+        return tool_name.startswith("mcp__relay__")
+
+    async def pre_hook(self, session_id: str, tool_name: str, args: dict[str, Any]) -> GateResult:
+        result = await self.gate.evaluate(session_id, tool_name, args)
+        short = tool_short_name(tool_name)
+        if result.kind == DENY and short in WRITE_TOOLS:
+            ctx = await self.gate.context(session_id)
+            if ctx is not None:
+                await self.audit.record(
+                    ctx.relay_id, session_id=session_id, handle=ctx.handle,
+                    session_name=ctx.session_info.name, tool=short, channel_id=result.channel_id,
+                    channel_name=result.channel_name, thread_ts=args.get("thread_ts"),
+                    outcome="denied", code=result.code, policy=result.policy, approval="auto",
+                )
+        return result
+
+    async def apply_response(
+        self,
+        session_id: str,
+        tool_name: str,
+        args: dict[str, Any],
+        gate_result: GateResult,
+        response: dict[str, Any],
+    ) -> dict[str, Any]:
+        """Post-process an ``allow`` response to a relay prompt. Returns the response to hand
+        the SDK (possibly converted to a deny)."""
+        prompt = gate_result.prompt or {}
+        short = tool_short_name(tool_name) or gate_result.tool
+        choice = response.get("relay_choice") or {}
+        chosen = choice.get("policy")
+        promote = bool(choice.get("promote"))
+        channel_id = gate_result.channel_id
+        action = gate_result.action or "send"
+
+        if chosen is not None and chosen not in POLICY_VALUES:
+            return {"behavior": "deny", "message": "Invalid relay policy choice."}
+        approval = "prompt_allow"
+        new_policy: str | None = None
+        if prompt.get("kind") == "ask_send":
+            if promote:
+                new_policy = "auto"
+        else:  # choose_policy: a policy is mandatory
+            if chosen is None:
+                return {"behavior": "deny", "message": "No channel policy was chosen."}
+            new_policy = chosen
+        if new_policy is not None:
+            approval = "prompt_promote"
+            decision = decide(new_policy, action)
+            await self.service.set_policy(session_id, channel_id, new_policy)
+            await self._audit_policy_change(session_id, channel_id, gate_result, new_policy)
+            if decision.kind == DENY:
+                return {
+                    "behavior": "deny",
+                    "message": (
+                        f"Channel policy saved as {new_policy}; this {action} is not permitted "
+                        "under it."
+                    ),
+                }
+        self.gate.grants.add(session_id, short, args, approval)
+        return response
+
+    async def _audit_policy_change(
+        self, session_id: str, channel_id: str | None, gate_result: GateResult, policy: str
+    ) -> None:
+        ctx = await self.gate.context(session_id)
+        if ctx is None:
+            return
+        await self.audit.record(
+            ctx.relay_id, event="policy_change", session_id=session_id, handle=ctx.handle,
+            session_name=ctx.session_info.name, tool=gate_result.tool, channel_id=channel_id,
+            channel_name=gate_result.channel_label, outcome="ok", policy=policy,
+            approval="prompt_promote",
+        )

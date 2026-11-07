@@ -31,6 +31,14 @@
         </div>
       </template>
 
+      <!-- Issue #2103: relay (Slack) send approval / channel policy choice -->
+      <RelayPermissionPrompt
+        v-else-if="toolCall.relayPrompt"
+        :prompt="toolCall.relayPrompt"
+        :disabled="isSubmittingPermission"
+        @decide="handleRelayDecision"
+      />
+
       <!-- Standard Permission UI -->
       <template v-else>
         <div class="detail-banner detail-banner-warning">
@@ -204,6 +212,7 @@ import { useSessionStore } from '@/stores/session'
 import { usePollingStore } from '@/stores/polling'
 import { useToolStatus } from '@/composables/useToolStatus'
 import AskUserQuestionToolHandler from '@/components/tools/AskUserQuestionToolHandler.vue'
+import RelayPermissionPrompt from './RelayPermissionPrompt.vue'
 
 const props = defineProps({
   toolCall: { type: Object, required: true }
@@ -496,6 +505,31 @@ async function handlePermissionDecision(decision, applySuggestions, guidance = n
     )
   } catch (error) {
     console.error('Failed to send permission response:', error)
+  } finally {
+    isSubmittingPermission.value = false
+    permissionAction.value = null
+  }
+}
+
+async function handleRelayDecision({ decision, relayChoice }) {
+  if (isSubmittingPermission.value) return
+  isSubmittingPermission.value = true
+  permissionAction.value = decision === 'allow' ? 'approve' : 'deny'
+  try {
+    const sessionId = sessionStore.currentSessionId
+    if (sessionId) {
+      messageStore.handlePermissionResponse(sessionId, {
+        request_id: props.toolCall.permissionRequestId,
+        decision,
+        reasoning: decision === 'allow' ? 'User allowed permission' : 'User denied permission',
+        applied_updates: []
+      })
+    }
+    await wsStore.sendPermissionResponse(
+      props.toolCall.permissionRequestId, decision, false, null, null, relayChoice
+    )
+  } catch (error) {
+    console.error('Failed to send relay permission response:', error)
   } finally {
     isSubmittingPermission.value = false
     permissionAction.value = null

@@ -73,6 +73,13 @@ class ConversationInfo:
     unread_count: int | None = None
 
 
+@dataclass
+class UserInfo:
+    id: str
+    name: str | None = None  # best display name: display_name, else real_name, else handle
+    is_bot: bool = False
+
+
 EventHandler = Callable[[Any], Awaitable[None]]
 
 
@@ -121,6 +128,8 @@ class RelayAdapter(Protocol):
     ) -> list[ConversationInfo]: ...
 
     async def open_dm(self, user_id: str) -> str: ...
+
+    async def user_info(self, user_id: str) -> UserInfo: ...
 
     async def start_events(self, handler: EventHandler) -> None:
         """Reserved for the inbound stage; not implemented in outbound-1a."""

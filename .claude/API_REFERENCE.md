@@ -142,6 +142,9 @@ Responses never contain token values or vault secret names; only `has_user_token
 | `GET` | `/api/sessions/{id}/relay` | Effective attachment: `relay_id`, `relay_handle`, footer fields, per-field `sources`, `policies` (`{channel_id: {policy, source}}`, per-key merged live) |
 | `PUT` | `/api/sessions/{id}/relay/handle` | `{handle}`; `^[a-z0-9][a-z0-9-]{1,31}$`, not `all/here/channel/everyone/subteam`; 409 duplicate, 422 invalid |
 | `PUT`/`DELETE` | `/api/sessions/{id}/relay/policies/{channel_id}` | Set (`{policy: blocked\|read_only\|ask\|auto}`) / remove the SESSION-tier policy; takes effect immediately, no restart. `channel_id` must match `^[CGDW][A-Z0-9]{6,}$` |
+| `GET` | `/api/relays/{id}/audit` | Relay write/mark-read audit (outbound-1b): `?session_id=&channel=&limit=100(max 500)&before=<ISO ts>` -> `{records: [...]}` newest first. Records: `ts, event (tool\|policy_change), session_id, handle, session_name, tool, channel_id, channel_name, thread_ts, message_ts, outcome (ok\|denied\|error), code, policy, approval (auto\|prompt_allow\|prompt_promote), text_sha256, text_preview(<=200)`; never tokens. 404 unknown relay |
+
+`POST /api/sessions/{id}/permission/{request_id}` accepts an optional `relay_choice` `{policy: blocked|read_only|ask|auto|null, promote: bool}` for relay prompts (`tool_call.permission.relay_prompt.kind` `ask_send` / `choose_policy`): `promote` sets the channel to `auto` at SESSION tier; for `choose_policy` a `policy` is required (without one the request is denied). Ignored on deny.
 
 Attachment fields (`relay_id`, `relay_footer_enabled`, `relay_footer_template`, `relay_channel_policies`,
 `relay_handle`) travel through the normal profile (area `relay`), template and session config endpoints.

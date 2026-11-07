@@ -942,7 +942,7 @@ export const usePollingStore = defineStore('polling', () => {
     }
   }
 
-  async function sendPermissionResponse(requestId, decision, applySuggestions = false, clarification = null, selectedSuggestions = null) {
+  async function sendPermissionResponse(requestId, decision, applySuggestions = false, clarification = null, selectedSuggestions = null, relayChoice = null) {
     const sessionStore = useSessionStore()
     const sid = sessionStore.currentSessionId
     if (!sid) return
@@ -953,6 +953,7 @@ export const usePollingStore = defineStore('polling', () => {
       }
       if (clarification) payload.clarification_message = clarification
       if (selectedSuggestions) payload.selected_suggestions = selectedSuggestions
+      if (relayChoice) payload.relay_choice = relayChoice  // issue #2103
       await api.post(`/api/sessions/${sid}/permission/${requestId}`, payload)
     } catch (err) {
       console.error('Failed to send permission response:', err)

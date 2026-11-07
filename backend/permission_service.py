@@ -79,6 +79,29 @@ class PermissionService:
             )
             debug_logger.info(f"Permission requested for tool: {tool_name} (request_id: {request_id})")
 
+            # Issue #2103: relay tools. Reads and `auto` sends are allowed here, blocked/read_only
+            # sends are denied, everything else falls through into the normal prompt flow with
+            # `relay_prompt` metadata. The tool handler re-checks policy (authoritative gate).
+            relay_bridge = None
+            relay_gate_result = None
+            if tool_name.startswith("mcp__relay__"):
+                relay_bridge = getattr(self.coordinator, "relay_bridge", None)
+                if relay_bridge is None:
+                    logger.error("Relay bridge unavailable; denying %s", tool_name)
+                    return {"behavior": "deny", "message": "Relay policy check unavailable."}
+            if relay_bridge is not None:
+                try:
+                    relay_gate_result = await relay_bridge.pre_hook(
+                        session_id, tool_name, input_params
+                    )
+                except Exception:
+                    logger.exception("Relay pre-hook failed; denying %s", tool_name)
+                    return {"behavior": "deny", "message": "Relay policy check failed."}
+                if relay_gate_result.kind == "allow":
+                    return {"behavior": "allow"}
+                if relay_gate_result.kind == "deny":
+                    return {"behavior": "deny", "message": relay_gate_result.message}
+
             # Issue #403: Auto-approve Read tool for user-uploaded files
             if tool_name == 'Read':
                 file_path = input_params.get('file_path', '')
@@ -95,6 +118,8 @@ class PermissionService:
                     else:
                         suggestions.append(s)
                 debug_logger.info(f"Permission context has {len(suggestions)} suggestions")
+            if relay_gate_result is not None:
+                suggestions = []  # relay approvals never persist allow rules (handler gate)
 
             # Store permission request message using dataclass (Phase 0, Issue #310)
             try:
@@ -202,6 +227,9 @@ class PermissionService:
                             title=title,                     # Issue #1302
                             display_name=display_name,       # Issue #1302
                             description=description,         # Issue #1302
+                            relay_prompt=(
+                                relay_gate_result.prompt if relay_gate_result else None
+                            ),                               # Issue #2103
                         )
 
                         # Update tool call status
@@ -299,6 +327,14 @@ class PermissionService:
 
                 decision = response.get("behavior")
                 reasoning = f"User {decision}ed permission"
+
+                # Issue #2103: relay prompt answer -> grant + optional policy promotion
+                if decision == "allow" and relay_gate_result is not None:
+                    response = await relay_bridge.apply_response(
+                        session_id, tool_name, input_params, relay_gate_result, response
+                    )
+                    decision = response.get("behavior")
+                    reasoning = f"User {decision}ed permission"
 
                 # Handle permission updates if user chose to apply suggestions
                 if decision == "allow" and response.get("apply_suggestions") and suggestions:

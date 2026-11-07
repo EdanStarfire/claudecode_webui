@@ -216,6 +216,7 @@ class SessionLauncher:
     legion_system = property(lambda self: self._coordinator.legion_system)
     resource_mcp_tools = property(lambda self: self._coordinator.resource_mcp_tools)
     links_mcp_tools = property(lambda self: self._coordinator.links_mcp_tools)
+    relay_mcp_tools = property(lambda self: self._coordinator.relay_mcp_tools)
     queue_processor = property(lambda self: self._coordinator.queue_processor)
     litellm_proxy_manager = property(lambda self: self._coordinator.litellm_proxy_manager)
     project_manager = property(lambda self: self._coordinator.project_manager)
@@ -630,6 +631,15 @@ class SessionLauncher:
                     mcp_servers["links"] = links_mcp_server
                     mcp_tools_list.append("mcp__links")
                     coord_logger.info(f"Attaching Links MCP tools to session {session_id}")
+
+            # Issue #2103: Attach relay MCP tools only when a relay with a user token is attached.
+            # "mcp__relay" is deliberately NOT added to mcp_tools_list (the auto-allow list):
+            # every relay call goes through the permission callback so sends can prompt.
+            if self.relay_mcp_tools and effective_config.relay_id:
+                relay_mcp_server = await self.relay_mcp_tools.create_server_if_attached(session_id)
+                if relay_mcp_server:
+                    mcp_servers["relay"] = relay_mcp_server
+                    coord_logger.info(f"Attaching Relay MCP tools to session {session_id}")
 
             # Issue #676: Attach user-selected global MCP server configs
             if effective_config.mcp_server_ids:

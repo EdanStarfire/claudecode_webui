@@ -598,12 +598,20 @@ class SecretOAuthReconnectInitiateRequest(BaseModel):
     custom_callback_port: int | None = None
 
 
+class RelayChoice(BaseModel):
+    """Answer to a relay permission prompt (issue #2103)."""
+
+    policy: str | None = None  # blocked | read_only | ask | auto
+    promote: bool = False  # ask_send: also set the channel to auto
+
+
 class PermissionResponseRequest(BaseModel):
     decision: str
     apply_suggestions: bool = False
     clarification_message: str | None = None
     selected_suggestions: list | None = None
     updated_input: dict | None = None
+    relay_choice: RelayChoice | None = None  # issue #2103
 
 
 class ProviderModelEntryRequest(BaseModel):
