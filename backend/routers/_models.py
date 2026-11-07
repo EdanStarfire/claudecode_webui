@@ -9,6 +9,7 @@ from typing import Literal
 from pydantic import BaseModel, Field, field_validator
 
 from ..mcp_config_manager import McpServerType
+from ..relay.validation import validate_assigned_secrets
 from ..session_config import SessionConfig
 
 
@@ -386,6 +387,11 @@ class TemplateUpdateRequest(BaseModel):
     inject_timestamps_enabled: bool | None = None
     timestamp_injection_frequency: str | None = None  # "every_message" | "once_per_day"
     timestamp_injection_timezone: str | None = None  # IANA tz name
+    # Relay attachment (issue #2103); relay_handle is session-only and rejected on templates
+    relay_id: str | None = None
+    relay_footer_enabled: bool | None = None
+    relay_footer_template: str | None = None
+    relay_channel_policies: dict[str, str] | None = None
     provider_catalog_id: str | None = None
     provider_model_id: str | None = None
     # Per-tier model routing (issue #1469)
@@ -402,6 +408,12 @@ class TemplateUpdateRequest(BaseModel):
     config: dict | None = None
     template_overrides: dict | None = None
     session_overrides: dict | None = None
+
+    @field_validator("assigned_secrets")
+    @classmethod
+    def _reject_relay_secrets(cls, v):
+        validate_assigned_secrets(v)  # issue #2103
+        return v
 
     @field_validator("template_overrides", "session_overrides", mode="before")
     @classmethod
@@ -689,3 +701,34 @@ def _validate_new_additional_directory(
         )
 
     return normalized
+
+
+# Relay request models (issue #2103)
+class RelayCreateRequest(BaseModel):
+    name: str
+    adapter_type: str = "slack"
+    oauth_client_id: str | None = None
+    oauth_client_secret: str | None = None
+
+
+class RelayUpdateRequest(BaseModel):
+    name: str | None = None
+    oauth_client_id: str | None = None
+    oauth_client_secret: str | None = None
+
+
+class RelayTokensRequest(BaseModel):
+    user_token: str | None = None
+    app_token: str | None = None
+
+
+class RelayOAuthInitiateRequest(BaseModel):
+    redirect_uri: str
+
+
+class RelayHandleRequest(BaseModel):
+    handle: str
+
+
+class RelayPolicyRequest(BaseModel):
+    policy: str

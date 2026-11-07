@@ -20,7 +20,7 @@ if TYPE_CHECKING:
     from .profile_manager import ProfileManager
     from .session_manager import SessionInfo
 
-# 7 config areas — every field in CONFIG_FIELDS belongs to exactly one area.
+# 8 config areas — every field in CONFIG_FIELDS belongs to exactly one area.
 PROFILE_AREAS: dict[str, set[str]] = {
     "model": {
         "model", "thinking_mode", "thinking_budget_tokens", "effort",
@@ -67,6 +67,11 @@ PROFILE_AREAS: dict[str, set[str]] = {
         "overloaded_retry_max_delay_ms",
         "inject_timestamps_enabled", "timestamp_injection_frequency",
         "timestamp_injection_timezone",
+    },
+    # Issue #2103: relay attachment. relay_handle is session-tier only (rejected on profiles).
+    "relay": {
+        "relay_id", "relay_footer_enabled", "relay_footer_template",
+        "relay_channel_policies", "relay_handle",
     },
 }
 

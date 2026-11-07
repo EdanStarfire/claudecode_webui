@@ -280,6 +280,8 @@ class SessionCoordinator:
         self.oauth_secret_bundle_manager = core.oauth_secret_bundle_manager
         self.queue_manager = core.queue_manager
         self.pending_store = core.pending_store
+        self.relay_manager = core.relay_manager
+        self.relay_service = core.relay_service
 
         # Active SDK instances
         self._active_sdks: dict[str, ClaudeSDK] = {}
@@ -672,6 +674,7 @@ class SessionCoordinator:
             await self.profile_manager.load_profiles(template_manager=self.template_manager)
             coord_logger.info("Loaded configuration profiles")
             await self._migrate_stale_mcp_snapshots()  # issue #1660
+            await self.relay_service.initialize()  # issue #2103
 
             # Load global MCP server configs (issue #676)
             await self.mcp_config_manager.load_configs()

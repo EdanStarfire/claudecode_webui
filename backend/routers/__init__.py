@@ -28,6 +28,7 @@ from . import (
     provider_catalog,
     proxy,
     queue,
+    relay,
     schedules,
     secrets,
     session_routing,
@@ -52,6 +53,7 @@ def register_all(app: FastAPI, webui) -> None:
     app.include_router(fleet.build_router(webui))
     app.include_router(provider_catalog.build_router(webui))
     app.include_router(proxy.build_router(webui))
+    app.include_router(relay.build_router(webui))
     app.include_router(secrets.build_router(webui))
     app.include_router(profiles.build_router(webui))
     app.include_router(archives.build_router(webui))

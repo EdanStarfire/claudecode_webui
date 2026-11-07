@@ -282,6 +282,41 @@ loaded records cover (`frontend/src/utils/historyBudget.js`): **64 MiB desktop, 
 current keeps `min(8 MiB, budget/4)`, and the pinned island releases its far edge past the budget. Pages the user
 asks for are never refused by the budget (a user scrolling up keeps loading). Details: `frontend/CLAUDE.md`.
 
+## Relay (issue #2103, outbound stage 1a)
+
+A **relay** is a Library asset for an external messaging workspace (Slack today): `RelayRecord` in
+`data/relays/{slug}.json`, managed by `backend/relay_manager.py` (`RelayManager`). One relay per Backend.
+Only vault secret **names** are stored (`relay-{relay_id}-user-token|app-token|oauth-client-secret`); values
+live in the credential vault, are read in-process via `RelayManager.get_token()` only, are never returned by
+any API, logged, or put in exception text, and never enter containers (`relay-*` is rejected in
+`assigned_secrets` at every tier, and `SecretsVault.resolve_secrets_for_assignment` refuses it). Paste-token
+(`PUT /api/relays/{id}/tokens`, verified with `auth.test`) is the primary path; OAuth
+(`/oauth/initiate`, user-scope authorize URL without PKCE, exchanged via `oauth.v2.access` through the
+`OAuthCallbackListenerManager` relay hook) works only with a localhost or https redirect URL.
+
+- **Adapter seam** (`backend/relay/`): `RelayAdapter` protocol (`adapter.py`), `SlackAdapter` on httpx
+  (`slack_adapter.py`; bounded retry on rate limits, tokens fetched per call), `RelayEvent` / `is_agent_message`
+  (`events.py`), `SubscriptionStore` protocol, `RelayHandleIndex` (`handles.py`). `start_events()` is reserved
+  for the inbound stage.
+- **Attachment cascade**: `relay_id`, `relay_footer_enabled`, `relay_footer_template`, `relay_channel_policies`,
+  `relay_handle` (new profile area `relay`; `relay_handle` is session-tier only).
+- **Channel policy** (`blocked | read_only | ask | auto`; unlisted = unset) is decided by the pure
+  `relay/policy.py::decide()`. Effective policies are merged **per channel key** across profile < template <
+  session and read **live per call** (`RelayService.effective_policies`), not from the start-time
+  `SessionConfig`, so runtime edits (`PUT /api/sessions/{id}/relay/policies/{channel}`) need no restart.
+- **Handle**: `relay_handle` is assigned once on first attachment (`slugify_name(name)`, numeric suffix on
+  collision), is unique Backend-wide, editable (409 on duplicate), and **never re-derived on rename** (it is
+  independent of `session.slug`). A whole-config PATCH that omits `relay_handle` / `relay_channel_policies`
+  keeps the existing values.
+- **Trigger rule**: `!handle` is the inbound instruction syntax, so outbound text must not contain it.
+  `relay/safety.py::contains_trigger_syntax()` (regex `(?<![\w!])!({HANDLE_PATTERN})(?![\w-])`, one shared
+  `HANDLE_PATTERN`) runs on the raw, HTML-unescaped and NFKC forms; code spans/fences are not exempt and Slack
+  `<!here>` is refused. Footer templates are validated with it (<= 500 chars; variables `{session_name}`,
+  `{session_handle}`, `{session_link}`).
+
+Stage 1b adds the MCP tools, permission integration, footer rendering and audit log on top of these seams.
+Slack's 2026 API terms (retention, Marketplace distribution) are still to be reviewed before release.
+
 ## Verifying Configuration
 
 The injected env dict is logged at debug level by `claude_sdk.py` when `--debug-sdk` is enabled.

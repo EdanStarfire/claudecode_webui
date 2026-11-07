@@ -45,6 +45,15 @@ class ApplicationService:
         # session/domain state, so coordinator has no reason to know about it.
         self._last_restart_time: float = 0
 
+    # Issue #2103: relay collaborators for routers (which may only reach state via the service)
+    @property
+    def relay_manager(self):
+        return self.coordinator.relay_manager
+
+    @property
+    def relay_service(self):
+        return self.coordinator.relay_service
+
     # =========================================================================
     # Internal helpers
     # =========================================================================

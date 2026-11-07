@@ -30,6 +30,7 @@ from shared.logging_config import get_logger
 
 from .models.minion_template import MinionTemplate
 from .models.permission_mode import PermissionMode
+from .relay.validation import validate_relay_config
 from .session_config import CONFIG_FIELDS, SessionConfig
 from .slug_utils import slugify as _slugify
 
@@ -269,6 +270,8 @@ class TemplateManager:
                 if k in CONFIG_FIELDS:
                     config_dict[k] = v
 
+        validate_relay_config(config_dict, "template")
+
         template = MinionTemplate(
             template_id=str(uuid.uuid4()),
             name=name.strip(),
@@ -378,6 +381,10 @@ class TemplateManager:
         inject_timestamps_enabled: bool | None = None,
         timestamp_injection_frequency: str | None = None,
         timestamp_injection_timezone: str | None = None,
+        relay_id: str | None = None,
+        relay_footer_enabled: bool | None = None,
+        relay_footer_template: str | None = None,
+        relay_channel_policies: dict[str, str] | None = None,
         # Deprecated: template_overrides absorbed into config
         template_overrides: dict[str, Any] | None = None,
     ) -> MinionTemplate:
@@ -392,6 +399,13 @@ class TemplateManager:
             raise ValueError(f"Template {template_id} not found")
 
         old_name = template.name
+
+        # Issue #2103: validate before any field is mutated so a rejected update leaves
+        # the in-memory template untouched.
+        if config is not None:
+            validate_relay_config(
+                {k: v for k, v in config.items() if k in CONFIG_FIELDS}, "template"
+            )
 
         # Check name uniqueness if changing name
         if name and name.strip() != template.name:
@@ -478,6 +492,10 @@ class TemplateManager:
             "inject_timestamps_enabled": inject_timestamps_enabled,
             "timestamp_injection_frequency": timestamp_injection_frequency,
             "timestamp_injection_timezone": timestamp_injection_timezone,
+            "relay_id": relay_id,
+            "relay_footer_enabled": relay_footer_enabled,
+            "relay_footer_template": relay_footer_template,
+            "relay_channel_policies": relay_channel_policies,
         }
         for field_name, value in local_vars.items():
             if value is not None and field_name in CONFIG_FIELDS:
@@ -495,6 +513,7 @@ class TemplateManager:
                 if k in CONFIG_FIELDS:
                     flat_updates[k] = v
 
+        validate_relay_config({**template.config, **flat_updates}, "template")
         template.config.update(flat_updates)
         template.updated_at = datetime.now(UTC)
 

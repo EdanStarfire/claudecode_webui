@@ -125,6 +125,29 @@ payloads. Archived sessions keep their recorded `working_directory`.
 | `PATCH` | `/api/templates/{id}` | Update template fields |
 | `DELETE` | `/api/templates/{id}` | Delete template |
 
+### Relay Endpoints (issue #2103)
+
+Responses never contain token values or vault secret names; only `has_user_token` / `has_app_token` /
+`has_oauth_client_secret` booleans. One relay per Backend (second `POST` -> 409).
+
+| Method | Path | Description |
+|--------|------|-------------|
+| `GET` | `/api/relays` | List relays (`{relays: [...]}`) |
+| `POST` | `/api/relays` | Create (`name`, `adapter_type="slack"`, optional `oauth_client_id`, `oauth_client_secret`); 201, 409 if one exists |
+| `GET`/`PUT`/`DELETE` | `/api/relays/{id}` | Read / rename + OAuth client fields / delete (also deletes its vault secrets) |
+| `PUT` | `/api/relays/{id}/tokens` | Paste-token path: `user_token` (`xoxp-`) and/or `app_token` (`xapp-`); the user token is verified with `auth.test` (records `owner_user_id`, workspace) before it is stored; 400 on bad prefix / rejected token |
+| `POST` | `/api/relays/{id}/test` | `auth.test` with the stored user token -> `{ok, workspace_*, user_id}` |
+| `POST` | `/api/relays/{id}/oauth/initiate` | Best effort. Body `{redirect_uri}` (https, or http on localhost; otherwise 400) -> `{auth_url, state}` |
+| `GET` | `/api/relays/{id}/oauth/status?state=` | `pending` / `complete` / `error` / `unknown` |
+| `GET` | `/api/sessions/{id}/relay` | Effective attachment: `relay_id`, `relay_handle`, footer fields, per-field `sources`, `policies` (`{channel_id: {policy, source}}`, per-key merged live) |
+| `PUT` | `/api/sessions/{id}/relay/handle` | `{handle}`; `^[a-z0-9][a-z0-9-]{1,31}$`, not `all/here/channel/everyone/subteam`; 409 duplicate, 422 invalid |
+| `PUT`/`DELETE` | `/api/sessions/{id}/relay/policies/{channel_id}` | Set (`{policy: blocked\|read_only\|ask\|auto}`) / remove the SESSION-tier policy; takes effect immediately, no restart. `channel_id` must match `^[CGDW][A-Z0-9]{6,}$` |
+
+Attachment fields (`relay_id`, `relay_footer_enabled`, `relay_footer_template`, `relay_channel_policies`,
+`relay_handle`) travel through the normal profile (area `relay`), template and session config endpoints.
+`assigned_secrets` entries starting with `relay-` are rejected (422 on session create/template update, 400 on
+profile/template config).
+
 ### Permission Endpoints
 
 | Method | Path | Description |
