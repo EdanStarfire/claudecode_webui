@@ -2417,6 +2417,9 @@ describe('tail-first history (issue #2030, stage 1b)', () => {
 
       it('editing the query drops the old mark, and a user scroll during a far jump means no keeper starts after it lands', async () => {
         const tracker = trackObservers()
+        // Instant jumps (issue #2342: an animated one outlasts the 200 ms search debounce this test races against)
+        const originalMatchMedia = window.matchMedia
+        window.matchMedia = vi.fn(() => ({ matches: true }))
         const { wrapper, container, messageStore } = await mountSearchable()
         await searchAlpha()
         await fireEvent.update(document.querySelector('.message-search-input'), 'alpha x')
@@ -2437,6 +2440,7 @@ describe('tail-first history (issue #2030, stage 1b)', () => {
         expect(marks().length).toBeGreaterThan(0) // the highlight itself was applied
         expect(tracker.live.size).toBe(0)
         vi.restoreAllMocks()
+        window.matchMedia = originalMatchMedia
         tracker.restore()
       })
 
@@ -2974,7 +2978,7 @@ describe('tail-first history (issue #2030, stage 1b)', () => {
       }
       const jumpAndLand = async () => {
         chip().click()
-        await new Promise(r => setTimeout(r, 400)) // jump + the scroll-stability wait
+        await new Promise(r => setTimeout(r, 1200)) // jump (it animates now, issue #2342) + the scroll-stability wait
       }
 
       it('plays a one-shot pulse (Web Animations)', async () => {
@@ -3084,5 +3088,172 @@ describe('tail-first history (issue #2030, stage 1b)', () => {
       expect(chips[0].getAttribute('aria-label')).toContain('launch-a')
       expect(document.querySelectorAll('.gutter-lane')).toHaveLength(2)
     })
+  })
+})
+
+describe('jump motion (issue #2342)', () => {
+  const manyMessages = (count) => Array.from({ length: count }, (_, i) =>
+    makeMessage({ id: `msg-${i}`, message_id: `msg-${i}`, type: 'user', content: `Message ${i}`, timestamp: 1700000000 + i })
+  )
+  const restore = []
+  afterEach(() => { restore.splice(0).forEach(fn => fn()) })
+
+  async function setup(count = 300) {
+    const rendered = renderWithStores(MessageList, {
+      provide: { viewSessionId: viewSessionIdRef },
+      stubs: { MessageItem: MESSAGE_ITEM_STUB, TruncationBanner: true, SubagentTimeline: true },
+    })
+    const { useMessageStore } = await import('@/stores/message')
+    const { useUIStore } = await import('@/stores/ui')
+    const messageStore = useMessageStore(rendered.pinia)
+    const uiStore = useUIStore(rendered.pinia)
+    messageStore.messagesBySession.set(SESSION_ID, manyMessages(count))
+    messageStore.messagesBySession = new Map(messageStore.messagesBySession)
+    await new Promise(r => setTimeout(r, 50))
+    const area = rendered.container.querySelector('.messages-area')
+    const originalScrollTo = Element.prototype.scrollTo
+    Element.prototype.scrollTo = function (opts) {
+      const top = typeof opts === 'object' && opts !== null ? opts.top : undefined
+      if (typeof top === 'number') { this.scrollTop = top; this.dispatchEvent(new Event('scroll')) }
+    }
+    restore.push(() => { Element.prototype.scrollTo = originalScrollTo })
+    Object.defineProperty(area, 'scrollHeight', { configurable: true, get: () => 100000 })
+    Object.defineProperty(area, 'clientHeight', { configurable: true, get: () => 600 })
+    const animate = vi.fn(() => ({ cancel: vi.fn() }))
+    const originalAnimate = HTMLElement.prototype.animate
+    HTMLElement.prototype.animate = animate
+    restore.push(() => { HTMLElement.prototype.animate = originalAnimate })
+    return { ...rendered, area, animate, uiStore, messageStore }
+  }
+  const mockReducedMotion = () => {
+    const original = window.matchMedia
+    window.matchMedia = vi.fn(() => ({ matches: true }))
+    restore.push(() => { window.matchMedia = original })
+  }
+  const sleep = (ms) => new Promise(r => setTimeout(r, ms))
+  const pulsedIndexes = (animate) => animate.mock.contexts.map(el => el.closest?.('[data-index]')?.dataset.index ?? el.dataset?.index)
+
+  it('a deliberate jump pulses the landed row once', async () => {
+    const { wrapper, animate } = await setup()
+    expect(await wrapper.vm.scrollToItemIndex(25, { align: 'start', behavior: 'auto' })).toBe(true)
+    await sleep(500)
+    expect(animate).toHaveBeenCalledTimes(1)
+    expect(pulsedIndexes(animate)).toEqual(['25'])
+  })
+
+  it('plain scrolling never pulses', async () => {
+    const { area, animate } = await setup()
+    for (const top of [300, 900, 2400, 5200]) {
+      area.dispatchEvent(new Event('wheel'))
+      area.scrollTop = top
+      area.dispatchEvent(new Event('scroll'))
+      await sleep(40)
+    }
+    await sleep(300)
+    expect(animate).not.toHaveBeenCalled()
+  })
+
+  it("motion: 'none' (a correction) neither animates nor pulses", async () => {
+    const { wrapper, animate } = await setup()
+    expect(await wrapper.vm.scrollToItemIndex(120, { align: 'start', behavior: 'auto', motion: 'none' })).toBe(true)
+    await sleep(300)
+    expect(animate).not.toHaveBeenCalled()
+    expect(document.querySelector('[data-testid="jump-cue"]')).toBeFalsy()
+  })
+
+  it('a long jump shows the cue (rail + direction pill), which goes away again; a short one shows none', async () => {
+    const { wrapper } = await setup()
+    const landed = wrapper.vm.scrollToItemIndex(200, { align: 'start', behavior: 'auto' })
+    await sleep(80)
+    expect(document.querySelector('[data-testid="jump-cue"]')).toBeTruthy()
+    expect(document.querySelector('[data-testid="jump-cue-pill"]').textContent).toMatch(/^↓ .*%$/)
+    await landed
+    await sleep(1500)
+    expect(document.querySelector('[data-testid="jump-cue"]')).toBeFalsy()
+    await wrapper.vm.scrollToItemIndex(199, { align: 'start', behavior: 'auto' })
+    expect(document.querySelector('[data-testid="jump-cue"]')).toBeFalsy()
+  })
+
+  it("the search keeper's re-jump and the jumpToLaunch row jump are not animated / pulsed (source guard)", async () => {
+    const { readFileSync } = await import('node:fs')
+    const src = readFileSync(`${process.cwd()}/src/components/messages/MessageList.vue`, 'utf8')
+    expect(src).toMatch(/scrollToItemIndexTrusted\(index, \{ align: 'center', behavior: 'auto', motion: 'none' \}\)/) // keeper tick
+    expect(src).toMatch(/scrollToItemIndexTrusted\(index, \{ align: 'start', behavior: 'auto', pulse: false \}\)/) // launch card pulses instead
+    expect(src).toMatch(/mounted === null\) return false/) // a cancelled jump is not a "match not found"
+  })
+
+  it('an upward long jump cues UP (direction is the user\'s, not a list offset artefact)', async () => {
+    const { wrapper } = await setup()
+    await wrapper.vm.scrollToItemIndex(250, { align: 'start', behavior: 'auto' })
+    await sleep(1500) // let the first cue go
+    const landed = wrapper.vm.scrollToItemIndex(20, { align: 'start', behavior: 'auto' })
+    await sleep(80)
+    const pill = document.querySelector('[data-testid="jump-cue-pill"]')
+    expect(pill.textContent).toMatch(/^↑ .*%$/)
+    expect(pill.className).toContain('jump-cue-pill-up')
+    await landed
+  })
+
+  it('reduced motion: instant move, no cue, static outline instead of the fading pulse', async () => {
+    mockReducedMotion()
+    const { wrapper, animate } = await setup()
+    const landed = wrapper.vm.scrollToItemIndex(200, { align: 'start', behavior: 'auto' })
+    await sleep(40)
+    expect(document.querySelector('[data-testid="jump-cue"]')).toBeFalsy()
+    await landed
+    await sleep(500)
+    expect(animate).not.toHaveBeenCalled()
+    const row = document.querySelector('[data-index="200"]')
+    expect((row.querySelector('.msg-wrapper') || row).style.outline).toContain('2px solid')
+  })
+
+  it('a wheel mid-jump cancels it: no landing, no pulse, no cue; the user keeps the position', async () => {
+    const { wrapper, area, animate } = await setup()
+    const landed = wrapper.vm.scrollToItemIndex(200, { align: 'start', behavior: 'auto' })
+    await sleep(100)
+    area.dispatchEvent(new Event('wheel'))
+    expect(await landed).toBeNull()
+    const stoppedAt = area.scrollTop
+    await sleep(600)
+    expect(area.scrollTop).toBe(stoppedAt)
+    expect(animate).not.toHaveBeenCalled()
+    expect(document.querySelector('[data-testid="jump-cue"]')).toBeFalsy()
+  })
+
+  it('a session switch and an unmount cancel a running jump', async () => {
+    const { wrapper } = await setup()
+    const first = wrapper.vm.scrollToItemIndex(200, { align: 'start', behavior: 'auto' })
+    await sleep(60)
+    viewSessionIdRef.value = 'another-session'
+    expect(await first).toBeNull()
+    viewSessionIdRef.value = SESSION_ID
+    const second = wrapper.vm.scrollToItemIndex(100, { align: 'start', behavior: 'auto' })
+    await sleep(60)
+    wrapper.unmount()
+    expect(await second).toBeNull()
+  })
+
+  it('the animation holds the jump-open state: sticky is dropped for the jump and re-derived from where it landed', async () => {
+    const { wrapper, area, uiStore } = await setup()
+    uiStore.setStickyToBottom(SESSION_ID, true)
+    const landed = wrapper.vm.scrollToItemIndex(200, { align: 'start', behavior: 'auto' })
+    await sleep(100)
+    expect(uiStore.stickyToBottomBySession.get(SESSION_ID)).toBe(false)
+    await landed
+    await sleep(50)
+    // landed far from the bottom (scrollHeight 100000): stays unpinned
+    expect(uiStore.stickyToBottomBySession.get(SESSION_ID)).toBe(false)
+    expect(area.scrollTop).toBeLessThan(99000)
+  })
+
+  it('a newer jump supersedes the running one and only the newest pulses', async () => {
+    const { wrapper, animate } = await setup()
+    const first = wrapper.vm.scrollToItemIndex(200, { align: 'start', behavior: 'auto' })
+    await sleep(60)
+    const second = wrapper.vm.scrollToItemIndex(40, { align: 'start', behavior: 'auto' })
+    expect(await first).toBeNull()
+    expect(await second).toBe(true)
+    await sleep(500)
+    expect(pulsedIndexes(animate)).toEqual(['40'])
   })
 })
