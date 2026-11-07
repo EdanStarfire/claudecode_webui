@@ -3,6 +3,7 @@
     <!-- Issue #2331: floating spinner and error/not-found notice, both OUTSIDE the scroll container
          and position:absolute so their appearance can never shift the virtualizer's coordinates. -->
     <HistoryLoadingSpinner :visible="spinnerVisible" />
+    <JumpCue :cue="jumpCue" />
     <div
       v-if="historyNotice"
       class="history-notice small"
@@ -180,6 +181,7 @@ import MessageItem from './MessageItem.vue'
 import CompactionEventGroup from './CompactionEventGroup.vue'
 import StreamingPreview from './StreamingPreview.vue'
 import HistoryLoadingSpinner from './HistoryLoadingSpinner.vue'
+import JumpCue from './JumpCue.vue'
 import TruncationBanner from './TruncationBanner.vue'
 import DeferredToolBanner from './DeferredToolBanner.vue'
 import SubagentAnchorRow from './SubagentAnchorRow.vue'
@@ -348,8 +350,83 @@ const rowVirtualizer = useVirtualizer(computed(() => ({
 })))
 
 // Issue #2320 follow-up: see shouldAdjustForItemSizeChange (the library reads it from the instance, not from options).
-rowVirtualizer.value.shouldAdjustScrollPositionOnItemSizeChange = shouldAdjustForItemSizeChange
-const virtualNav = useVirtualNavigation(rowVirtualizer)
+// Issue #2342: no compensation while a jump animates: the tween re-resolves its target every frame, and the
+// library's own write on top would double-correct for one frame.
+rowVirtualizer.value.shouldAdjustScrollPositionOnItemSizeChange =
+  (item, delta, instance) => !virtualNav.isAnimating() && shouldAdjustForItemSizeChange(item, delta, instance)
+// Issue #2342: a deliberate jump moves (eased scroll; long jumps teleport next to the target and settle) and
+// pulses the landed row. The animation holds the jump-open state (sticky-to-bottom is re-derived at its end)
+// and renews the programmatic-scroll window per frame, so neither the sticky logic nor the prefetch ever reads
+// it as the user scrolling.
+const jumpCue = ref(null) // long-jump cue for JumpCue.vue: { fromFrac, toFrac, up, label }
+const virtualNav = useVirtualNavigation(rowVirtualizer, {
+  onMotionStart: () => beginTurnJump(true),
+  onMotionEnd: () => endTurnJump(),
+  onFrame: () => markProgrammaticScroll(),
+  onJumpStart: () => cancelPendingPulse(),
+  onLanded: (index) => { pulseLandedRow(index) },
+  onUserCancel: () => { programmaticUntil = 0; cancelPendingPulse(); stopLaunchPulse() },
+  onCue: (cue) => { jumpCue.value = cue },
+  describeJump: (index, base) => describeJumpCue(index, base),
+})
+
+// Cue content of a long jump. Where the user WAS is captured when the outermost jump begins (a far jump swaps
+// the loaded rows before it animates, so the list offsets of the animation no longer say where the user came
+// from). With the server history index the cue is on the scale of the whole conversation (turn ordinals);
+// with the whole history loaded the list itself is that scale; otherwise (no index yet) a jump that swapped
+// the loaded rows shows no cue rather than a wrong direction. `base` = the list-offset cue the helper built.
+let jumpOrigin = null // { turnId, firstKey }
+
+// The id of the user turn at or above row `index` (a displayable user row), or null.
+function turnIdAtOrAbove(index, ordinals) {
+  const items = displayableItems.value
+  for (let i = Math.min(index, items.length - 1); i >= 0; i--) {
+    const item = items[i]
+    if (item.type === 'message' && item.message?.type === 'user') {
+      const id = resolveMessageId(item.message)
+      if (!ordinals || ordinals.has(id)) return id
+    }
+  }
+  return null
+}
+
+const turnOrdinalMaps = new WeakMap() // index `turns` array -> Map(message_id -> position)
+function ordinalMapOf(turns) {
+  let map = turnOrdinalMaps.get(turns)
+  if (!map) {
+    map = new Map()
+    turns.forEach((turn, position) => map.set(turn[1], position))
+    turnOrdinalMaps.set(turns, map)
+  }
+  return map
+}
+
+function captureJumpOrigin() {
+  const virtualizer = rowVirtualizer.value
+  const row = virtualizer?.getVirtualItemForOffset?.(virtualizer.scrollOffset ?? 0)
+  jumpOrigin = { turnId: row ? turnIdAtOrAbove(row.index) : null, firstKey: itemKeys.value[0] ?? null }
+}
+
+function describeJumpCue(index, base) {
+  const sessionId = viewSessionId.value
+  const complete = messageStore.isHistoryComplete(sessionId)
+  const entry = complete ? null : messageStore.getHistoryIndex(sessionId)
+  if (entry?.status === 'ready' && entry.turns?.length > 1 && jumpOrigin?.turnId != null) {
+    const ordinals = ordinalMapOf(entry.turns)
+    const to = ordinals.get(turnIdAtOrAbove(index, ordinals))
+    const from = ordinals.get(jumpOrigin.turnId)
+    if (to != null && from != null && to !== from) {
+      const span = entry.turns.length - 1
+      return { fromFrac: from / span, toFrac: to / span, up: to < from, turns: Math.abs(to - from), pct: Math.max(1, Math.round(Math.abs(to - from) / span * 100)) }
+    }
+  }
+  if (!complete && (!jumpOrigin || jumpOrigin.firstKey !== (itemKeys.value[0] ?? null))) return null // the rows were swapped: no honest origin
+  const lo = Math.min(base.fromIndex ?? index, index)
+  const hi = Math.max(base.fromIndex ?? index, index)
+  const gap = gapRowIndex.value
+  const turns = base.fromIndex == null || (gap >= lo && gap <= hi) ? null : turnBoundaryIndices.value.filter(i => i > lo && i <= hi).length
+  return { ...base, turns }
+}
 
 // Pairs each virtual row with its displayableItems entry ONCE per render, instead of the template
 // re-indexing displayableItems on every v-if branch and prop binding for the same row (up to 8
@@ -586,8 +663,9 @@ function onPointerUp() { pointerDown = false; lastUserInputAt = performance.now(
 
 function noteScrollSpeed(el) {
   const at = performance.now()
-  // Only the user's own scrolling counts: an anchored prepend / jump rewrites scrollTop in one frame.
-  if (!userGestureActive.value || isProgrammaticScroll.value) {
+  // Only the user's own scrolling counts: an anchored prepend / jump rewrites scrollTop in one frame, and a
+  // jump animation (issue #2342) renews programmaticUntil every frame.
+  if (!userGestureActive.value || isProgrammaticScroll.value || at <= programmaticUntil) {
     scrollSpeedPxPerMs = 0
     scrollSampleTop = el.scrollTop
     scrollSampleAt = at
@@ -731,6 +809,7 @@ const findNextTurn = () => planTurn('next')
 // the bottom before the jump lands) and re-derive it from the real position when the jump ends.
 let turnJumpsOpen = 0
 function beginTurnJump(keepLinkParam = false) {
+  if (turnJumpsOpen === 0) captureJumpOrigin() // where the user was, before anything (a far jump swaps the rows) moves
   if (!keepLinkParam) clearLinkedMessageParam() // a new deliberate navigation: the URL must not point at a place the view left
   turnJumpsOpen++
   markProgrammaticScroll() // starting a jump is not the user scrolling
@@ -742,6 +821,7 @@ function endTurnJump() {
   // Jumps can overlap (a newer one supersedes an older one): re-derive the sticky state only when the last one ends.
   if (turnJumpsOpen > 0) turnJumpsOpen--
   if (turnJumpsOpen > 0) return
+  jumpOrigin = null
   if (messagesArea.value) recomputeStickyFromScroll(messagesArea.value)
   scheduleEdgeEvaluation() // a real scroll that arrived while the jump was open was not evaluated
 }
@@ -836,7 +916,7 @@ async function jumpToLaunch(lane) {
     const jump = historyBackfill.jumpAround(sessionId, { toolUseId }, { label: 'the launching message', expectParent: true })
     await jump.promise
     const index = await launchRowAfterJump(lane)
-    if (index != null && await scrollToItemIndexTrusted(index, { align: 'start', behavior: 'auto' })) {
+    if (index != null && await scrollToItemIndexTrusted(index, { align: 'start', behavior: 'auto', pulse: false })) { // the launch card pulses below instead
       await bringLaunchCardIntoView(lane)
     }
   } catch {
@@ -863,7 +943,7 @@ async function bringLaunchCardIntoView(lane) {
     stable = area.scrollTop === last ? stable + 1 : 0
     last = area.scrollTop
   }
-  if (stable < 5 || turnJumpsOpen > 1) return
+  if (stable < 5) return
   const card = document.getElementById(`subagent-anchor-primary-${lane.taskId}-${lane.legIndex}`)
   if (!card) return
   const areaRect = area.getBoundingClientRect()
@@ -880,6 +960,10 @@ async function bringLaunchCardIntoView(lane) {
 const LAUNCH_PULSE_MS = 1800
 const LAUNCH_PULSE_OUTLINE = '2px solid var(--bs-primary, #0d6efd)'
 let launchPulse = null // { card, animation, timer }
+let pulseToken = 0 // a pending pulseLandedRow wait is void once this moves on
+
+// Voids a pulse that is still waiting for its landing to settle (a user input, a newer jump, a session switch).
+function cancelPendingPulse() { pulseToken++ }
 
 function stopLaunchPulse() {
   if (!launchPulse) return
@@ -966,30 +1050,33 @@ async function landOnLinkedMessage(id) {
       if (index == null) { linkNotFound(sessionId); return }
     }
     if (!jumping) { beginTurnJump(true); jumping = true }
-    if (await scrollToItemIndexTrusted(index, { align: 'start', behavior: 'auto' }) && seq === linkSeq) {
-      await pulseLinkedRow(index, seq)
-    }
+    await scrollToItemIndexTrusted(index, { align: 'start', behavior: 'auto' }) // pulses the landed row (a merged run pulses as one)
   } finally {
     if (jumping) endTurnJump()
   }
 }
 
-// Waits until the virtualizer stopped correcting the landing position (rows around the target get
-// measured), then pulses the whole row (a merged run pulses as one, whichever segment was linked).
-async function pulseLinkedRow(index, seq) {
+// Issue #2342: every deliberate jump pulses the landed row (scrollToItemIndex's `pulse`, via
+// useVirtualNavigation's onLanded). Waits until the virtualizer stopped correcting the landing position
+// (rows around the target get measured), then pulses the whole row (a merged run pulses as one, whichever
+// segment was targeted). A user input, a newer jump, a session switch or unmount voids the wait.
+async function pulseLandedRow(index) {
   const area = messagesArea.value
   if (!area) return
-  // Stable = the linked row stopped moving in the viewport (older pages anchoring above it change
+  stopLaunchPulse()
+  const token = ++pulseToken
+  // Stable = the row stopped moving in the viewport (older pages anchoring above it change
   // scrollTop while the row stays put, so scrollTop itself is not the signal).
   let last = null
   let stable = 0
   for (let frame = 0; frame < 40 && stable < 5; frame++) {
     await nextFrame()
+    if (token !== pulseToken) return
     const top = area.querySelector(`[data-index="${index}"]`)?.getBoundingClientRect().top ?? null
     stable = top != null && last != null && Math.abs(top - last) < 1 ? stable + 1 : 0
     last = top
   }
-  if (stable < 5 || turnJumpsOpen > 1 || seq !== linkSeq) return
+  if (stable < 5 || token !== pulseToken) return
   const row = area.querySelector(`[data-index="${index}"]`)
   const target = row?.querySelector('.msg-wrapper') || row
   if (target) pulseLaunchCard(target)
@@ -1102,13 +1189,13 @@ const laneOffsets = computed(() => {
 // visible, and aligns to whichever edge it's nearest — clicking a chip that's already on screen
 // must not move anything. `block: 'nearest'` (not 'center') gives the DOM fine-correction step
 // the same "don't move unless necessary" behavior.
-// Issue #1748 (stage: windowing): the big virtualizer-level jump now uses `behavior: 'auto'`
-// (instant), not 'smooth' — per plan §5.5, never smooth-scroll through thousands of unrendered
-// intermediate rows. That was safe at Stage 1 only because overscan=count kept every row mounted
-// (no blank gap to animate through); now that overscan is a real value, a smooth scroll across a
-// long unmounted span would visibly animate past mostly-empty spacer space. The final
-// `scrollIntoView` correction below stays smooth — by the time it runs the target is confirmed
-// mounted, so it's a small, real-content distance where smooth easing reads as intentional.
+// Issue #1748 (stage: windowing): the virtualizer-level write mode stays `behavior: 'auto'`; a NATIVE
+// 'smooth' scroll across a long unmounted span is compositor-driven and would sweep blank spacer while
+// mounting everything it passes. Issue #2342: the motion is JS-driven instead (utils/jumpMotion.js): an
+// eased tween for a short distance, an instant move next to the target plus a short settle for a long one,
+// always ending in the exact scrollToIndex + mount-confirm. `motion: 'none'` keeps a jump instant (the
+// search keeper's and the retries' corrections). The final `scrollIntoView` correction below stays smooth —
+// by the time it runs the target is confirmed mounted, so it's a small, real-content distance.
 // Issue #2100: a jump-navigation scroll (gutter chip click, turn jump button, deep-link) is a
 // deliberate user-triggered action even though it fires no wheel/touch/keydown/mousedown event
 // of its own — without this, the resulting 'scroll' event would be gated out as untrusted, so
@@ -1199,7 +1286,7 @@ function cancelSearchJump() {
 watch(() => messageSearch.isOpen.value, (open) => {
   if (!open) { navigationSeq++; cancelSearchJump(); stopKeeper() }
 })
-watch(viewSessionId, () => { navigationSeq++; handledLink = null; linkSeq++; cancelSearchJump(); stopKeeper(); stopLaunchPulse() })
+watch(viewSessionId, () => { navigationSeq++; handledLink = null; linkSeq++; cancelSearchJump(); stopKeeper(); stopLaunchPulse(); cancelPendingPulse(); virtualNav.cancelMotion('session') })
 watch(() => messageSearch.query.value, () => { stopKeeper(); clearActiveHighlight() })
 
 function isUnloadedHit(match) {
@@ -1291,6 +1378,7 @@ let lastUserScrollAt = 0
 function noteUserScroll() {
   lastUserScrollAt = performance.now()
   stopKeeper()
+  cancelPendingPulse()
 }
 
 async function keepHighlight(match, seq) {
@@ -1331,7 +1419,7 @@ async function keepHighlight(match, seq) {
       } else {
         const index = matchRowIndex(match)
         if (index != null) {
-          await scrollToItemIndexTrusted(index, { align: 'center', behavior: 'auto' })
+          await scrollToItemIndexTrusted(index, { align: 'center', behavior: 'auto', motion: 'none' }) // a correction: no animation, no pulse
         }
       }
     }
@@ -1724,6 +1812,8 @@ onMounted(() => {
 
 onUnmounted(() => {
   stopLaunchPulse()
+  cancelPendingPulse()
+  virtualNav.cancelMotion('unmount')
   const el = messagesArea.value
   if (el) {
     el.removeEventListener('wheel', renewGestureWindow)
@@ -1786,6 +1876,8 @@ onDeactivated(() => {
   handledLink = null // re-entering the view with a link lands again
   linkSeq++
   stopLaunchPulse()
+  cancelPendingPulse()
+  virtualNav.cancelMotion('deactivate')
   if (viewSessionId.value) {
     sessionStore.saveScrollPosition(viewSessionId.value, computeTopmostVisiblePosition())
   }
