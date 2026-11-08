@@ -130,6 +130,10 @@ class NameResolver:
         """Record a name already known from a listing (no extra call later)."""
         self._convs.put((relay_id, channel_id), ConversationDesc(name=clean_name(name)))
 
+    def seed_user(self, relay_id: str, user_id: str, name: str | None) -> None:
+        """Record a name already known from a listing (no extra call later)."""
+        self._users.put((relay_id, user_id), clean_name(name))
+
     async def conversation(
         self, adapter: RelayAdapter, relay_id: str, channel_id: str
     ) -> ConversationDesc | None:

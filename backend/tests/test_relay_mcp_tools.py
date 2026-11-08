@@ -138,7 +138,7 @@ async def test_channel_name_and_user_resolution(env):
     assert not dm.get("is_error")
     assert env.adapter.calls[-1][1] == SELF_DM
     bad = await env.tools.handle_post("s1", "post", {"channel": "#nope-nope", "text": "hi"})
-    assert err_code(bad) == "channel_unresolved"
+    assert err_code(bad) == "name_not_found"
 
 
 async def test_blocked_by_name_is_resolved_then_denied(env):

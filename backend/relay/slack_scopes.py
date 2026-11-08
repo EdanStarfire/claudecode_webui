@@ -32,6 +32,7 @@ METHOD_SCOPES: dict[str, tuple[str, ...]] = {
     "conversations.replies": _HISTORY,
     "conversations.info": _READ,
     "users.conversations": _READ,
+    "conversations.list": _READ,
     "conversations.mark": _WRITE,
     "conversations.open": ("im:write", "mpim:write"),
     "files.getUploadURLExternal": ("files:write",),
@@ -39,6 +40,7 @@ METHOD_SCOPES: dict[str, tuple[str, ...]] = {
     "reactions.add": ("reactions:write",),
     "search.messages": ("search:read",),
     "users.info": ("users:read",),
+    "users.list": ("users:read",),
 }
 
 # scope -> reason shown in the setup guide.
@@ -59,7 +61,7 @@ USER_SCOPES_REQUIRED: dict[str, str] = {
     "files:write": "Upload files you choose to share (upload_file).",
     "reactions:write": "Add emoji reactions (react).",
     "search:read": "Search messages in conversations the policy allows (search).",
-    "users:read": "Resolve user names for prompts and the audit log.",
+    "users:read": "Resolve user names for prompts and the audit log; find people and resolve @name (find_channels, post).",
 }
 
 # Alternatives, not part of the manifest: Slack is moving search to granular scopes.

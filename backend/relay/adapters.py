@@ -13,6 +13,7 @@ from dataclasses import dataclass
 
 from .policy import PolicyModel
 from .slack_policy import (
+    SLACK_DISCOVERY_TOOLS,
     SLACK_POLICY_MODEL,
     SLACK_TOOL_ACTIONS,
     SLACK_WRITE_TOOLS,
@@ -26,6 +27,7 @@ class AdapterSpec:
     tool_actions: dict[str, str | None]  # tool -> policy action (None = scope-filtered)
     write_tools: frozenset[str]
     policy_model: PolicyModel
+    discovery_tools: frozenset[str] = frozenset()  # audited minimally (no contents)
 
     @property
     def tool_prefix(self) -> str:
@@ -38,6 +40,7 @@ SLACK_SPEC = AdapterSpec(
     tool_actions=SLACK_TOOL_ACTIONS,
     write_tools=SLACK_WRITE_TOOLS,
     policy_model=SLACK_POLICY_MODEL,
+    discovery_tools=SLACK_DISCOVERY_TOOLS,
 )
 
 SPECS: dict[str, AdapterSpec] = {"slack": SLACK_SPEC}

@@ -26,8 +26,12 @@ SLACK_TOOL_ACTIONS: dict[str, str | None] = {
     "upload_file": "send",
     "react": "send",
     "search": None,
+    # Identity and discovery are read-only metadata: no policy, no prompt, never a send right.
+    "get_identity": None,
+    "find_channels": None,
 }
 SLACK_WRITE_TOOLS = frozenset({"post", "reply", "upload_file", "react", "mark_read"})
+SLACK_DISCOVERY_TOOLS = frozenset({"get_identity", "find_channels"})
 
 _ALLOW = Decision(ALLOW)
 _PROMPT = Decision(PROMPT)

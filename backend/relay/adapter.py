@@ -78,6 +78,10 @@ class UserInfo:
     id: str
     name: str | None = None  # best display name: display_name, else real_name, else handle
     is_bot: bool = False
+    display_name: str | None = None
+    real_name: str | None = None
+    handle: str | None = None  # the Slack ``name`` field
+    deleted: bool = False
 
 
 EventHandler = Callable[[Any], Awaitable[None]]
@@ -126,6 +130,16 @@ class RelayAdapter(Protocol):
     async def list_conversations(
         self, types: str = "public_channel,private_channel,mpim,im", limit: int = 200
     ) -> list[ConversationInfo]: ...
+
+    async def list_channels(
+        self, types: str = "public_channel,private_channel", limit: int = 1000
+    ) -> list[ConversationInfo]:
+        """Workspace channels (``conversations.list``): includes public channels not joined."""
+        ...
+
+    async def list_users(self, limit: int = 5000) -> list[UserInfo]:
+        """Workspace members (``users.list``), deleted ones flagged."""
+        ...
 
     async def open_dm(self, user_id: str) -> str: ...
 

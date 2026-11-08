@@ -342,8 +342,8 @@ secret is deleted, `has_*_token` turns false and `*_secret_missing` true (tools 
   must be restarted): `post`, `reply`, `read_thread`, `search`,
   `upload_file`, `react`, `mark_read` (no edit/delete). Attached by `session_launcher` only when the
   effective config has `relay_id` and the relay has a user token. `mcp__relay_slack` is deliberately **not** in the
-  auto-allow list, so every call reaches the permission callback. `channel` accepts an ID, `#name`, or a user ID
-  (`U…`, DM via `conversations.open`) and is resolved to a canonical ID before any policy check.
+  auto-allow list, so every call reaches the permission callback. `channel` accepts an ID, `#name`, `@name`, or a user ID
+  (`U…`, DM via `conversations.open`) and is resolved to a canonical ID before any policy check (see 1c-ii below).
 - **Two gates, one decision** (`relay/gate.py`): the permission pre-hook
   (`relay/permission_bridge.py`, top of `permission_callback` for `mcp__relay_slack__*`) allows reads and `auto` sends
   without UI, denies `blocked` / `read_only`-send and `!handle` text, and prompts for `ask` / unlisted channels
@@ -389,6 +389,42 @@ secret is deleted, `has_*_token` turns false and `*_secret_missing` true (tools 
 - **Audit** (`relay/audit.py`): `data/relays/{relay_id}/audit.jsonl`, 10 MB x 5 rotation, whitelisted fields only
   (text is a sha256 + 200-char preview), covers post/reply/upload/react/mark_read outcomes, denied attempts and
   policy changes; `GET /api/relays/{id}/audit`.
+### Self-DM marker, identity and discovery (outbound stage 1c-ii)
+
+- **Marker**: the relay (never the agent) prefixes every `post` / `reply` / `upload_file` comment sent into the owner's
+  self-DM with `SELF_DM_MARKER` = `:robot_face: [cc-agent]` (`relay/safety.py`), in `text` AND in the first visible section
+  block (Slack renders blocks, not `text`, when both exist; the marker counts against the 3000-char section and 35000-char
+  body limits). It is keyed on the **resolved channel ID** (D-id, owner `U…` and `@<owner name>` all end in the same
+  `D…`), never agent-controlled; text already starting with a marker is not double-prefixed. `has_agent_marker()` accepts
+  the shortcode and U+1F916 (+ optional U+FE0F) followed by `[cc-agent]`, NFKC / zero-width / bidi tolerant, case-insensitive.
+  **Inbound rule (stage 3): an instruction is a self-DM message from the owner AND with no `app_id`/`bot_id` AND without the
+  marker.** A human typing the marker only demotes their own message to untrusted content (fails safe).
+- **Self-DM identification** (`relay/selfdm.py`): in-memory cache (keyed by owner) -> `RelayRecord.self_dm_channel_id`
+  (persisted, not secret, in the public record; set on credential save / Test connection / OAuth, cleared when the owner
+  changes) -> `open_dm(owner)` (then persisted). A send whose resolved target is a `D…` and whose self-DM cannot be
+  determined (no owner, `open_dm` failure, nothing persisted) **fails closed**: `self_dm_unresolved`, audited as denied,
+  nothing sent. `C…`/`G…` targets are never affected.
+- **`get_identity`** (no policy, no prompt): `{owner_user_id, self_dm_channel_id, workspace_id}` outside the fence (plus a
+  note when the self-DM is unknown), `display_name` / `workspace_name` inside the nonce fence.
+- **`find_channels`** (`relay/directory.py`, `RelayDirectory`; reused by stage 2b): `query?`, `kinds?` (`public`, `private`,
+  `dm`, `group_dm`, `person`; default without `person`), `limit` (<= 50, default 20), opaque offset `cursor`. Case/diacritic-
+  insensitive substring on **names only** (no topics). Each entry `{id, kind, name, policy}` (`policy` null = unlisted;
+  **blocked ones are hidden** and not counted; a `person`'s policy is its DM's, null when the DM is unknown); the whole entry
+  list is inside the nonce fence, the counts / `next_cursor` outside. `person` requires a query of >= 2 characters
+  (`query_required`). Read-only metadata: it never grants a send right (the gate and grants still apply to a later send).
+  The directory caches a conversations snapshot (`conversations.list` public/private incl. channels the owner has not
+  joined, `users.conversations` for DMs, TTL 5 min) and a people snapshot (`users.list`, TTL 10 min), each bounded to 5000
+  entries, refreshed single-flight, kept stale on error, with a 60 s failure back-off and forced refreshes (a name that is
+  missing) at most every 10 s.
+- **`@name` / `#name`** (`RelayPolicyGate.resolve_channel`): exact match, case/diacritic-insensitive (NFKC casefold), on
+  display name, real name or handle (people; deleted excluded) or channel name; never prefix-guessed. One match -> ID
+  (`open_dm` for a person), several -> `name_ambiguous` (candidates **inside the fence** as a third result block, none in the
+  refusal text), none -> `name_not_found` after one forced refresh; if `users.list` is not permitted the error says to use
+  IDs. Resolution happens before any policy check; the permission pre-hook lets name-lookup failures through to the handler
+  (nothing is sent) so the structured refusal with the fenced candidates reaches the agent.
+- **Audit**: `get_identity` / `find_channels` are recorded minimally (`query_sha256`, 40-char `query_preview`, `kinds`,
+  `result_count`; no contents, no channel names). `self_dm_unresolved` denials go through the normal denied path.
+
 ### Settings UI and Slack app manifest (UI stage 2a)
 
 - **UI**: Settings -> Library -> Relays (`/settings/relays`, `LibraryRelaysSection.vue`) creates the one Slack relay,
