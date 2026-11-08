@@ -99,6 +99,16 @@ describe('RelayChannelPicker', () => {
     w.unmount()
   })
 
+  it('a pasted ID with a leading # still offers the ID row; typing @ clears stale rows at once', async () => {
+    const w = mk()
+    await w.find('[data-testid="relay-picker-input"]').setValue('#C0PASTED01')
+    await vi.runAllTimersAsync()
+    expect(w.find('[data-testid="relay-picker-paste"]').exists()).toBe(true)
+    await w.find('[data-testid="relay-picker-input"]').setValue('@')
+    expect(w.findAll('.picker-row:not([data-testid="relay-picker-paste"])').length).toBe(0)
+    w.unmount()
+  })
+
   it('plain text searches the default kinds (no kinds param)', async () => {
     const w = mk()
     await w.find('input').trigger('focus')

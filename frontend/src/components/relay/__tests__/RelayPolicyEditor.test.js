@@ -208,8 +208,8 @@ describe('RelayPolicyEditor (local)', () => {
   })
 })
 
-describe('RelayPolicyEditor layout contract', () => {
-  it('a row is one line: tag, truncating label with full text in the title, strip, reset', async () => {
+describe('RelayPolicyEditor row structure', () => {
+  it('a row holds exactly tag, label (full text in the title), strip, reset: no second line', async () => {
     const w = await mountLive({ [A]: { policy: 'v1', source: 'session' } })
     const row = w.find(`[data-testid="relay-policy-row-${A}"]`)
     expect(row.attributes('title')).toBe(`#name-${A} · ${A}`)
@@ -217,5 +217,17 @@ describe('RelayPolicyEditor layout contract', () => {
     const kids = [...row.element.children].map(c => c.className.split(' ')[0])
     expect(kids).toEqual(['source-marker', 'row-label', 'policy-strip', 'field-reset-btn'])
     expect(row.find('select').exists()).toBe(false)
+  })
+})
+
+describe('RelayPolicyStrip keyboard', () => {
+  it('has one tab stop and arrows move the selection', async () => {
+    const w = await mountLive({ [A]: { policy: 'v2', source: 'session' } })
+    apiMock.put.mockResolvedValue(payload({ [A]: { policy: 'v3', source: 'session' } }))
+    const row = w.find(`[data-testid="relay-policy-row-${A}"]`)
+    expect(row.findAll('.strip-btn').map(b => b.attributes('tabindex'))).toEqual(['-1', '0', '-1'])
+    await row.find('.policy-strip').trigger('keydown', { key: 'ArrowRight' })
+    await flushPromises()
+    expect(apiMock.put).toHaveBeenCalledWith(`/api/sessions/s1/relays/r1/policies/${A}`, { policy: 'v3' })
   })
 })

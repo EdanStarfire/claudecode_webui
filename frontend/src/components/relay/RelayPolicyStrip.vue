@@ -1,5 +1,5 @@
 <template>
-  <div class="policy-strip" role="radiogroup" :aria-label="label" :class="{ disabled }" data-testid="relay-policy-strip">
+  <div ref="group" class="policy-strip" role="radiogroup" :aria-label="label" :class="{ disabled }" data-testid="relay-policy-strip" @keydown="onKey">
     <button
       v-for="v in model.values"
       :key="v"
@@ -8,6 +8,7 @@
       class="strip-btn"
       :class="{ selected: v === modelValue }"
       :aria-checked="String(v === modelValue)"
+      :tabindex="v === current ? 0 : -1"
       :aria-label="v"
       :title="model.value_help?.[v] ? `${v}: ${model.value_help[v]}` : v"
       :disabled="disabled"
@@ -21,14 +22,30 @@
 </template>
 
 <script setup>
+import { computed, ref } from 'vue'
+
 /** Single-selection toggle strip over the policy model's values (icon + word; icon only on phones). */
-defineProps({
+const props = defineProps({
   model: { type: Object, required: true },
   modelValue: { type: String, default: '' },
   label: { type: String, default: 'Policy' },
   disabled: { type: Boolean, default: false },
 })
-defineEmits(['update:modelValue'])
+const emit = defineEmits(['update:modelValue'])
+
+const group = ref(null)
+// radio contract: one tab stop (the selected value, else the first), arrows move and select
+const current = computed(() => (props.model.values.includes(props.modelValue) ? props.modelValue : props.model.values[0]))
+
+function onKey(event) {
+  const step = { ArrowRight: 1, ArrowDown: 1, ArrowLeft: -1, ArrowUp: -1 }[event.key]
+  if (!step || props.disabled) return
+  event.preventDefault()
+  const values = props.model.values
+  const next = values[(values.indexOf(current.value) + step + values.length) % values.length]
+  emit('update:modelValue', next)
+  group.value?.querySelector(`[data-testid="relay-policy-opt-${next}"]`)?.focus()
+}
 </script>
 
 <style scoped>

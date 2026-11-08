@@ -124,7 +124,7 @@ const needMore = computed(() => parsed.value.kinds?.[0] === 'person' && parsed.v
 
 const pastedTarget = computed(() => {
   const pattern = props.policyModel?.target_pattern
-  const text = query.value.trim()
+  const text = query.value.trim().replace(/^[#@]/, '')
   if (!pattern || !text) return null
   try {
     return new RegExp(pattern).test(text) ? text : null
@@ -193,6 +193,10 @@ function loadMore() {
 
 function onInput() {
   open.value = true
+  if (needMore.value) { // nothing to search yet: drop the previous results at once
+    rows.value = []
+    nextCursor.value = null
+  }
   clearTimeout(timer)
   timer = setTimeout(() => search(true), DEBOUNCE_MS)
 }
