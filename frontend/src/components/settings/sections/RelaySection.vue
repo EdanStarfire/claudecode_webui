@@ -45,6 +45,25 @@
         {{ relayNotAttachedReason }}
       </p>
 
+      <div v-if="policyEditorRelayId" class="policy-block" data-testid="relay-policy-block">
+        <RelayPolicyEditor
+          v-if="isSessionMode"
+          :key="policyEditorRelayId"
+          mode="live"
+          :session-id="entityId"
+        />
+        <RelayPolicyEditor
+          v-else-if="policyModel"
+          :key="policyEditorRelayId"
+          mode="local"
+          :relay-id="policyEditorRelayId"
+          :policy-model="policyModel"
+          :model-value="ownPolicies"
+          :inherited="inheritedPolicies"
+          @update:model-value="handleField('relay_channel_policies', $event)"
+        />
+      </div>
+
       <div v-if="isSessionMode" class="handle-block" data-testid="relay-handle-block">
         <FieldRenderer
           :field="HANDLE_FIELD"
@@ -79,6 +98,8 @@ import SettingsToolbar from '../SettingsToolbar.vue'
 import FieldSection from '../../configuration/fields/FieldSection.vue'
 import FieldRenderer from '../../configuration/fields/FieldRenderer.vue'
 import { useRelayStore } from '@/stores/relay'
+import RelayPolicyEditor from '../../relay/RelayPolicyEditor.vue'
+import { normalizePolicies } from '@/utils/relayPolicies'
 import { useRestartRequired } from '@/composables/useRestartRequired'
 import { FIELD_SCHEMAS } from '../../configuration/fields/fieldSchemas.js'
 import { useEditSectionFieldStates } from '@/composables/useEditSectionFieldStates'
@@ -91,8 +112,9 @@ const PROFILE_AREA = 'relay'
 const SECTION_KEY  = 'relay'
 
 // relay_handle is session-tier only and saved through its own endpoint (the backend keeps
-// the handle independent of the whole-config PATCH). relay_channel_policies is managed by
-// the policy editor. Neither is ever submitted by this form's Save.
+// the handle independent of the whole-config PATCH). relay_channel_policies is edited by the
+// policy editor: live (own endpoints) on a session, own-tier only in the form on profiles,
+// templates and schedules. A session's Save never submits either.
 const HANDLE_FIELD = {
   key: 'relay_handle',
   label: 'Handle',
@@ -167,7 +189,8 @@ const mergedConfig = computed(() => {
 const isDirty = computed(() => settingsStore.dirtyAreas.has(areaKey.value))
 const saving  = ref(false)
 
-const relayFields = FIELD_SCHEMAS.relay
+// The policy field is rendered by the policy editor below, which needs the own tier alone.
+const relayFields = FIELD_SCHEMAS.relay.filter(f => f.key !== 'relay_channel_policies')
 
 const { fieldStates } = useEditSectionFieldStates({
   isTemplateMode, isSessionMode, isScheduleMode, baseConfig, draft,
@@ -180,6 +203,46 @@ const { reasons: restartReasons, openRestart } = useRestartRequired(entityId)
 const relayNotAttachedReason = computed(() =>
   isSessionMode.value ? restartReasons.value.find(r => r.startsWith('Relay attached')) || '' : ''
 )
+
+// ── Channel policies ──────────────────────────────────────────────────────
+const soleRelayId = computed(() => (relayStore.relays.length === 1 ? relayStore.relays[0].relay_id : null))
+const policyModel = ref(null)
+
+// Live editing needs the relay to be the session's saved effective relay (the endpoints 409
+// otherwise); the forms use the (possibly unsaved) selection.
+const savedEffectiveRelayId = computed(() =>
+  ({ ...profileBase.value, ...templateBase.value, ...baseConfig.value }).relay_id || null)
+const policyEditorRelayId = computed(() => {
+  if (!entity.value || isPermanentScheduleNA.value || isNotApplicable.value) return ''
+  const id = isSessionMode.value ? savedEffectiveRelayId.value : mergedConfig.value.relay_id
+  return id && relayStore.relays.some(r => r.relay_id === id) ? id : ''
+})
+
+watch(policyEditorRelayId, async (id) => {
+  policyModel.value = null
+  if (!id || isSessionMode.value) return
+  try {
+    policyModel.value = await relayStore.getPolicyModel(id)
+  } catch {
+    policyModel.value = null
+  }
+}, { immediate: true })
+
+// Own tier only: the draft when edited, else this entity's own saved value (never the merged one).
+const ownPolicies = computed(() => normalizePolicies(
+  'relay_channel_policies' in (draft.value || {}) ? draft.value.relay_channel_policies : baseConfig.value.relay_channel_policies,
+  soleRelayId.value,
+))
+const inheritedPolicies = computed(() => {
+  const out = {}
+  const id = policyEditorRelayId.value
+  const tiers = [['profile', profileBase.value], ['template', templateBase.value]]
+  for (const [source, cfg] of tiers) {
+    const entries = normalizePolicies(cfg?.relay_channel_policies, soleRelayId.value)[id] || {}
+    for (const [target, policy] of Object.entries(entries)) out[target] = { policy, source }
+  }
+  return out
+})
 
 // ── Server-side validation messages ───────────────────────────────────────
 const saveError = ref('')
@@ -337,6 +400,7 @@ onMounted(() => {
 
 .restart-note { font-size: 12px; color: #d29922; margin: 8px 0 0; }
 .handle-block { margin-top: 8px; }
+.policy-block { margin-top: 14px; padding-top: 12px; border-top: 1px solid var(--bs-border-color); }
 .handle-actions { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; padding: 6px 0 0 232px; }
 @container settings-area (max-width: 599px) {
   .handle-actions { padding-left: 0; }

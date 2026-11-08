@@ -108,6 +108,8 @@
               <div>{{ permissionModeDisplay }}</div>
             </div>
 
+            <RelaySessionInfoRow :session-id="sessionId" @navigate="hideModal" />
+
             <!-- Proxy Status (only when proxy enabled) -->
             <div v-if="currentProxyStatus" class="mb-3">
               <h6 class="text-muted">Proxy Status</h6>
@@ -313,6 +315,7 @@ import { useMcpConfigStore } from '@/stores/mcpConfig'
 import { useProxyStore } from '@/stores/proxy'
 import { api } from '@/utils/api'
 import McpServerDetail from './McpServerDetail.vue'
+import RelaySessionInfoRow from '../relay/RelaySessionInfoRow.vue'
 
 const sessionStore = useSessionStore()
 const uiStore = useUIStore()
@@ -333,6 +336,7 @@ const addDirectoryError = ref(null)
 const isArchiveView = ref(false)
 const showActualInitData = ref(false)
 let modalInstance = null
+function hideModal() { modalInstance?.hide() }
 
 // Model display names mapping
 const modelDisplayNames = {

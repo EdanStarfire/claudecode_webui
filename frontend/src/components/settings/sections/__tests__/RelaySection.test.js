@@ -59,12 +59,20 @@ describe('RelaySection', () => {
     expect(rendered.wrapper.find('[data-testid="relay-handle-block"]').exists()).toBe(false)
   })
 
-  it('renders the policy count read-only and never submits policies or handle', async () => {
+  it('mounts the live policy editor and never submits policies or handle', async () => {
     apiMock.patch.mockResolvedValue({ session: {} })
+    const base = apiMock.get.getMockImplementation()
+    apiMock.get.mockImplementation((url) => url === '/api/sessions/sess-1/relay'
+      ? Promise.resolve({
+        relay_id: 'r1', policy_model: { values: ['a', 'b'], target_pattern: '^C[0-9A-Z]+$' },
+        policies: { C0AAAAAAAA: { policy: 'a', source: 'session' } },
+      })
+      : base(url))
     const { wrapper, settingsStore } = await mountSession({
       relay_id: 'r1', relay_handle: 'ea', relay_channel_policies: { r1: { C0AAAAAAAA: 'auto' } },
     })
-    expect(wrapper.find('[data-testid="relay-policies-summary"]').text()).toContain('1')
+    expect(wrapper.find('[data-testid="relay-policy-editor"]').exists()).toBe(true)
+    expect(wrapper.find('[data-testid="relay-policy-row-C0AAAAAAAA"]').exists()).toBe(true)
     settingsStore.setField('session:sess-1:relay', 'relay_footer_enabled', false)
     await wrapper.vm.save()
     await flush()
@@ -107,5 +115,60 @@ describe('RelaySection', () => {
     expect(wrapper.find('[data-testid="restart-required-chip"]').exists()).toBe(true)
     const { wrapper: w2 } = await mountSession({ relay_id: 'r1' }, { restart_required: [] })
     expect(w2.find('[data-testid="relay-not-attached-note"]').exists()).toBe(false)
+  })
+})
+
+
+describe('RelaySection policy editor on template and profile tiers', () => {
+  const MODEL = { values: ['blocked', 'ask'], target_pattern: '^C[0-9A-Z]{6,}$', target_label: 'Slack channel ID' }
+
+  async function mountTemplate(config, profileConfig = null) {
+    apiMock.get.mockImplementation((url) => {
+      if (url === '/api/relays') return Promise.resolve({ relays: [{ relay_id: 'r1', name: 'Slack' }] })
+      if (url === '/api/relays/r1/policy-model') return Promise.resolve(MODEL)
+      if (url.includes('/conversations')) return Promise.resolve({ labels: {} })
+      return Promise.resolve({ templates: [], profiles: [] })
+    })
+    const url = '/settings/template/t1/relay'
+    const rendered = renderWithStores(RelaySection, { routes: ROUTES, initialRoute: url })
+    const { useTemplateStore } = await import('@/stores/template')
+    const { useProfileStore } = await import('@/stores/profile')
+    const { useSettingsStore } = await import('@/stores/settings')
+    useTemplateStore(rendered.pinia).templates?.set?.('t1', {
+      template_id: 't1', name: 'T', config, profile_ids: profileConfig ? { relay: 'p1' } : {},
+    })
+    if (profileConfig) {
+      useProfileStore(rendered.pinia).profiles?.set?.('p1', { profile_id: 'p1', name: 'P', area: 'relay', config: profileConfig })
+    }
+    await rendered.router.push(url)
+    await flush()
+    await flush()
+    return { ...rendered, settingsStore: useSettingsStore(rendered.pinia) }
+  }
+
+  it('emits only own-tier nested entries into the draft, never inherited keys', async () => {
+    const { wrapper, settingsStore } = await mountTemplate(
+      { relay_id: 'r1', relay_channel_policies: { r1: { C0OWNOWN01: 'ask' } } },
+      { relay_channel_policies: { r1: { C0FROMPROF1: 'blocked' } } },
+    )
+    expect(wrapper.find('[data-testid="relay-policy-row-C0FROMPROF1"] [data-testid="relay-policy-tier"]').text()).toBe('profile')
+    expect(wrapper.find('[data-testid="relay-policy-row-C0OWNOWN01"] [data-testid="relay-policy-tier"]').exists()).toBe(false)
+    await wrapper.find('[data-testid="relay-policy-row-C0OWNOWN01"] [data-testid="relay-policy-select"]').setValue('blocked')
+    expect(settingsStore.getDraft('template:t1:relay').relay_channel_policies)
+      .toEqual({ r1: { C0OWNOWN01: 'blocked' } })
+  })
+
+  it('overriding an inherited row writes an own entry for that target only', async () => {
+    const { wrapper, settingsStore } = await mountTemplate(
+      { relay_id: 'r1' }, { relay_channel_policies: { r1: { C0FROMPROF1: 'blocked' } } })
+    await wrapper.find('[data-testid="relay-policy-row-C0FROMPROF1"] [data-testid="relay-policy-select"]').setValue('ask')
+    expect(settingsStore.getDraft('template:t1:relay').relay_channel_policies).toEqual({ r1: { C0FROMPROF1: 'ask' } })
+  })
+
+  it('a legacy flat stored dict is read under the sole relay and written back nested', async () => {
+    const { wrapper, settingsStore } = await mountTemplate(
+      { relay_id: 'r1', relay_channel_policies: { C0LEGACY001: 'ask' } })
+    await wrapper.find('[data-testid="relay-policy-row-C0LEGACY001"] [data-testid="relay-policy-remove"]').trigger('click')
+    expect(settingsStore.getDraft('template:t1:relay').relay_channel_policies).toEqual({})
   })
 })

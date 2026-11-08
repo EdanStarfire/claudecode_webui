@@ -71,3 +71,65 @@ describe('relay store', () => {
     expect(apiMock.put).toHaveBeenCalledWith('/api/sessions/s1/relay/handle', { handle: 'h' })
   })
 })
+
+describe('relay store: policy editor / picker / audit helpers', () => {
+  beforeEach(() => {
+    setActivePinia(createPinia())
+    Object.values(apiMock).forEach(fn => fn.mockReset())
+  })
+
+  it('searchConversations maps params and unwraps structured errors', async () => {
+    const store = useRelayStore()
+    apiMock.get.mockResolvedValue({ entries: [] })
+    await store.searchConversations('r1', { q: 'dev', kinds: ['public', 'person'], cursor: 'o:20' })
+    expect(apiMock.get).toHaveBeenCalledWith('/api/relays/r1/conversations',
+      { params: { q: 'dev', kinds: 'public,person', limit: null, cursor: 'o:20' }, signal: undefined })
+    apiMock.get.mockRejectedValue(Object.assign(new Error('x'), { data: { detail: { code: 'query_required', message: 'Need 2' } } }))
+    await expect(store.searchConversations('r1', { q: 'a' })).rejects.toThrow('Need 2')
+  })
+
+  it('resolveLabels caches per relay+id, falls back to the ID and retries failures', async () => {
+    const store = useRelayStore()
+    apiMock.get.mockResolvedValueOnce({ labels: { C0AAAAAAA1: '#a' } })
+    expect(await store.resolveLabels('r1', ['C0AAAAAAA1'])).toEqual({ C0AAAAAAA1: '#a' })
+    await store.resolveLabels('r1', ['C0AAAAAAA1'])
+    expect(apiMock.get).toHaveBeenCalledTimes(1)
+    apiMock.get.mockRejectedValueOnce(new Error('down'))
+    expect(await store.resolveLabels('r1', ['C0BBBBBBB2'])).toEqual({ C0BBBBBBB2: 'C0BBBBBBB2' })
+    apiMock.get.mockResolvedValueOnce({ labels: { C0BBBBBBB2: '#b' } })
+    expect(await store.resolveLabels('r1', ['C0BBBBBBB2'])).toEqual({ C0BBBBBBB2: '#b' })
+  })
+
+  it('resolveLabels asks in chunks of 50', async () => {
+    const store = useRelayStore()
+    apiMock.get.mockResolvedValue({ labels: {} })
+    await store.resolveLabels('r1', Array.from({ length: 120 }, (_, i) => `C0X${String(i).padStart(6, '0')}`))
+    expect(apiMock.get).toHaveBeenCalledTimes(3)
+  })
+
+  it('setPolicy / removePolicy use the relay-qualified endpoints', async () => {
+    const store = useRelayStore()
+    apiMock.put.mockResolvedValue({ ok: 1 })
+    apiMock.delete.mockResolvedValue({ ok: 2 })
+    expect(await store.setPolicy('s1', 'r1', 'C0AAAAAAA1', 'ask')).toEqual({ ok: 1 })
+    expect(apiMock.put).toHaveBeenCalledWith('/api/sessions/s1/relays/r1/policies/C0AAAAAAA1', { policy: 'ask' })
+    await store.removePolicy('s1', 'r1', 'C0AAAAAAA1')
+    expect(apiMock.delete).toHaveBeenCalledWith('/api/sessions/s1/relays/r1/policies/C0AAAAAAA1')
+  })
+
+  it('loadAudit passes filters and returns the records', async () => {
+    const store = useRelayStore()
+    apiMock.get.mockResolvedValue({ records: [{ ts: 't' }] })
+    expect(await store.loadAudit('r1', { sessionId: 's1', channel: 'c', limit: 100, before: 't0' })).toEqual([{ ts: 't' }])
+    expect(apiMock.get).toHaveBeenCalledWith('/api/relays/r1/audit',
+      { params: { session_id: 's1', channel: 'c', limit: 100, before: 't0' } })
+  })
+
+  it('getPolicyModel is cached', async () => {
+    const store = useRelayStore()
+    apiMock.get.mockResolvedValue({ values: ['a'] })
+    await store.getPolicyModel('r1')
+    await store.getPolicyModel('r1')
+    expect(apiMock.get).toHaveBeenCalledTimes(1)
+  })
+})

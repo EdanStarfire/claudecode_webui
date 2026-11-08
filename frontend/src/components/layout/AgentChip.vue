@@ -60,6 +60,9 @@
       </svg>
     </div>
 
+    <!-- Relay (issue #2103): attached relay handle -->
+    <RelaySessionChip v-if="!isGhost && session.relay_summary" class="ac-relay-chip" :summary="session.relay_summary" />
+
     <!-- Proxy badge -->
     <div
       v-if="effectiveDockerProxyEnabled"
@@ -81,6 +84,7 @@ import { useScheduleStore } from '@/stores/schedule'
 import { useUIStore } from '@/stores/ui'
 import { useLongPress } from '@/composables/useLongPress'
 import { useSessionState } from '@/composables/useSessionState'
+import RelaySessionChip from '../relay/RelaySessionChip.vue'
 
 const props = defineProps({
   session: { type: Object, required: true },
@@ -331,6 +335,11 @@ function handleClick() {
   justify-content: center;
 }
 
+.ac-relay-chip {
+  position: absolute;
+  right: 5px;
+  bottom: 3px;
+}
 .ac-docker-badge {
   position: absolute;
   left: -3px;

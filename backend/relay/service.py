@@ -156,6 +156,48 @@ class RelayService:
             },
         }
 
+    # --------------------------------------------------------------- summary
+
+    async def compute_summary(self, info: SessionInfo) -> dict[str, Any] | None:
+        """Runtime session summary (in memory only: no Slack calls); None when no relay."""
+        relay_id = (await self.effective_attachment(info))["relay_id"]
+        record = self.relay_manager.relays.get(relay_id) if relay_id else None
+        if record is None:
+            return None
+        policies = await self.effective_relay_policies(info, relay_id)
+        return {
+            "relay_id": relay_id,
+            "adapter_type": record.adapter_type,
+            "handle": info.config.get("relay_handle"),
+            "policy_count": len(policies),
+        }
+
+    async def refresh_summary(self, session_id: str) -> None:
+        """Recompute and broadcast (on change) the session's ``relay_summary``."""
+        try:
+            info = await self._sessions.get_session_info(session_id)
+            if info is not None:
+                await self._sessions.set_relay_summary(
+                    session_id, await self.compute_summary(info)
+                )
+        except Exception:  # a summary must never fail the edit that triggered it
+            logger.exception("Relay summary refresh failed for session %s", session_id)
+
+    async def refresh_all_summaries(self) -> None:
+        for info in await self._sessions.list_sessions():
+            await self.refresh_summary(info.session_id)
+
+    async def refresh_for_template(self, template_id: str) -> None:
+        for info in await self._sessions.list_sessions():
+            if info.template_id == template_id:
+                await self.refresh_summary(info.session_id)
+
+    async def refresh_for_profile(self, profile_id: str) -> None:
+        """Sessions whose template references the profile."""
+        for template in await self._templates.list_templates():
+            if profile_id in (template.profile_ids or {}).values():
+                await self.refresh_for_template(template.template_id)
+
     # -------------------------------------------------------------- policies
 
     async def _require_attached_relay(self, session_id: str, relay_id: str):
@@ -179,6 +221,7 @@ class RelayService:
         await self._sessions.update_relay_policy(
             session_id, relay_id, target, policy, sole_relay_id=self._sole_relay_id()
         )
+        await self.refresh_summary(session_id)
 
     async def delete_policy(self, session_id: str, relay_id: str, target: str) -> None:
         spec = await self._require_attached_relay(session_id, relay_id)
@@ -186,6 +229,7 @@ class RelayService:
         await self._sessions.update_relay_policy(
             session_id, relay_id, target, None, sole_relay_id=self._sole_relay_id()
         )
+        await self.refresh_summary(session_id)
 
     # --------------------------------------------------------------- handles
 
@@ -201,6 +245,7 @@ class RelayService:
                 if previous and not self.handles.is_taken(previous):
                     self.handles.rebind(session_id, previous)
                 raise SessionNotFoundError(session_id)
+        await self.refresh_summary(session_id)
         return handle
 
     async def ensure_handle(self, session_id: str) -> str | None:
@@ -228,17 +273,20 @@ class RelayService:
         info = await self._sessions.get_session_info(session_id)
         if info is None:
             return None
+        handle = None
         try:
             if info.config.get("relay_handle") or (await self.effective_attachment(info))["relay_id"]:
-                return await self.ensure_handle(session_id)
+                handle = await self.ensure_handle(session_id)
         except Exception:  # never block a session start on handle bookkeeping
             logger.exception("Relay handle sync failed for session %s", session_id)
-        return None
+        await self.refresh_summary(session_id)
+        return handle
 
     async def initialize(self) -> None:
         """Load relay assets and build the handle index from persisted sessions."""
         await self.relay_manager.load()
         self.handles.build(self._sessions.iter_relay_handles())
+        await self.refresh_all_summaries()
 
     async def validate_session_config(self, session_id: str, config: dict) -> dict:
         """Validate a whole-config replacement; returns the config to persist.

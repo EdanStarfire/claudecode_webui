@@ -82,6 +82,9 @@ class SessionInfo:
     # Issue #2333: runtime-only reasons why a saved model-related change needs a restart.
     # Serialized in the session payload, but stripped from state.json and cleared on (re)start.
     restart_required: list[str] = field(default_factory=list)
+    # Issue #2103 (ui 2b): runtime-only relay summary {relay_id, adapter_type, handle,
+    # policy_count} or None; computed in memory by RelayService.refresh_summary, never persisted.
+    relay_summary: dict | None = None
     error_message: str | None = None
     # Structured ResultError fields (issue #1902) — additive, mirror error_message
     error_subtype: str | None = None
@@ -216,6 +219,7 @@ class SessionInfo:
             "project_id": self.project_id,
             "queue_config": self.queue_config,
             "queue_paused": self.queue_paused,
+            "relay_summary": self.relay_summary,
             "restart_required": list(self.restart_required),
             "role": self.role,
             "sdk_generated_name": self.sdk_generated_name,
@@ -1150,6 +1154,7 @@ class SessionManager:
             state_file = session_dir / "state.json"
             state = session.to_dict()
             state.pop("restart_required", None)  # issue #2333: runtime-only, never persisted
+            state.pop("relay_summary", None)  # issue #2103: runtime-only, never persisted
             write_alphabetized_json(state_file, state)
 
         except Exception as e:
@@ -1415,6 +1420,15 @@ class SessionManager:
         if not session or session.restart_required == reasons:
             return False
         session.restart_required = list(reasons)
+        await self._notify_metadata_change_callbacks(session_id)
+        return True
+
+    async def set_relay_summary(self, session_id: str, summary: dict | None) -> bool:
+        """Issue #2103: replace the runtime relay summary; broadcast only on change (no disk)."""
+        session = self._active_sessions.get(session_id)
+        if not session or session.relay_summary == summary:
+            return False
+        session.relay_summary = summary
         await self._notify_metadata_change_callbacks(session_id)
         return True
 

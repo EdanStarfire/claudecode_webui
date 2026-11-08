@@ -5,14 +5,18 @@ Responses never contain token values. Credentials are references to existing vau
 the record exposes the referenced secret NAMES plus has_* booleans (false when the secret is gone).
 """
 
+import asyncio
 from urllib.parse import urlparse
 
 from fastapi import APIRouter, HTTPException
 
 from shared.exception_handlers import handle_exceptions
 
+from ..relay.adapter import RelayError
 from ..relay.adapters import get_spec
+from ..relay.directory import DEFAULT_PAGE, DirectoryLookupError, entry_label
 from ..relay.handles import HandleConflictError
+from ..relay.safety import safe_error_code
 from ..relay.service import RelayNotAttachedError, SessionNotFoundError
 from ..relay.slack_scopes import build_manifest_response
 from ..relay_manager import (
@@ -30,6 +34,7 @@ from ._models import (
     RelayUpdateRequest,
 )
 
+MAX_LABEL_IDS = 50
 _LOCAL_HOSTS = {"localhost", "127.0.0.1", "::1"}
 
 
@@ -100,6 +105,7 @@ def build_router(webui) -> APIRouter:
     async def delete_relay(relay_id: str):
         if not await manager().delete_relay(relay_id):
             raise HTTPException(status_code=404, detail="Relay not found")
+        await service().refresh_all_summaries()
         return {"deleted": True}
 
     # ---- Credentials ----
@@ -163,6 +169,70 @@ def build_router(webui) -> APIRouter:
             raise HTTPException(status_code=404, detail="Relay not found")
         return {"relay_id": relay_id, "adapter_type": spec.adapter_type,
                 **spec.policy_model.describe()}
+
+    # ---- Conversations (settings UI picker and policy-row labels) ----
+
+    @router.get("/api/relays/{relay_id}/conversations")
+    @handle_exceptions("get relay conversations")
+    async def get_conversations(
+        relay_id: str,
+        q: str | None = None,
+        kinds: str | None = None,
+        limit: int = DEFAULT_PAGE,
+        cursor: str | None = None,
+        ids: str | None = None,
+    ):
+        """Searchable conversations/people for the policy editor, or labels for ``ids=``.
+
+        Session-agnostic: no policies are applied, so blocked and unlisted entries both appear
+        (the editor overlays status itself). Slack is only touched on a snapshot refresh.
+        """
+        if await manager().get_relay(relay_id) is None:
+            raise HTTPException(status_code=404, detail="Relay not found")
+        gate = webui.service.relay_gate
+        ctx = gate.relay_context(relay_id)
+        if ctx is None:
+            raise HTTPException(status_code=409, detail="Relay has no user token")
+
+        if ids is not None:
+            wanted = list(dict.fromkeys(i.strip() for i in ids.split(",") if i.strip()))
+            if len(wanted) > MAX_LABEL_IDS:
+                raise HTTPException(status_code=400, detail=f"At most {MAX_LABEL_IDS} ids")
+            try:
+                for target in wanted:
+                    ctx.spec.policy_model.validate_target(target)
+            except ValueError as e:
+                raise HTTPException(status_code=400, detail=str(e)) from e
+            sem = asyncio.Semaphore(5)
+
+            async def one(target: str) -> tuple[str, str]:
+                async with sem:
+                    return target, await gate.names.channel_label(
+                        ctx.adapter, relay_id, target, ctx.owner_user_id
+                    )
+
+            return {"labels": dict(await asyncio.gather(*(one(t) for t in wanted)))}
+
+        kind_list = tuple(k.strip() for k in kinds.split(",") if k.strip()) if kinds else None
+        try:
+            page = await gate.directory.search(
+                ctx, q, kind_list, limit, cursor, {}, with_dm_id=True
+            )
+        except DirectoryLookupError as e:
+            raise HTTPException(
+                status_code=400, detail={"code": e.code, "message": e.message}
+            ) from e
+        except RelayError as e:
+            raise HTTPException(
+                status_code=502,
+                detail={"code": safe_error_code(e.code), "message": "Slack lookup failed"},
+            ) from e
+        entries = []
+        for row in page.entries:
+            row = {k: v for k, v in row.items() if k != "policy"}
+            row["label"] = entry_label(row, ctx.owner_user_id)
+            entries.append(row)
+        return {"entries": entries, "next_cursor": page.next_cursor, "truncated": page.truncated}
 
     # ---- Audit log ----
 

@@ -309,7 +309,7 @@ export const FIELD_SCHEMAS = {
     {
       key: 'relay_channel_policies',
       label: 'Channel policies',
-      widget: 'relay-policies-summary',
+      widget: 'relay-policy-editor', // rendered by RelaySection (needs the own tier alone)
       defaultValue: null,
     },
   ],
