@@ -71,21 +71,11 @@
       <div v-if="isSessionMode" class="handle-block" data-testid="relay-handle-block">
         <FieldRenderer
           :field="HANDLE_FIELD"
-          :value="handleDraft"
+          :value="handleValue"
           :error="handleError"
           :show-badges="false"
-          @update:value="handleDraft = $event"
+          @update:value="handleField('relay_handle', $event)"
         />
-        <div class="handle-actions">
-          <button
-            type="button"
-            class="btn btn-sm btn-outline-primary"
-            :disabled="!handleDirty || handleSaving"
-            data-testid="relay-handle-save"
-            @click="saveHandle"
-          >{{ handleSaving ? 'Saving…' : 'Save handle' }}</button>
-          <small class="text-muted">Saved immediately, independent of the form's Save.</small>
-        </div>
       </div>
     </div>
   </div>
@@ -115,10 +105,10 @@ import { useScheduleSectionSave } from '@/composables/useScheduleSectionSave'
 const PROFILE_AREA = 'relay'
 const SECTION_KEY  = 'relay'
 
-// relay_handle is session-tier only and saved through its own endpoint (the backend keeps
-// the handle independent of the whole-config PATCH). relay_channel_policies is edited by the
-// policy editor: live (own endpoints) on a session, own-tier only in the form on profiles,
-// templates and schedules. A session's Save never submits either.
+// relay_handle is session-tier only: part of the form state, saved by the form's Save through
+// its own endpoint first (never via the whole-config PATCH). relay_channel_policies is edited by
+// the policy editor: live (own endpoints) on a session, own-tier only in the form on profiles,
+// templates and schedules; a session's Save never submits it.
 const HANDLE_FIELD = {
   key: 'relay_handle',
   label: 'Handle',
@@ -259,26 +249,29 @@ function attributeError(message) {
 }
 
 // ── Session handle ────────────────────────────────────────────────────────
+// Part of the form state (dirty guard, Save/Cancel). Saved through its dedicated endpoint (it
+// owns the 409 duplicate / 422 format rules) first in the save sequence, never via the
+// whole-config PATCH.
 const savedHandle = computed(() => entity.value?.config?.relay_handle || '')
-const handleDraft = ref('')
+const handleValue = computed(() => ('relay_handle' in (draft.value || {}) ? draft.value.relay_handle : savedHandle.value))
 const handleError = ref('')
-const handleSaving = ref(false)
-const handleDirty = computed(() => handleDraft.value !== savedHandle.value && handleDraft.value.trim() !== '')
 
-watch(savedHandle, (h) => { handleDraft.value = h }, { immediate: true })
-
-async function saveHandle() {
-  handleSaving.value = true
-  handleError.value = ''
-  try {
-    const { relay_handle: handle } = await relayStore.setSessionHandle(entityId.value, handleDraft.value.trim())
-    sessionStore.updateSession(entityId.value, { config: { ...(entity.value?.config || {}), relay_handle: handle } })
-    handleDraft.value = handle
-  } catch (err) {
-    handleError.value = err.message
-  } finally {
-    handleSaving.value = false
+/** Saves a changed handle; false (error shown under the field, draft kept) when it is rejected. */
+async function saveHandleIfChanged(d) {
+  if (!('relay_handle' in d)) return true
+  const wanted = String(d.relay_handle ?? '').trim()
+  delete d.relay_handle
+  if (wanted !== savedHandle.value) {
+    try {
+      const { relay_handle: handle } = await relayStore.setSessionHandle(entityId.value, wanted)
+      sessionStore.updateSession(entityId.value, { config: { ...(entity.value?.config || {}), relay_handle: handle } })
+    } catch (err) {
+      handleError.value = err.message
+      return false
+    }
   }
+  delete settingsStore.getDraft(areaKey.value).relay_handle
+  return true
 }
 
 const saveScheduleSessionConfig = useScheduleSectionSave({
@@ -319,8 +312,16 @@ async function handleSave() {
   saving.value = true
   saveError.value = ''
   fieldErrors.value = {}
+  handleError.value = ''
   try {
     const d = { ...draft.value }
+    if (isSessionMode.value) {
+      if (!(await saveHandleIfChanged(d))) return // nothing else is written; the form stays dirty
+      if (Object.keys(d).length === 0) {
+        settingsStore.markClean(areaKey.value)
+        return
+      }
+    }
     const keysToDelete = Object.keys(d).filter(k => d[k] === FIELD_RESET)
     for (const k of keysToDelete) delete d[k]
     if (isScheduleMode.value) {
@@ -360,6 +361,7 @@ async function handleSave() {
 function handleCancel() {
   saveError.value = ''
   fieldErrors.value = {}
+  handleError.value = ''
   settingsStore.discardDraft(areaKey.value)
 }
 
@@ -405,10 +407,6 @@ onMounted(() => {
 .restart-note { font-size: 12px; color: #d29922; margin: 8px 0 0; }
 .handle-block { margin-top: 8px; }
 .policy-block { margin-top: 14px; padding-top: 12px; border-top: 1px solid var(--bs-border-color); }
-.handle-actions { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; padding: 6px 0 0 232px; }
-@container settings-area (max-width: 599px) {
-  .handle-actions { padding-left: 0; }
-}
 
 .restart-chip {
   display: inline-flex;

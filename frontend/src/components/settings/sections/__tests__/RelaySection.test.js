@@ -91,21 +91,84 @@ describe('RelaySection', () => {
     expect(wrapper.find('[data-testid="field-error-relay_footer_template"]').text()).toContain('!word')
   })
 
-  it('saves the handle via the dedicated endpoint and shows a 409 inline', async () => {
-    apiMock.put.mockRejectedValueOnce(new Error("relay_handle 'ea' is already in use"))
-    const { wrapper } = await mountSession({ relay_handle: 'old' })
-    const input = wrapper.find('[data-testid="relay-handle-block"] input')
-    await input.setValue('ea')
-    await wrapper.find('[data-testid="relay-handle-save"]').trigger('click')
-    await flush()
-    expect(apiMock.put).toHaveBeenCalledWith('/api/sessions/sess-1/relay/handle', { handle: 'ea' })
-    expect(wrapper.find('[data-testid="relay-handle-block"]').text()).toContain('already in use')
+  describe('session handle is part of the form', () => {
+    const AREA = 'session:sess-1:relay'
 
-    apiMock.put.mockResolvedValueOnce({ relay_handle: 'ea2' })
-    await input.setValue('ea2')
-    await wrapper.find('[data-testid="relay-handle-save"]').trigger('click')
-    await flush()
-    expect(wrapper.find('[data-testid="relay-handle-block"]').text()).not.toContain('already in use')
+    it('has no separate Save handle button or immediate-save text', async () => {
+      const { wrapper } = await mountSession({ relay_handle: 'old' })
+      expect(wrapper.find('[data-testid="relay-handle-save"]').exists()).toBe(false)
+      expect(wrapper.text()).not.toContain('Save handle')
+      expect(wrapper.text()).not.toContain('Saved immediately')
+    })
+
+    it('editing the handle makes the form dirty and arms the navigation guard', async () => {
+      const { wrapper, settingsStore } = await mountSession({ relay_handle: 'old' })
+      expect(settingsStore.dirtyAreas.has(AREA)).toBe(false)
+      await wrapper.find('[data-testid="relay-handle-block"] input').setValue('ea')
+      expect(settingsStore.dirtyAreas.has(AREA)).toBe(true)
+      expect(settingsStore.requestNavigation('/somewhere')).toBe(true)
+      expect(settingsStore.pendingNavigation).toBe('/somewhere')
+    })
+
+    it('Save calls the dedicated endpoint first, then the config PATCH without relay_handle', async () => {
+      const order = []
+      apiMock.put.mockImplementation(() => { order.push('handle'); return Promise.resolve({ relay_handle: 'ea' }) })
+      apiMock.patch.mockImplementation(() => { order.push('patch'); return Promise.resolve({ session: {} }) })
+      const { wrapper, settingsStore } = await mountSession({ relay_id: 'r1', relay_handle: 'old' })
+      await wrapper.find('[data-testid="relay-handle-block"] input').setValue('ea')
+      settingsStore.setField(AREA, 'relay_footer_enabled', false)
+      await wrapper.vm.save()
+      await flush()
+      expect(apiMock.put).toHaveBeenCalledWith('/api/sessions/sess-1/relay/handle', { handle: 'ea' })
+      expect(order).toEqual(['handle', 'patch'])
+      expect('relay_handle' in apiMock.patch.mock.calls[0][1].config).toBe(false)
+      expect(settingsStore.dirtyAreas.has(AREA)).toBe(false)
+    })
+
+    it('a handle-only change saves through the endpoint alone (no config PATCH) and cleans the form', async () => {
+      apiMock.put.mockResolvedValue({ relay_handle: 'ea' })
+      const { wrapper, settingsStore } = await mountSession({ relay_handle: 'old' })
+      await wrapper.find('[data-testid="relay-handle-block"] input').setValue('ea')
+      await wrapper.vm.save()
+      await flush()
+      expect(apiMock.patch).not.toHaveBeenCalled()
+      expect(settingsStore.dirtyAreas.has(AREA)).toBe(false)
+    })
+
+    it.each([
+      [409, "relay_handle 'ea' is already in use"],
+      [422, 'Handle must be lowercase letters, digits and dashes'],
+    ])('a %s from the handle endpoint shows inline, writes nothing else and keeps the form dirty', async (_s, message) => {
+      apiMock.put.mockRejectedValueOnce(new Error(message))
+      const { wrapper, settingsStore } = await mountSession({ relay_id: 'r1', relay_handle: 'old' })
+      await wrapper.find('[data-testid="relay-handle-block"] input').setValue('ea')
+      settingsStore.setField(AREA, 'relay_footer_enabled', false)
+      await wrapper.vm.save()
+      await flush()
+      expect(wrapper.find('[data-testid="relay-handle-block"]').text()).toContain(message)
+      expect(apiMock.patch).not.toHaveBeenCalled()
+      expect(settingsStore.dirtyAreas.has(AREA)).toBe(true)
+      expect(settingsStore.getDraft(AREA).relay_handle).toBe('ea')
+
+      // fixing the value and saving again succeeds and clears the error
+      apiMock.put.mockResolvedValueOnce({ relay_handle: 'ea2' })
+      apiMock.patch.mockResolvedValue({ session: {} })
+      await wrapper.find('[data-testid="relay-handle-block"] input').setValue('ea2')
+      await wrapper.vm.save()
+      await flush()
+      expect(wrapper.find('[data-testid="relay-handle-block"]').text()).not.toContain(message)
+      expect(apiMock.patch).toHaveBeenCalledTimes(1)
+    })
+
+    it('Cancel discards the handle edit', async () => {
+      const { wrapper, settingsStore } = await mountSession({ relay_handle: 'old' })
+      const input = wrapper.find('[data-testid="relay-handle-block"] input')
+      await input.setValue('ea')
+      wrapper.vm.cancel()
+      await flush()
+      expect(input.element.value).toBe('old')
+      expect(settingsStore.dirtyAreas.has(AREA)).toBe(false)
+    })
   })
 
   it('shows the not-attached note and restart chip only when the backend reports the reason', async () => {

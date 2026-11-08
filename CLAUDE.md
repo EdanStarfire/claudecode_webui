@@ -433,7 +433,7 @@ secret is deleted, `has_*_token` turns false and `*_secret_missing` true (tools 
   **Test connection** and holds the credentials form (two pickers listing vault secrets by NAME, a "Create a secret" link to Library -> Secrets; no token is ever typed here) plus the collapsible **Slack app setup** guide (steps, manifest with Copy /
   Download, scope list with reasons). OAuth sits under "Advanced" and renders only on https or localhost. The **Relay**
   area (`RelaySection.vue`, profile area `relay`) is available in profile, template and session editors: relay select,
-  footer on/off + text, session-only handle (own endpoint), channel policy editor (UI stage 2b, below).
+  footer on/off + text, session-only handle (saved by the form's Save through its own endpoint, first in the sequence), channel policy editor (UI stage 2b, below).
 - **Manifest**: `GET /api/relays/{id}/manifest` is generated from `backend/relay/slack_scopes.py` (`USER_SCOPES_*`,
   `USER_EVENTS_INBOUND`, `METHOD_SCOPES`). `test_relay_manifest.py` fails when `slack_adapter.py` calls a Slack method
   with no scope entry or a scope is unused; OAuth requests the same scope list. The app is "ccWebUI Relay", acts with the
