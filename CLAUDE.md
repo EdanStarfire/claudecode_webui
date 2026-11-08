@@ -305,10 +305,25 @@ secret is deleted, `has_*_token` turns false and `*_secret_missing` true (tools 
   for the inbound stage.
 - **Attachment cascade**: `relay_id`, `relay_footer_enabled`, `relay_footer_template`, `relay_channel_policies`,
   `relay_handle` (new profile area `relay`; `relay_handle` is session-tier only).
-- **Channel policy** (`blocked | read_only | ask | auto`; unlisted = unset) is decided by the pure
-  `relay/policy.py::decide()`. Effective policies are merged **per channel key** across profile < template <
-  session and read **live per call** (`RelayService.effective_policies`), not from the start-time
-  `SessionConfig`, so runtime edits (`PUT /api/sessions/{id}/relay/policies/{channel}`) need no restart.
+- **Adapter registry** (`relay/adapters.py`, issues #2103/#2346): one `AdapterSpec` per adapter type
+  (`server_name` `relay_slack`, tool -> policy-action map, write tools, `policy_model`); `parse_relay_tool()` /
+  `is_relay_tool()` recognise `mcp__relay_{adapter}__*` of a registered adapter. The gate, permission bridge,
+  launcher and MCP factory read the spec; nothing outside `slack_policy.py` / the Slack spec knows Slack's values.
+- **Policy model is adapter-owned.** `relay/policy.py` holds only the adapter-neutral parts (`Decision`, kinds,
+  `EffectivePolicy`, per-key `merge_policies`, `PolicyModel` protocol, `normalize_policies`). Slack's
+  (`blocked | read_only | ask | auto`; unlisted = unset; targets are channel IDs `^[CGDW][A-Z0-9]{6,}$`) lives in
+  `relay/slack_policy.py` (`SlackPolicyModel`, `decide()` matrix). `GET /api/relays/{id}/policy-model` returns
+  `describe()` (`values`, `target_pattern`, `actions`) for editors.
+- **Policy config is keyed by relay**: `relay_channel_policies: {relay_id: {target: policy}}` at profile, template and
+  session tier. Effective policies are merged **per target within each relay** across profile < template < session and
+  read **live per call** (`RelayService.effective_policies` / `effective_relay_policies`), not from the start-time
+  `SessionConfig`, so runtime edits need no restart. Writes accept the nested shape only (flat input and unknown
+  relay ids -> 422/400, targets/values validated by that relay's adapter model); a stored legacy flat dict is
+  normalised **at read time** (wrapped under the sole relay, else dropped with a warning) and upgraded on the first
+  runtime edit. Dangling relay ids are ignored on read.
+- **Policy REST** is relay-qualified: `PUT|DELETE /api/sessions/{id}/relays/{relay_id}/policies/{target}` (404 session or
+  relay, 409 relay not the session's attached relay, 422 adapter validation). The adapter-less
+  `/api/sessions/{id}/relay/policies/{channel}` route was removed (no alias).
 - **Handle**: `relay_handle` is assigned once on first attachment (`slugify_name(name)`, numeric suffix on
   collision), is unique Backend-wide, editable (409 on duplicate), and **never re-derived on rename** (it is
   independent of `session.slug`). A whole-config PATCH that omits `relay_handle` / `relay_channel_policies`
@@ -322,18 +337,20 @@ secret is deleted, `has_*_token` turns false and `*_secret_missing` true (tools 
 
 ### Outbound tools, permission integration, audit (outbound stage 1b)
 
-- **MCP server `relay`** (`backend/mcp/relay_mcp_tools.py`): `post`, `reply`, `read_thread`, `search`,
+- **MCP server `relay_slack`** (`backend/mcp/relay_mcp_tools.py`; tools `mcp__relay_slack__*`; **hard break**: the former
+  `mcp__relay__*` names have no alias, saved allow rules for them stop matching and sessions started before the upgrade
+  must be restarted): `post`, `reply`, `read_thread`, `search`,
   `upload_file`, `react`, `mark_read` (no edit/delete). Attached by `session_launcher` only when the
-  effective config has `relay_id` and the relay has a user token. `mcp__relay` is deliberately **not** in the
+  effective config has `relay_id` and the relay has a user token. `mcp__relay_slack` is deliberately **not** in the
   auto-allow list, so every call reaches the permission callback. `channel` accepts an ID, `#name`, or a user ID
   (`U…`, DM via `conversations.open`) and is resolved to a canonical ID before any policy check.
 - **Two gates, one decision** (`relay/gate.py`): the permission pre-hook
-  (`relay/permission_bridge.py`, top of `permission_callback` for `mcp__relay__*`) allows reads and `auto` sends
+  (`relay/permission_bridge.py`, top of `permission_callback` for `mcp__relay_slack__*`) allows reads and `auto` sends
   without UI, denies `blocked` / `read_only`-send and `!handle` text, and prompts for `ask` / unlisted channels
   (`tool_call.permission.relay_prompt`, kinds `ask_send` / `choose_policy`, UI `RelayPermissionPrompt.vue`).
   The **handler re-checks policy and is authoritative**: an `ask` send or unlisted channel needs a one-shot
   grant (`relay/grants.py`; bound to session + tool + canonical input hash, 60 s, single use) that only an
-  approved prompt creates. Under `bypassPermissions`, pre-approved allow rules (`mcp__relay__post` in
+  approved prompt creates. Under `bypassPermissions`, pre-approved allow rules (`mcp__relay_slack__post` in
   settings) or `deny_unattended_permission_prompts` no prompt can be answered, so
   `ask` / unlisted sends **fail closed** (`approval_required` / `policy_unset`); set the channel to `auto`
   explicitly or switch permission mode. Reads of already-readable channels work in every mode.

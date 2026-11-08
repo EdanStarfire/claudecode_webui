@@ -241,53 +241,103 @@ async def test_issue_2103_relay_secrets_not_assignable(relay_env):
 
 
 @pytest.mark.asyncio
-async def test_issue_2103_policy_edit_visible_immediately_with_tier_merge(relay_env):
+async def test_issue_2346_policy_edit_visible_immediately_with_tier_merge(relay_env):
     client = relay_env["client"]
     coordinator = relay_env["coordinator"]
-    # profile (relay area) + template + session tiers
+    rid = (await client.post("/api/relays", json={"name": "Rig"})).json()["relay_id"]
+    # profile (relay area) + template + session tiers, policies keyed by relay
     profile = (await client.post("/api/profiles", json={
         "name": "relay-base", "area": "relay",
-        "config": {"relay_channel_policies": {CHANNEL: "read_only", OTHER: "blocked"}},
+        "config": {"relay_channel_policies": {rid: {CHANNEL: "read_only", OTHER: "blocked"}}},
     })).json()
     template = (await client.post("/api/templates", json={
         "name": "T", "profile_ids": {"relay": profile["profile_id"]},
-        "config": {"relay_channel_policies": {CHANNEL: "ask"}},
+        "config": {"relay_id": rid, "relay_channel_policies": {rid: {CHANNEL: "ask"}}},
     })).json()
     project = await relay_env["create_test_project"]()
     session = await relay_env["create_test_session"](project["project_id"], template_id=template["template_id"])
     sid = session["session_id"]
+    base = f"/api/sessions/{sid}/relays/{rid}/policies"
 
     got = (await client.get(f"/api/sessions/{sid}/relay")).json()
+    assert got["adapter_type"] == "slack"
+    assert got["policy_model"]["values"] == ["blocked", "read_only", "ask", "auto"]
     assert got["policies"] == {
         CHANNEL: {"policy": "ask", "source": "template"},
         OTHER: {"policy": "blocked", "source": "profile"},
     }
 
     # Session promotion of one channel keeps the other tiers' entries (per-key merge)
-    r = await client.put(f"/api/sessions/{sid}/relay/policies/{CHANNEL}", json={"policy": "auto"})
+    r = await client.put(f"{base}/{CHANNEL}", json={"policy": "auto"})
     assert r.status_code == 200, r.text
     assert r.json()["policies"][CHANNEL] == {"policy": "auto", "source": "session"}
     assert r.json()["policies"][OTHER]["source"] == "profile"
-
-    # effective_policies (what 1b's gate reads) sees it with no restart
     info = await coordinator.session_manager.get_session_info(sid)
-    eff = await coordinator.relay_service.effective_policies(info)
+    assert info.config["relay_channel_policies"] == {rid: {CHANNEL: "auto"}}
+
+    # effective_policies (what the gate reads) sees it with no restart
+    eff = await coordinator.relay_service.effective_relay_policies(info, rid)
     assert eff[CHANNEL].policy == "auto" and eff[OTHER].policy == "blocked"
 
     # Template edit is also live (no start-time snapshot)
     await client.put(f"/api/templates/{template['template_id']}",
-                     json={"config": {"relay_channel_policies": {CHANNEL: "read_only", "C0555555555": "ask"}}})
-    eff = await coordinator.relay_service.effective_policies(info)
+                     json={"config": {"relay_id": rid, "relay_channel_policies": {rid: {CHANNEL: "read_only", "C0555555555": "ask"}}}})
+    eff = await coordinator.relay_service.effective_relay_policies(info, rid)
     assert eff["C0555555555"].policy == "ask" and eff[CHANNEL].policy == "auto"
 
-    # DELETE removes the session key, falling back to the lower tier
-    r = await client.delete(f"/api/sessions/{sid}/relay/policies/{CHANNEL}")
+    # DELETE removes the session key (and prunes the empty relay entry), falling back
+    r = await client.delete(f"{base}/{CHANNEL}")
     assert r.json()["policies"][CHANNEL] == {"policy": "read_only", "source": "template"}
+    info = await coordinator.session_manager.get_session_info(sid)
+    assert "relay_channel_policies" not in info.config
 
-    # Validation
-    assert (await client.put(f"/api/sessions/{sid}/relay/policies/general", json={"policy": "auto"})).status_code == 422
-    assert (await client.put(f"/api/sessions/{sid}/relay/policies/{CHANNEL}", json={"policy": "yes"})).status_code == 422
-    assert (await client.put("/api/sessions/nope/relay/policies/" + CHANNEL, json={"policy": "auto"})).status_code == 404
+    # Validation by the relay's adapter: 422 target/value, 404 session/relay, 409 not attached
+    assert (await client.put(f"{base}/general", json={"policy": "auto"})).status_code == 422
+    assert (await client.put(f"{base}/{CHANNEL}", json={"policy": "yes"})).status_code == 422
+    assert (await client.put(f"/api/sessions/nope/relays/{rid}/policies/{CHANNEL}", json={"policy": "auto"})).status_code == 404
+    assert (await client.put(f"/api/sessions/{sid}/relays/nope/policies/{CHANNEL}", json={"policy": "auto"})).status_code == 404
+    # The adapter-less route is gone (no alias)
+    assert (await client.put(f"/api/sessions/{sid}/relay/policies/{CHANNEL}", json={"policy": "auto"})).status_code in (404, 405)
+    assert (await client.delete(f"/api/sessions/{sid}/relay/policies/{CHANNEL}")).status_code in (404, 405)
+
+    # Adapter-owned policy model
+    pm = (await client.get(f"/api/relays/{rid}/policy-model")).json()
+    assert pm["adapter_type"] == "slack" and pm["actions"] == ["read", "mark_read", "send", "search"]
+    assert (await client.get("/api/relays/nope/policy-model")).status_code == 404
+
+
+@pytest.mark.asyncio
+async def test_issue_2346_unattached_relay_is_409_and_flat_input_rejected(relay_env):
+    client = relay_env["client"]
+    rid = (await client.post("/api/relays", json={"name": "Rig"})).json()["relay_id"]
+    project = await relay_env["create_test_project"]()
+    sid = (await relay_env["create_test_session"](project["project_id"]))["session_id"]
+    url = f"/api/sessions/{sid}/relays/{rid}/policies/{CHANNEL}"
+    assert (await client.put(url, json={"policy": "auto"})).status_code == 409
+    # Flat shape and unknown relay ids are rejected on every write path
+    r = await client.patch(f"/api/sessions/{sid}", json={"config": {"relay_channel_policies": {CHANNEL: "auto"}}})
+    assert r.status_code == 422
+    r = await client.patch(f"/api/sessions/{sid}", json={"config": {"relay_channel_policies": {"ghost": {CHANNEL: "auto"}}}})
+    assert r.status_code == 422
+
+
+@pytest.mark.asyncio
+async def test_issue_2346_legacy_flat_dict_read_wrapped_and_upgraded_on_first_edit(relay_env):
+    client = relay_env["client"]
+    coordinator = relay_env["coordinator"]
+    rid = (await client.post("/api/relays", json={"name": "Rig"})).json()["relay_id"]
+    project = await relay_env["create_test_project"]()
+    sid = (await relay_env["create_test_session"](project["project_id"], relay_id=rid))["session_id"]
+    # Simulate a pre-upgrade stored flat dict
+    info = await coordinator.session_manager.get_session_info(sid)
+    info.config["relay_channel_policies"] = {CHANNEL: "read_only"}
+    got = (await client.get(f"/api/sessions/{sid}/relay")).json()
+    assert got["policies"] == {CHANNEL: {"policy": "read_only", "source": "session"}}
+    assert info.config["relay_channel_policies"] == {CHANNEL: "read_only"}  # read does not rewrite
+    r = await client.put(f"/api/sessions/{sid}/relays/{rid}/policies/{OTHER}", json={"policy": "ask"})
+    assert r.status_code == 200
+    info = await coordinator.session_manager.get_session_info(sid)
+    assert info.config["relay_channel_policies"] == {rid: {CHANNEL: "read_only", OTHER: "ask"}}
 
 
 @pytest.mark.asyncio
@@ -329,10 +379,10 @@ async def test_issue_2103_handle_assignment_duplicates_and_rename_stability(rela
     assert info2.config["relay_handle"] == "builder"
 
     # ...and so do runtime-set policies
-    await client.put(f"/api/sessions/{s2['session_id']}/relay/policies/{CHANNEL}", json={"policy": "auto"})
+    await client.put(f"/api/sessions/{s2['session_id']}/relays/{relay['relay_id']}/policies/{CHANNEL}", json={"policy": "auto"})
     assert (await client.patch(cfg_url, json={"config": {"relay_id": relay["relay_id"]}})).status_code == 200
     info2 = await coordinator.session_manager.get_session_info(s2["session_id"])
-    assert info2.config["relay_channel_policies"] == {CHANNEL: "auto"}
+    assert info2.config["relay_channel_policies"] == {relay["relay_id"]: {CHANNEL: "auto"}}
 
     # Deleting the session frees the handle
     assert (await client.delete(f"/api/sessions/{s1['session_id']}")).status_code == 200

@@ -157,13 +157,13 @@ async def test_not_attached(tmp_path):
 
 async def test_server_registered_when_attached(env):
     server = await env.tools.create_server_if_attached("s1")
-    assert server is not None and server["name"] == "relay"
+    assert server is not None and server["name"] == "relay_slack"
 
 
 async def test_live_policy_edit_needs_no_restart(env):
     first = await env.tools.handle_post("s1", "post", {"channel": CH_RO, "text": "hi"})
     assert err_code(first) == "send_not_permitted"
-    env.info.config["relay_channel_policies"][CH_RO] = "auto"
+    env.info.config["relay_channel_policies"]["relay1"][CH_RO] = "auto"
     assert not (await env.tools.handle_post("s1", "post", {"channel": CH_RO, "text": "hi"})).get(
         "is_error"
     )
@@ -383,5 +383,5 @@ async def test_failed_upload_validation_does_not_consume_grant(env):
 
 async def test_prompt_preview_shows_full_text(env):
     text = "a" * 2000 + "TAIL"
-    result = await env.gate.evaluate("s1", "mcp__relay__post", {"channel": CH_ASK, "text": text})
+    result = await env.gate.evaluate("s1", "mcp__relay_slack__post", {"channel": CH_ASK, "text": text})
     assert result.prompt["text_preview"] == text

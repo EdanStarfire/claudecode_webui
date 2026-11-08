@@ -384,7 +384,7 @@ class TemplateManager:
         relay_id: str | None = None,
         relay_footer_enabled: bool | None = None,
         relay_footer_template: str | None = None,
-        relay_channel_policies: dict[str, str] | None = None,
+        relay_channel_policies: dict[str, dict[str, str]] | None = None,
         # Deprecated: template_overrides absorbed into config
         template_overrides: dict[str, Any] | None = None,
     ) -> MinionTemplate:

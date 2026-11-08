@@ -165,6 +165,11 @@ async def resolve_effective_config(
         if k in CONFIG_FIELDS:
             config_data[k] = v
 
+    # Relay policies are read live per call by RelayService (never from this start-time snapshot),
+    # which also tolerates legacy flat dicts and dangling relay ids. Keep them out of the snapshot so
+    # SessionConfig's write-path validation cannot fail a session start on stored data.
+    config_data.pop("relay_channel_policies", None)
+
     # Filter orphaned keys (fields removed from CONFIG_FIELDS in a future release)
     known = {k: v for k, v in config_data.items() if k in CONFIG_FIELDS}
     known["template_id"] = session_info.template_id

@@ -49,6 +49,7 @@ from .relay.grants import GrantStore
 from .relay.handles import RelayHandleIndex
 from .relay.permission_bridge import RelayPermissionBridge
 from .relay.service import RelayService
+from .relay.validation import register_relay_manager
 from .relay_manager import RelayManager
 from .secrets_service import SecretsService
 from .session_manager import SessionManager
@@ -155,6 +156,7 @@ def build_core_managers(
     pending_store = PendingStore()
 
     relay_manager = RelayManager(data_dir, credential_vault)
+    register_relay_manager(relay_manager)  # write-path policy validation resolves adapters
     secrets_service.relay_manager = relay_manager  # relay credentials count as secret usage
     relay_service = RelayService(
         relay_manager, RelayHandleIndex(session_manager.has_session),

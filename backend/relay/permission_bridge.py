@@ -1,6 +1,6 @@
 """Permission-callback integration for relay tools (issue #2103).
 
-``pre_hook`` runs at the top of the permission callback for ``mcp__relay__*`` tools:
+``pre_hook`` runs at the top of the permission callback for ``mcp__relay_{adapter}__*`` tools:
 reads on readable channels and ``auto`` sends are allowed without UI, blocked/read_only
 sends are denied, and ``ask`` / unlisted channels fall through into the normal prompt flow
 carrying ``relay_prompt`` metadata. ``apply_response`` turns the user's answer
@@ -12,9 +12,10 @@ from __future__ import annotations
 import logging
 from typing import TYPE_CHECKING, Any
 
+from .adapters import is_relay_tool
 from .audit import RelayAuditLog
-from .gate import WRITE_TOOLS, GateResult, RelayPolicyGate, tool_short_name
-from .policy import DENY, POLICY_VALUES, decide
+from .gate import GateResult, RelayPolicyGate, tool_short_name
+from .policy import DENY
 
 if TYPE_CHECKING:
     from .service import RelayService
@@ -32,14 +33,14 @@ class RelayPermissionBridge:
 
     @staticmethod
     def handles(tool_name: str) -> bool:
-        return tool_name.startswith("mcp__relay__")
+        return is_relay_tool(tool_name)
 
     async def pre_hook(self, session_id: str, tool_name: str, args: dict[str, Any]) -> GateResult:
         result = await self.gate.evaluate(session_id, tool_name, args)
         short = tool_short_name(tool_name)
-        if result.kind == DENY and short in WRITE_TOOLS:
+        if result.kind == DENY and short is not None:
             ctx = await self.gate.context(session_id)
-            if ctx is not None:
+            if ctx is not None and short in ctx.spec.write_tools:
                 await self.audit.record(
                     ctx.relay_id, session_id=session_id, handle=ctx.handle,
                     session_name=ctx.session_info.name, tool=short, channel_id=result.channel_id,
@@ -65,8 +66,12 @@ class RelayPermissionBridge:
         promote = bool(choice.get("promote"))
         channel_id = gate_result.channel_id
         action = gate_result.action or "send"
+        ctx = await self.gate.context(session_id)
+        if ctx is None:
+            return {"behavior": "deny", "message": "No relay is attached to this session."}
+        model = ctx.spec.policy_model
 
-        if chosen is not None and chosen not in POLICY_VALUES:
+        if chosen is not None and chosen not in model.values:
             return {"behavior": "deny", "message": "Invalid relay policy choice."}
         approval = "prompt_allow"
         new_policy: str | None = None
@@ -79,8 +84,8 @@ class RelayPermissionBridge:
             new_policy = chosen
         if new_policy is not None:
             approval = "prompt_promote"
-            decision = decide(new_policy, action)
-            await self.service.set_policy(session_id, channel_id, new_policy)
+            decision = model.decide(new_policy, action)
+            await self.service.set_policy(session_id, ctx.relay_id, channel_id, new_policy)
             await self._audit_policy_change(session_id, channel_id, gate_result, new_policy)
             if decision.kind == DENY:
                 return {

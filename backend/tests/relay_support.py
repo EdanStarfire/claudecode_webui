@@ -19,7 +19,7 @@ from backend.relay.audit import RelayAuditLog
 from backend.relay.gate import RelayPolicyGate
 from backend.relay.grants import GrantStore
 from backend.relay.permission_bridge import RelayPermissionBridge
-from backend.relay.policy import EffectivePolicy
+from backend.relay.policy import EffectivePolicy, normalize_policies
 
 SELF_DM = "D0SELF0001"
 OWNER = "U0OWNER001"
@@ -115,12 +115,14 @@ class FakeSessions:
     async def get_session_directory(self, session_id):
         return self.session_dir
 
-    async def update_relay_policy(self, session_id, channel_id, policy):
-        policies = dict(self.info.config.get("relay_channel_policies") or {})
+    async def update_relay_policy(self, session_id, relay_id, target, policy, *, sole_relay_id=None):
+        policies = normalize_policies(self.info.config.get("relay_channel_policies"), sole_relay_id)
+        entry = dict(policies.get(relay_id) or {})
         if policy is None:
-            policies.pop(channel_id, None)
+            entry.pop(target, None)
         else:
-            policies[channel_id] = policy
+            entry[target] = policy
+        policies[relay_id] = entry
         self.info.config["relay_channel_policies"] = policies
         return True
 
@@ -131,10 +133,10 @@ class FakeService:
     def __init__(self, sessions: FakeSessions) -> None:
         self.sessions = sessions
 
-    async def effective_policies(self, info):
+    async def effective_relay_policies(self, info, relay_id):
         return {
             c: EffectivePolicy(p, "session")
-            for c, p in (info.config.get("relay_channel_policies") or {}).items()
+            for c, p in (info.config.get("relay_channel_policies") or {}).get(relay_id, {}).items()
         }
 
     async def effective_attachment(self, info):
@@ -148,13 +150,13 @@ class FakeService:
     async def ensure_handle(self, session_id):
         return self.sessions.info.config.get("relay_handle")
 
-    async def set_policy(self, session_id, channel_id, policy):
-        await self.sessions.update_relay_policy(session_id, channel_id, policy)
+    async def set_policy(self, session_id, relay_id, channel_id, policy):
+        await self.sessions.update_relay_policy(session_id, relay_id, channel_id, policy)
 
 
 class FakeRelayManager:
     def __init__(self, adapter: FakeAdapter, relay_id: str = "relay1") -> None:
-        self.relays = {relay_id: SimpleNamespace(owner_user_id=OWNER)}
+        self.relays = {relay_id: SimpleNamespace(owner_user_id=OWNER, adapter_type="slack")}
         self._adapter = adapter
 
     def has_token(self, relay_id, kind="user"):
@@ -171,12 +173,12 @@ def make_env(tmp_path: Path, policies: dict | None = None, **config):
     cfg = {
         "relay_id": "relay1",
         "relay_handle": "my-agent",
-        "relay_channel_policies": dict(
+        "relay_channel_policies": {"relay1": dict(
             policies
             if policies is not None
             else {SELF_DM: "auto", CH_AUTO: "auto", CH_ASK: "ask", CH_RO: "read_only",
                   CH_BLOCKED: "blocked"}
-        ),
+        )},
         **config,
     }
     info = SimpleNamespace(

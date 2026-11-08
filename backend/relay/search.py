@@ -14,7 +14,7 @@ from typing import TYPE_CHECKING, Any
 from .adapter import RelayMessage
 from .events import is_agent_message
 from .gate import GateError
-from .policy import ALLOW, decide
+from .policy import ALLOW
 
 if TYPE_CHECKING:
     from .gate import RelayContext, RelayPolicyGate
@@ -58,8 +58,9 @@ class RelaySearchService:
         self._gate = gate
 
     async def readable_and_listed(self, ctx: RelayContext) -> tuple[list[str], set[str]]:
-        policies = await self._gate.service.effective_policies(ctx.session_info)
-        readable = [c for c, p in policies.items() if decide(p.policy, "search").kind == ALLOW]
+        policies = await self._gate.service.effective_relay_policies(ctx.session_info, ctx.relay_id)
+        model = ctx.spec.policy_model
+        readable = [c for c, p in policies.items() if model.decide(p.policy, "search").kind == ALLOW]
         return readable, set(policies)
 
     async def _unlisted_count(self, ctx: RelayContext, listed: set[str]) -> int | None:

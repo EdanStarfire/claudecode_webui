@@ -80,7 +80,7 @@ describe('PermissionPrompt relay variant', () => {
   it('sends relay_choice through the permission REST call', async () => {
     const user = userEvent.setup()
     const toolCall = {
-      id: 'use-relay-1', name: 'mcp__relay__post', input: { channel: 'C0ASK00001', text: 'hello team' },
+      id: 'use-relay-1', name: 'mcp__relay_slack__post', input: { channel: 'C0ASK00001', text: 'hello team' },
       status: 'permission_required', backendStatus: 'awaiting_permission',
       permissionRequestId: 'req-9', suggestions: [], isExpanded: true, relayPrompt: ASK
     }

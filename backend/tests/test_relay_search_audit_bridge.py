@@ -149,17 +149,17 @@ def test_strip_trigger_syntax(raw, clean):
 async def test_pre_hook_matrix(tmp_path):
     env = make_env(tmp_path)
     hook = env.bridge.pre_hook
-    assert (await hook("s1", "mcp__relay__read_thread", {"channel": CH_ASK, "thread_ts": TS})).kind == "allow"
-    assert (await hook("s1", "mcp__relay__search", {"query": "x"})).kind == "allow"
-    assert (await hook("s1", "mcp__relay__post", {"channel": CH_AUTO, "text": "x"})).kind == "allow"
-    assert (await hook("s1", "mcp__relay__post", {"channel": CH_RO, "text": "x"})).kind == "deny"
-    assert (await hook("s1", "mcp__relay__post", {"channel": CH_BLOCKED, "text": "x"})).kind == "deny"
-    ask = await hook("s1", "mcp__relay__post", {"channel": CH_ASK, "text": "hello there"})
+    assert (await hook("s1", "mcp__relay_slack__read_thread", {"channel": CH_ASK, "thread_ts": TS})).kind == "allow"
+    assert (await hook("s1", "mcp__relay_slack__search", {"query": "x"})).kind == "allow"
+    assert (await hook("s1", "mcp__relay_slack__post", {"channel": CH_AUTO, "text": "x"})).kind == "allow"
+    assert (await hook("s1", "mcp__relay_slack__post", {"channel": CH_RO, "text": "x"})).kind == "deny"
+    assert (await hook("s1", "mcp__relay_slack__post", {"channel": CH_BLOCKED, "text": "x"})).kind == "deny"
+    ask = await hook("s1", "mcp__relay_slack__post", {"channel": CH_ASK, "text": "hello there"})
     assert ask.kind == "prompt" and ask.prompt["kind"] == "ask_send"
     assert ask.prompt["channel_name"] == "ask-ch" and ask.prompt["text_preview"] == "hello there"
-    unl = await hook("s1", "mcp__relay__read_thread", {"channel": CH_UNLISTED, "thread_ts": TS})
+    unl = await hook("s1", "mcp__relay_slack__read_thread", {"channel": CH_UNLISTED, "thread_ts": TS})
     assert unl.kind == "choose_policy" and unl.prompt["kind"] == "choose_policy"
-    trig = await hook("s1", "mcp__relay__post", {"channel": CH_ASK, "text": "!deploy"})
+    trig = await hook("s1", "mcp__relay_slack__post", {"channel": CH_ASK, "text": "!deploy"})
     assert trig.kind == "deny" and trig.code == "trigger_syntax_refused"  # never prompts
     assert env.adapter.network_calls() == []
     denied = await env.audit.query("relay1")
@@ -169,12 +169,12 @@ async def test_pre_hook_matrix(tmp_path):
 async def test_ask_prompt_allow_once_then_prompts_again(tmp_path):
     env = make_env(tmp_path)
     args = {"channel": CH_ASK, "text": "hello"}
-    gr = await env.bridge.pre_hook("s1", "mcp__relay__post", args)
-    resp = await env.bridge.apply_response("s1", "mcp__relay__post", args, gr, {"behavior": "allow"})
+    gr = await env.bridge.pre_hook("s1", "mcp__relay_slack__post", args)
+    resp = await env.bridge.apply_response("s1", "mcp__relay_slack__post", args, gr, {"behavior": "allow"})
     assert resp["behavior"] == "allow"
     assert not (await env.tools.handle_post("s1", "post", args)).get("is_error")
-    assert env.info.config["relay_channel_policies"][CH_ASK] == "ask"
-    assert (await env.bridge.pre_hook("s1", "mcp__relay__post", args)).kind == "prompt"
+    assert env.info.config["relay_channel_policies"]["relay1"][CH_ASK] == "ask"
+    assert (await env.bridge.pre_hook("s1", "mcp__relay_slack__post", args)).kind == "prompt"
     rec = (await env.audit.query("relay1"))[0]
     assert rec["approval"] == "prompt_allow" and rec["outcome"] == "ok"
 
@@ -182,16 +182,16 @@ async def test_ask_prompt_allow_once_then_prompts_again(tmp_path):
 async def test_promote_persists_session_policy_and_next_post_needs_no_prompt(tmp_path):
     env = make_env(tmp_path)
     args = {"channel": CH_ASK, "text": "hello"}
-    gr = await env.bridge.pre_hook("s1", "mcp__relay__post", args)
+    gr = await env.bridge.pre_hook("s1", "mcp__relay_slack__post", args)
     resp = await env.bridge.apply_response(
-        "s1", "mcp__relay__post", args, gr,
+        "s1", "mcp__relay_slack__post", args, gr,
         {"behavior": "allow", "relay_choice": {"promote": True}},
     )
     assert resp["behavior"] == "allow"
-    assert env.info.config["relay_channel_policies"][CH_ASK] == "auto"
+    assert env.info.config["relay_channel_policies"]["relay1"][CH_ASK] == "auto"
     assert not (await env.tools.handle_post("s1", "post", args)).get("is_error")
     nxt = {"channel": CH_ASK, "text": "second"}
-    assert (await env.bridge.pre_hook("s1", "mcp__relay__post", nxt)).kind == "allow"
+    assert (await env.bridge.pre_hook("s1", "mcp__relay_slack__post", nxt)).kind == "allow"
     assert not (await env.tools.handle_post("s1", "post", nxt)).get("is_error")
     events = [r for r in await env.audit.query("relay1") if r["event"] == "policy_change"]
     assert events and events[0]["policy"] == "auto"
@@ -201,40 +201,40 @@ async def test_promote_persists_session_policy_and_next_post_needs_no_prompt(tmp
 async def test_choose_policy_flow(tmp_path):
     env = make_env(tmp_path)
     args = {"channel": CH_UNLISTED, "thread_ts": TS}
-    gr = await env.bridge.pre_hook("s1", "mcp__relay__read_thread", args)
+    gr = await env.bridge.pre_hook("s1", "mcp__relay_slack__read_thread", args)
     no_choice = await env.bridge.apply_response(
-        "s1", "mcp__relay__read_thread", args, gr, {"behavior": "allow"}
+        "s1", "mcp__relay_slack__read_thread", args, gr, {"behavior": "allow"}
     )
     assert no_choice["behavior"] == "deny"
-    assert CH_UNLISTED not in env.info.config["relay_channel_policies"]
+    assert CH_UNLISTED not in env.info.config["relay_channel_policies"]["relay1"]
     resp = await env.bridge.apply_response(
-        "s1", "mcp__relay__read_thread", args, gr,
+        "s1", "mcp__relay_slack__read_thread", args, gr,
         {"behavior": "allow", "relay_choice": {"policy": "read_only"}},
     )
     assert resp["behavior"] == "allow"
-    assert env.info.config["relay_channel_policies"][CH_UNLISTED] == "read_only"
+    assert env.info.config["relay_channel_policies"]["relay1"][CH_UNLISTED] == "read_only"
     assert not (await env.tools.handle_read_thread("s1", args)).get("is_error")
 
 
 async def test_choose_blocked_or_read_only_for_a_send_denies_but_saves(tmp_path):
     env = make_env(tmp_path)
     args = {"channel": CH_UNLISTED, "text": "hi"}
-    gr = await env.bridge.pre_hook("s1", "mcp__relay__post", args)
+    gr = await env.bridge.pre_hook("s1", "mcp__relay_slack__post", args)
     resp = await env.bridge.apply_response(
-        "s1", "mcp__relay__post", args, gr,
+        "s1", "mcp__relay_slack__post", args, gr,
         {"behavior": "allow", "relay_choice": {"policy": "read_only"}},
     )
     assert resp["behavior"] == "deny"
-    assert env.info.config["relay_channel_policies"][CH_UNLISTED] == "read_only"
+    assert env.info.config["relay_channel_policies"]["relay1"][CH_UNLISTED] == "read_only"
     assert (await env.tools.handle_post("s1", "post", args))["is_error"]  # no grant: refused
 
 
 async def test_invalid_policy_choice_denied(tmp_path):
     env = make_env(tmp_path)
     args = {"channel": CH_UNLISTED, "thread_ts": TS}
-    gr = await env.bridge.pre_hook("s1", "mcp__relay__read_thread", args)
+    gr = await env.bridge.pre_hook("s1", "mcp__relay_slack__read_thread", args)
     resp = await env.bridge.apply_response(
-        "s1", "mcp__relay__read_thread", args, gr,
+        "s1", "mcp__relay_slack__read_thread", args, gr,
         {"behavior": "allow", "relay_choice": {"policy": "root"}},
     )
     assert resp["behavior"] == "deny"
@@ -251,13 +251,13 @@ def _service(env):
 async def test_permission_callback_allows_and_denies_without_prompt_ui(tmp_path):
     env = make_env(tmp_path)
     cb = _service(env).create_permission_callback("s1")
-    allow = await cb("mcp__relay__post", {"channel": CH_AUTO, "text": "x"}, None)
+    allow = await cb("mcp__relay_slack__post", {"channel": CH_AUTO, "text": "x"}, None)
     assert allow == {"behavior": "allow"}
-    deny = await cb("mcp__relay__post", {"channel": CH_RO, "text": "x"}, None)
+    deny = await cb("mcp__relay_slack__post", {"channel": CH_RO, "text": "x"}, None)
     assert deny["behavior"] == "deny" and "read_only" in deny["message"]
-    blocked = await cb("mcp__relay__read_thread", {"channel": CH_BLOCKED, "thread_ts": TS}, None)
+    blocked = await cb("mcp__relay_slack__read_thread", {"channel": CH_BLOCKED, "thread_ts": TS}, None)
     assert blocked["behavior"] == "deny" and "not accessible" in blocked["message"]
-    read = await cb("mcp__relay__read_thread", {"channel": CH_ASK, "thread_ts": TS}, None)
+    read = await cb("mcp__relay_slack__read_thread", {"channel": CH_ASK, "thread_ts": TS}, None)
     assert read == {"behavior": "allow"}
 
 
@@ -267,11 +267,11 @@ def test_relay_not_in_auto_allow_list():
     from backend import session_launcher
 
     src = inspect.getsource(session_launcher)
-    assert 'mcp_tools_list.append("mcp__relay")' not in src
+    assert 'mcp_tools_list.append("mcp__relay_slack")' not in src
     assert 'relay_mcp_tools.create_server_if_attached' in src
 
 
 async def test_permission_callback_denies_relay_tool_when_bridge_missing():
     cb = PermissionService(SimpleNamespace(), {}).create_permission_callback("s1")
-    result = await cb("mcp__relay__post", {"channel": CH_AUTO, "text": "x"}, None)
+    result = await cb("mcp__relay_slack__post", {"channel": CH_AUTO, "text": "x"}, None)
     assert result["behavior"] == "deny"

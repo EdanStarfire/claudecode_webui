@@ -89,18 +89,18 @@ def test_clean_name_strips_control_zero_width_and_caps():
 
 async def test_prompt_carries_label_and_self_dm(tmp_path):
     env = make_env(tmp_path, policies={SELF_DM: "ask", OTHER_DM: "ask", CH_ASK: "ask"})
-    me = await env.gate.evaluate("s1", "mcp__relay__post", {"channel": SELF_DM, "text": "x"})
+    me = await env.gate.evaluate("s1", "mcp__relay_slack__post", {"channel": SELF_DM, "text": "x"})
     assert me.prompt["channel_label"] == "your self-DM"
-    other = await env.gate.evaluate("s1", "mcp__relay__post", {"channel": OTHER_DM, "text": "x"})
+    other = await env.gate.evaluate("s1", "mcp__relay_slack__post", {"channel": OTHER_DM, "text": "x"})
     assert other.prompt["channel_label"] == "DM with Alice Example"
-    chan = await env.gate.evaluate("s1", "mcp__relay__post", {"channel": CH_ASK, "text": "x"})
+    chan = await env.gate.evaluate("s1", "mcp__relay_slack__post", {"channel": CH_ASK, "text": "x"})
     assert chan.prompt["channel_label"] == "#ask-ch" and chan.prompt["channel_name"] == "ask-ch"
 
 
 async def test_prompt_falls_back_to_id_when_lookup_fails(tmp_path):
     env = make_env(tmp_path)
     env.adapter.fail_lookups = True
-    gr = await env.gate.evaluate("s1", "mcp__relay__post", {"channel": CH_ASK, "text": "x"})
+    gr = await env.gate.evaluate("s1", "mcp__relay_slack__post", {"channel": CH_ASK, "text": "x"})
     assert gr.kind == "prompt" and gr.prompt["channel_label"] == CH_ASK
 
 
@@ -120,6 +120,6 @@ async def test_agent_visible_errors_never_contain_channel_names(tmp_path):
     env = make_env(tmp_path)
     denied = await env.tools.handle_post("s1", "post", {"channel": CH_RO, "text": "hi"})
     ask = await env.tools.handle_post("s1", "post", {"channel": CH_ASK, "text": "hi"})
-    hook = await env.gate.evaluate("s1", "mcp__relay__post", {"channel": CH_RO, "text": "hi"})
+    hook = await env.gate.evaluate("s1", "mcp__relay_slack__post", {"channel": CH_RO, "text": "hi"})
     blob = str(denied) + str(ask) + str(hook.message)
     assert "ro-ch" not in blob and "ask-ch" not in blob and CH_RO in blob

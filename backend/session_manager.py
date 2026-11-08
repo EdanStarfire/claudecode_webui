@@ -23,6 +23,7 @@ from shared.logging_config import get_logger
 
 from .models.messages import CURRENT_MESSAGE_SCHEMA_VERSION, LegacyMessageFormatError
 from .models.permission_mode import PermissionMode
+from .relay.policy import normalize_policies
 from .relay.validation import validate_relay_config
 from .session_config import CONFIG_FIELDS, DEFAULTS, SessionConfig
 from .session_lifecycle import (  # noqa: F401 — re-exported; see module docstring below
@@ -1221,22 +1222,33 @@ class SessionManager:
                 return False
 
     async def update_relay_policy(
-        self, session_id: str, channel_id: str, policy: str | None
+        self, session_id: str, relay_id: str, target: str, policy: str | None,
+        *, sole_relay_id: str | None = None,
     ) -> bool:
-        """Set (or remove, when *policy* is None) one session-tier relay channel policy.
+        """Set (or remove, when *policy* is None) one session-tier policy of one relay.
 
-        Touches only ``config["relay_channel_policies"][channel_id]``; effective policy is
-        merged live per call (backend/relay/service.py), so no restart is needed (issue #2103).
+        Touches only ``config["relay_channel_policies"][relay_id][target]``; empty relay entries
+        and an empty dict are pruned. A legacy flat dict is normalised first (wrapped under
+        *sole_relay_id*, else dropped), so the first runtime edit upgrades the session. Effective
+        policy is merged live per call (backend/relay/service.py), so no restart is needed
+        (issue #2103, #2346).
         """
         async with self._get_session_lock(session_id):
             session = self._active_sessions.get(session_id)
             if not session:
                 return False
-            policies = dict(session.config.get("relay_channel_policies") or {})
+            policies = normalize_policies(
+                session.config.get("relay_channel_policies"), sole_relay_id
+            )
+            entry = dict(policies.get(relay_id) or {})
             if policy is None:
-                policies.pop(channel_id, None)
+                entry.pop(target, None)
             else:
-                policies[channel_id] = policy
+                entry[target] = policy
+            if entry:
+                policies[relay_id] = entry
+            else:
+                policies.pop(relay_id, None)
             if policies:
                 session.config["relay_channel_policies"] = policies
             else:

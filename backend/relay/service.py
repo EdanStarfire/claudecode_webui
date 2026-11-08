@@ -10,13 +10,11 @@ import asyncio
 import logging
 from typing import TYPE_CHECKING, Any
 
+from backend.relay_manager import RelayNotFoundError
+
+from .adapters import get_spec
 from .handles import HandleConflictError, RelayHandleIndex
-from .policy import (
-    EffectivePolicy,
-    merge_policies,
-    validate_channel_id,
-    validate_policy_value,
-)
+from .policy import EffectivePolicy, merge_policies, normalize_policies
 from .safety import validate_handle
 from .validation import validate_relay_config
 
@@ -35,6 +33,10 @@ _ATTACHMENT_FIELDS = (
 
 class SessionNotFoundError(KeyError):
     pass
+
+
+class RelayNotAttachedError(Exception):
+    """The relay exists but is not the session's effective attached relay (409)."""
 
 
 class RelayService:
@@ -71,14 +73,42 @@ class RelayService:
                 template_cfg = template.config or {}
         return profile_cfgs, template_cfg, session_info.config or {}
 
-    async def effective_policies(self, session_info: SessionInfo) -> dict[str, EffectivePolicy]:
-        """Per-key merge of channel policies across profile < template < session."""
+    def _sole_relay_id(self) -> str | None:
+        ids = list(self.relay_manager.relays)
+        return ids[0] if len(ids) == 1 else None
+
+    async def effective_policies(
+        self, session_info: SessionInfo
+    ) -> dict[str, dict[str, EffectivePolicy]]:
+        """Per-key merge of policies across profile < template < session, within each relay:
+        ``{relay_id: {target: EffectivePolicy}}``. Legacy flat tiers are normalised on read."""
         profile_cfgs, template_cfg, session_cfg = await self._tier_configs(session_info)
-        return merge_policies(
-            [c.get("relay_channel_policies") for c in profile_cfgs],
-            template_cfg.get("relay_channel_policies"),
-            session_cfg.get("relay_channel_policies"),
-        )
+        sole = self._sole_relay_id()
+
+        def norm(cfg: dict) -> dict[str, dict[str, str]]:
+            return normalize_policies(cfg.get("relay_channel_policies"), sole)
+
+        profiles = [norm(c) for c in profile_cfgs]
+        template, session = norm(template_cfg), norm(session_cfg)
+        relay_ids = {r for tier in (*profiles, template, session) for r in tier}
+        result: dict[str, dict[str, EffectivePolicy]] = {}
+        for relay_id in relay_ids:
+            record = self.relay_manager.relays.get(relay_id)
+            spec = get_spec(getattr(record, "adapter_type", None))
+            if spec is None:  # dangling relay_id (relay deleted): ignored, not pruned
+                continue
+            values = spec.policy_model.values
+            result[relay_id] = merge_policies(
+                [p.get(relay_id) for p in profiles], template.get(relay_id),
+                session.get(relay_id), values.__contains__,
+            )
+        return result
+
+    async def effective_relay_policies(
+        self, session_info: SessionInfo, relay_id: str | None
+    ) -> dict[str, EffectivePolicy]:
+        """The effective ``{target: EffectivePolicy}`` for one relay (empty when unset)."""
+        return (await self.effective_policies(session_info)).get(relay_id or "", {})
 
     async def effective_attachment(self, session_info: SessionInfo) -> dict[str, Any]:
         """Resolved relay attachment fields with the tier each value came from."""
@@ -106,14 +136,17 @@ class RelayService:
     async def get_session_relay(self, session_id: str) -> dict[str, Any]:
         info = await self._require_session(session_id)
         attachment = await self.effective_attachment(info)
-        policies = await self.effective_policies(info)
         relay_id = attachment["relay_id"]
         record = self.relay_manager.relays.get(relay_id) if relay_id else None
+        policies = await self.effective_relay_policies(info, relay_id) if record else {}
+        spec = get_spec(record.adapter_type) if record else None
         return {
             "session_id": session_id,
             "attached": bool(relay_id and record),
             "relay_id": relay_id,
             "relay_name": record.name if record else None,
+            "adapter_type": record.adapter_type if record else None,
+            "policy_model": spec.policy_model.describe() if spec else None,
             "relay_handle": info.config.get("relay_handle"),
             "footer_enabled": attachment["relay_footer_enabled"],
             "footer_template": attachment["relay_footer_template"],
@@ -125,16 +158,34 @@ class RelayService:
 
     # -------------------------------------------------------------- policies
 
-    async def set_policy(self, session_id: str, channel_id: str, policy: str) -> None:
-        await self._require_session(session_id)
-        validate_channel_id(channel_id)
-        validate_policy_value(policy)
-        await self._sessions.update_relay_policy(session_id, channel_id, policy)
+    async def _require_attached_relay(self, session_id: str, relay_id: str):
+        """(spec) for *relay_id* once it is known to be the session's attached relay."""
+        info = await self._require_session(session_id)
+        record = self.relay_manager.relays.get(relay_id)
+        if record is None:
+            raise RelayNotFoundError(relay_id)
+        if (await self.effective_attachment(info))["relay_id"] != relay_id:
+            raise RelayNotAttachedError(f"Relay {relay_id} is not attached to this session")
+        spec = get_spec(record.adapter_type)
+        if spec is None:
+            raise ValueError(f"Unsupported adapter_type '{record.adapter_type}'")
+        return spec
 
-    async def delete_policy(self, session_id: str, channel_id: str) -> None:
-        await self._require_session(session_id)
-        validate_channel_id(channel_id)
-        await self._sessions.update_relay_policy(session_id, channel_id, None)
+    async def set_policy(self, session_id: str, relay_id: str, target: str, policy: str) -> None:
+        """Session-tier policy edit, validated by the relay's adapter model (ValueError -> 422)."""
+        spec = await self._require_attached_relay(session_id, relay_id)
+        spec.policy_model.validate_target(target)
+        spec.policy_model.validate_value(policy)
+        await self._sessions.update_relay_policy(
+            session_id, relay_id, target, policy, sole_relay_id=self._sole_relay_id()
+        )
+
+    async def delete_policy(self, session_id: str, relay_id: str, target: str) -> None:
+        spec = await self._require_attached_relay(session_id, relay_id)
+        spec.policy_model.validate_target(target)
+        await self._sessions.update_relay_policy(
+            session_id, relay_id, target, None, sole_relay_id=self._sole_relay_id()
+        )
 
     # --------------------------------------------------------------- handles
 

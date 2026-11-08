@@ -30,6 +30,7 @@ from .models.messages import (
     PermissionResponseMessage,
     PermissionSuggestion,
 )
+from .relay.adapters import is_relay_tool
 from .session_manager import SessionState
 
 if TYPE_CHECKING:
@@ -84,7 +85,7 @@ class PermissionService:
             # `relay_prompt` metadata. The tool handler re-checks policy (authoritative gate).
             relay_bridge = None
             relay_gate_result = None
-            if tool_name.startswith("mcp__relay__"):
+            if is_relay_tool(tool_name):
                 relay_bridge = getattr(self.coordinator, "relay_bridge", None)
                 if relay_bridge is None:
                     logger.error("Relay bridge unavailable; denying %s", tool_name)
