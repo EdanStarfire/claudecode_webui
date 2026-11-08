@@ -33,6 +33,7 @@ SLACK_API = "https://slack.com/api/"
 _MAX_RETRIES = 2
 _MAX_RETRY_WAIT = 30.0
 _MAX_PAGES = 20
+_DIRECTORY_PAGES = 30  # 30 x 200 covers the 5000-entry directory cap
 
 TokenProvider = Callable[[], Awaitable[str]]
 
@@ -91,6 +92,22 @@ def _parse_conversation(raw: dict) -> ConversationInfo:
         user=raw.get("user"),
         last_read=raw.get("last_read"),
         unread_count=raw.get("unread_count_display", raw.get("unread_count")),
+    )
+
+
+def _parse_user(user: dict, fallback_id: str) -> UserInfo:
+    profile = user.get("profile") or {}
+    display = profile.get("display_name") or None
+    real = profile.get("real_name") or user.get("real_name") or None
+    handle = user.get("name") or None
+    return UserInfo(
+        id=user.get("id", fallback_id),
+        name=display or real or handle,
+        is_bot=bool(user.get("is_bot")),
+        display_name=display,
+        real_name=real,
+        handle=handle,
+        deleted=bool(user.get("deleted")),
     )
 
 
@@ -160,12 +177,13 @@ class SlackAdapter:
             return 1.0
 
     async def _paginate(
-        self, method: str, params: dict[str, Any], items_key: str, limit: int
+        self, method: str, params: dict[str, Any], items_key: str, limit: int,
+        max_pages: int = _MAX_PAGES,
     ) -> tuple[list[dict], str | None]:
         """Collect up to *limit* items following ``response_metadata.next_cursor``."""
         items: list[dict] = []
         cursor = params.get("cursor")
-        for _ in range(_MAX_PAGES):
+        for _ in range(max_pages):
             page_params = {**params, "cursor": cursor, "limit": min(limit - len(items), 200)}
             data = await self._call(method, page_params)
             items.extend(data.get(items_key) or [])
@@ -287,19 +305,28 @@ class SlackAdapter:
         )
         return [_parse_conversation(c) for c in items]
 
+    async def list_channels(
+        self, types: str = "public_channel,private_channel", limit: int = 1000
+    ) -> list[ConversationInfo]:
+        items, _ = await self._paginate(
+            "conversations.list", {"types": types, "exclude_archived": "true"}, "channels", limit,
+            max_pages=_DIRECTORY_PAGES,
+        )
+        return [_parse_conversation(c) for c in items]
+
+    async def list_users(self, limit: int = 5000) -> list[UserInfo]:
+        items, _ = await self._paginate(
+            "users.list", {}, "members", limit, max_pages=_DIRECTORY_PAGES
+        )
+        return [_parse_user(u, u.get("id", "")) for u in items]
+
     async def open_dm(self, user_id: str) -> str:
         data = await self._call("conversations.open", {"users": user_id}, json_body=True)
         return (data.get("channel") or {}).get("id", "")
 
     async def user_info(self, user_id: str) -> UserInfo:
         data = await self._call("users.info", {"user": user_id})
-        user = data.get("user") or {}
-        profile = user.get("profile") or {}
-        name = (
-            profile.get("display_name") or profile.get("real_name") or user.get("real_name")
-            or user.get("name")
-        )
-        return UserInfo(id=user.get("id", user_id), name=name or None, is_bot=bool(user.get("is_bot")))
+        return _parse_user(data.get("user") or {}, user_id)
 
     async def start_events(self, handler: EventHandler) -> None:
         raise NotImplementedError("Slack event streaming arrives with the inbound stage")

@@ -14,8 +14,8 @@ from typing import TYPE_CHECKING, Any
 
 from .adapters import is_relay_tool
 from .audit import RelayAuditLog
-from .gate import GateResult, RelayPolicyGate, tool_short_name
-from .policy import DENY
+from .gate import NAME_LOOKUP_CODES, GateResult, RelayPolicyGate, tool_short_name
+from .policy import ALLOW, DENY
 
 if TYPE_CHECKING:
     from .service import RelayService
@@ -38,6 +38,10 @@ class RelayPermissionBridge:
     async def pre_hook(self, session_id: str, tool_name: str, args: dict[str, Any]) -> GateResult:
         result = await self.gate.evaluate(session_id, tool_name, args)
         short = tool_short_name(tool_name)
+        if result.kind == DENY and result.code in NAME_LOOKUP_CODES:
+            # Nothing is sent: the handler re-resolves and returns the structured refusal (with
+            # the fenced candidate list), which a bare permission deny message cannot carry.
+            return GateResult(ALLOW, result.tool, result.action)
         if result.kind == DENY and short is not None:
             ctx = await self.gate.context(session_id)
             if ctx is not None and short in ctx.spec.write_tools:

@@ -38,14 +38,20 @@ async def relay_env(api_integration_env, fake_keyring):
             if request.headers.get("Authorization") != f"Bearer {USER_TOKEN}":
                 return httpx.Response(200, json={"ok": False, "error": "invalid_auth"})
             return httpx.Response(200, json={"ok": True, "user_id": "U01OWNER", "team_id": "T01", "team": "edanstestingrig"})
+        if str(request.url).endswith("conversations.open"):
+            if env_flags.get("open_dm_error"):
+                return httpx.Response(200, json={"ok": False, "error": "internal_error"})
+            return httpx.Response(200, json={"ok": True, "channel": {"id": "D01SELFDM1"}})
         return httpx.Response(200, json={"ok": True})
 
+    env_flags: dict = {}
     manager = env["coordinator"].relay_manager
     transport = httpx.MockTransport(slack)
     manager._adapter_factory = lambda provider: SlackAdapter(provider, transport=transport)
     manager._http_transport = transport
     env["keyring"] = fake_keyring
     env["seen_auth"] = seen_auth
+    env["flags"] = env_flags
     return env
 
 
@@ -496,3 +502,28 @@ async def test_issue_2103_rejected_template_update_leaves_template_untouched(rel
     assert r.status_code == 400
     got = (await client.get(f"/api/templates/{t['template_id']}")).json()
     assert got["name"] == "Keep" and got["description"] == "orig"
+
+
+@pytest.mark.asyncio
+async def test_issue_2103_self_dm_channel_id_persisted_and_invalidated_on_owner_change(relay_env):
+    client = relay_env["client"]
+    relay = (await client.post("/api/relays", json={"name": "Rig"})).json()
+    url = f"/api/relays/{relay['relay_id']}/secrets"
+    await _make_secret(client, "slack-user", USER_TOKEN)
+    body = (await client.put(url, json={"user_token_secret": "slack-user"})).json()
+    assert body["self_dm_channel_id"] == "D01SELFDM1"
+    disk = json.loads(next((relay_env["data_dir"] / "relays").glob("*.json")).read_text())
+    assert disk["self_dm_channel_id"] == "D01SELFDM1"
+    assert (await client.get(f"/api/relays/{relay['relay_id']}")).json()["self_dm_channel_id"] == "D01SELFDM1"
+
+    # a failing conversations.open never fails the credential save or Test, and a changed owner
+    # drops the stale ID rather than keeping another user's self-DM
+    manager = relay_env["coordinator"].relay_manager
+    manager.relays[relay["relay_id"]].owner_user_id = "U09PREVIOUS"
+    relay_env["flags"]["open_dm_error"] = True
+    r = await client.post(f"/api/relays/{relay['relay_id']}/test")
+    assert r.json()["ok"] is True
+    assert (await client.get(f"/api/relays/{relay['relay_id']}")).json()["self_dm_channel_id"] is None
+    relay_env["flags"]["open_dm_error"] = False
+    await client.post(f"/api/relays/{relay['relay_id']}/test")
+    assert (await client.get(f"/api/relays/{relay['relay_id']}")).json()["self_dm_channel_id"] == "D01SELFDM1"

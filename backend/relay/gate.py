@@ -17,10 +17,12 @@ from typing import TYPE_CHECKING, Any
 
 from .adapter import RelayAdapter, RelayError
 from .adapters import SPECS, AdapterSpec, get_spec, parse_relay_tool
+from .directory import DirectoryLookupError, RelayDirectory
 from .grants import Grant, GrantStore
 from .names import NameResolver
 from .policy import ALLOW, DENY, PROMPT
-from .safety import contains_trigger_syntax, safe_error_code
+from .safety import contains_trigger_syntax, safe_error_code, wrap_untrusted
+from .selfdm import SelfDmResolver
 from .slack_policy import CHANNEL_ID_RE
 
 if TYPE_CHECKING:
@@ -31,8 +33,11 @@ if TYPE_CHECKING:
 
 # U… (and Enterprise Grid W…) are user IDs, never conversation IDs: they resolve to a DM.
 _USER_ID_RE = re.compile(r"^@?([UW][A-Z0-9]{6,})\Z")
-_NAME_RE = re.compile(r"^#?([a-z0-9][a-z0-9._-]{0,79})\Z")
-_NAME_CACHE_TTL = 300.0
+_NAME_RE = re.compile(r"^#?([a-z0-9][a-z0-9._-]{0,79})\Z", re.IGNORECASE)
+_PERSON_NAME_RE = re.compile(r"^@\s*(\S.{0,79})\Z")
+# Name-resolution failures the permission pre-hook lets through, so the (authoritative) handler
+# can return the full structured refusal, including the fenced candidate list.
+NAME_LOOKUP_CODES = frozenset({"name_ambiguous", "name_not_found"})
 PREVIEW_LEN = 40000  # the prompt shows everything that will be sent (bodies are capped at 35000)
 
 
@@ -43,9 +48,10 @@ def tool_short_name(tool_name: str) -> str | None:
 
 
 class GateError(Exception):
-    def __init__(self, code: str, message: str):
+    def __init__(self, code: str, message: str, candidates: list[dict[str, Any]] | None = None):
         self.code = code
         self.message = message
+        self.candidates = candidates  # Slack-controlled; only ever returned inside the fence
         super().__init__(message)
 
 
@@ -74,27 +80,30 @@ class GateResult:
     channel_label: str | None = None  # '#name' / 'DM with X' / 'your self-DM'
     policy: str | None = None
     prompt: dict[str, Any] | None = field(default=None)
+    candidates: list[dict[str, Any]] | None = None
 
     def error_result(self) -> dict[str, Any]:
         return error_result(
             self.code or "denied", self.message or "Not permitted.", self.channel_id,
-            self.action or self.tool, self.policy,
+            self.action or self.tool, self.policy, self.candidates,
         )
 
 
 def error_result(
-    code: str, message: str, channel: str | None, action: str, policy: str | None
+    code: str, message: str, channel: str | None, action: str, policy: str | None,
+    candidates: list[dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
-    """Structured policy refusal: human text block + machine-readable JSON block."""
+    """Structured policy refusal: human text block + machine-readable JSON block (+ a fenced
+    candidate list for an ambiguous name)."""
     detail = {"error": "relay_policy", "code": code, "channel": channel, "action": action,
               "policy": policy}
-    return {
-        "content": [
-            {"type": "text", "text": message},
-            {"type": "text", "text": json.dumps(detail)},
-        ],
-        "is_error": True,
-    }
+    content = [
+        {"type": "text", "text": message},
+        {"type": "text", "text": json.dumps(detail)},
+    ]
+    if candidates:
+        content.append({"type": "text", "text": wrap_untrusted(candidates)})
+    return {"content": content, "is_error": True}
 
 
 class RelayPolicyGate:
@@ -113,8 +122,8 @@ class RelayPolicyGate:
         self.grants = grants or GrantStore()
         self._clock = clock
         self.names = NameResolver()
-        self._by_name: dict[str, str] = {}  # name -> channel id
-        self._names_loaded_at: float | None = None
+        self.directory = RelayDirectory(self.names, clock=clock)
+        self.selfdm = SelfDmResolver(relay_manager)
 
     # --------------------------------------------------------------- context
 
@@ -146,46 +155,42 @@ class RelayPolicyGate:
 
     # ------------------------------------------------------- channel handling
 
-    async def _load_names(self, ctx: RelayContext, *, force: bool = False) -> None:
-        now = self._clock()
-        if (
-            not force
-            and self._names_loaded_at is not None
-            and now - self._names_loaded_at < _NAME_CACHE_TTL
-        ):
-            return
-        convs = await ctx.adapter.list_conversations("public_channel,private_channel", 1000)
-        for c in convs:
-            if c.name:
-                self.names.seed_channel(ctx.relay_id, c.id, c.name)
-                self._by_name[c.name] = c.id
-        self._names_loaded_at = now
-
     async def resolve_channel(self, ctx: RelayContext, ref: Any) -> str:
-        """Resolve an ID, ``#name`` or user ID (DM) to a canonical conversation ID."""
+        """Resolve an ID, ``#name``, ``@name`` or user ID (DM) to a canonical conversation ID.
+
+        Names match exactly (case/diacritic-insensitive): ambiguity returns candidates, never a
+        guess. Always runs before any policy check.
+        """
         if not isinstance(ref, str) or not ref.strip():
             raise GateError("channel_unresolved", "A 'channel' argument is required.")
         ref = ref.strip()
         user = _USER_ID_RE.match(ref)
         if CHANNEL_ID_RE.match(ref) and not user:
             return ref
+        person = _PERSON_NAME_RE.match(ref)
         try:
             if user:
-                return await ctx.adapter.open_dm(user.group(1))
+                try:
+                    return await ctx.adapter.open_dm(user.group(1))
+                except RelayError as e:
+                    # '@UNIVERSE' looks like an ID but may be a name: only then try the directory
+                    if not (person and e.code in ("user_not_found", "invalid_users")):
+                        raise
+            if person:
+                return await ctx.adapter.open_dm(
+                    await self.directory.resolve_user(ctx, person.group(1))
+                )
             named = _NAME_RE.match(ref)
             if named:
-                name = named.group(1)
-                await self._load_names(ctx)
-                if name not in self._by_name:
-                    await self._load_names(ctx, force=True)
-                if name in self._by_name:
-                    return self._by_name[name]
+                return await self.directory.resolve_channel(ctx, named.group(1))
+        except DirectoryLookupError as e:
+            raise GateError(e.code, e.message, e.candidates) from None
         except RelayError as e:
             raise GateError("channel_unresolved", f"Could not resolve channel ({safe_error_code(e.code)}).") from None
         raise GateError(
             "channel_unresolved",
-            "Could not resolve the channel. Use a channel ID (C…/G…/D…), #channel-name, or a "
-            "user ID (U…) to message a person; '@name' is not supported, only user IDs.",
+            "Could not resolve the channel. Use a channel ID (C…/G…/D…), #channel-name, a user "
+            "ID (U…) or @name to message a person (find_channels searches by name).",
         )
 
     async def label(self, ctx: RelayContext, channel_id: str) -> str:
@@ -260,7 +265,7 @@ class RelayPolicyGate:
         try:
             channel_id = await self.resolve_channel(ctx, args.get("channel"))
         except GateError as e:
-            return GateResult(DENY, tool, action, e.code, e.message)
+            return GateResult(DENY, tool, action, e.code, e.message, candidates=e.candidates)
 
         policies = await self.service.effective_relay_policies(ctx.session_info, ctx.relay_id)
         eff = policies.get(channel_id)

@@ -11,7 +11,7 @@ import re
 from dataclasses import dataclass
 
 from .events import RELAY_EVENT_TYPE
-from .safety import contains_trigger_syntax, strip_trigger_syntax
+from .safety import contains_trigger_syntax, strip_trigger_syntax, with_marker
 
 FOOTER_MAX_LENGTH = 500
 FOOTER_VARIABLES = frozenset({"session_name", "session_handle", "session_link"})
@@ -93,8 +93,14 @@ class OutboundMessage:
     blocks: list[dict] | None  # None when no footer: plain text message
 
 
-def build_outbound(body: str, footer: str | None) -> OutboundMessage:
-    """Body as section block(s) followed by a context block holding the footer (if any)."""
+def build_outbound(body: str, footer: str | None, marker: bool = False) -> OutboundMessage:
+    """Body as section block(s) followed by a context block holding the footer (if any).
+
+    With *marker* (self-DM) the agent marker prefixes ``text`` and, since Slack renders blocks
+    rather than ``text`` when both exist, the first section block too.
+    """
+    if marker:
+        body = with_marker(body)
     if not footer:
         return OutboundMessage(text=body, blocks=None)
     chunks = [body[i : i + SLACK_SECTION_LIMIT] for i in range(0, len(body), SLACK_SECTION_LIMIT)]

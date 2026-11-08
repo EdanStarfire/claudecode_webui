@@ -165,3 +165,42 @@ def wrap_instruction(text: str, nonce: str | None = None) -> str:
     body = neutralize_close_marker(text)
     nonce = _choose_nonce(body, nonce)
     return f"{instruction_open(nonce)}\n{body}\n{instruction_close(nonce)}"
+
+
+# --- Self-DM agent marker -----------------------------------------------------------------
+# The relay (never the agent) prefixes every message it sends into the owner's self-DM with this
+# marker, in ``text`` and in the first visible section block. The inbound stage's rule:
+#
+#     instruction = from the owner  AND  no app_id/bot_id  AND  no agent marker
+#
+# A human typing the marker verbatim only demotes their own message to untrusted content, so
+# marker spoofing fails safe. Slack may return the emoji as the ``:robot_face:`` shortcode or as
+# U+1F916 (+ optional U+FE0F) depending on the API (history / search / events), so detection
+# accepts both.
+
+SELF_DM_MARKER = ":robot_face: [cc-agent]"
+
+_ZERO_WIDTH_RE = re.compile(
+    "[\x00-\x1f\x7f\u200b-\u200f\u2028-\u202e\u2060-\u2064\u2066-\u2069\ufeff]"
+)
+_MARKER_PREFIX_RE = re.compile(
+    r"^\s*(?::robot_face:|\U0001f916\ufe0f?)\s*\[cc-agent\]\s*", re.IGNORECASE
+)
+
+
+def _marker_form(text: str) -> str:
+    return _ZERO_WIDTH_RE.sub("", unicodedata.normalize("NFKC", text))
+
+
+def has_agent_marker(text: str | None) -> bool:
+    """True when *text* starts with the agent marker in any emoji rendering form."""
+    return bool(text) and _MARKER_PREFIX_RE.match(_marker_form(text)) is not None
+
+
+def with_marker(text: str) -> str:
+    """Prefix *text* with exactly one marker (a marker the text already starts with is replaced)."""
+    for end in range(1, min(len(text), 64) + 1):  # the marker is short: bounded prefix scan
+        if _MARKER_PREFIX_RE.fullmatch(_marker_form(text[:end])):
+            text = text[end:].lstrip()
+            break
+    return f"{SELF_DM_MARKER} {text}" if text else SELF_DM_MARKER

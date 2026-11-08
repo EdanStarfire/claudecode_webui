@@ -7,6 +7,7 @@ from types import SimpleNamespace
 
 from backend.mcp.relay_mcp_tools import RelayMCPTools
 from backend.relay.adapter import (
+    AuthInfo,
     ConversationInfo,
     PostResult,
     RelayError,
@@ -40,6 +41,18 @@ class FakeAdapter:
         self.fail_with: str | None = None
         self.users = {OWNER: "Owner Person", OTHER_USER: "Alice Example", "U0SELF0001": "Self"}
         self.fail_lookups = False
+        self.fail_open_dm = False
+        self.channels_error: str | None = None
+        self.extra_channels: list[ConversationInfo] = []
+        self.dms: list[ConversationInfo] = [
+            ConversationInfo(id=SELF_DM, is_im=True, user=OWNER),
+            ConversationInfo(id=OTHER_DM, is_im=True, user=OTHER_USER),
+        ]
+        self.user_list: list[UserInfo] = [
+            UserInfo(id=OWNER, name="Owner Person", display_name="Owner Person", handle="owner"),
+            UserInfo(id=OTHER_USER, name="Alice Example", display_name="Alice Example",
+                     real_name="Alice Example", handle="alice"),
+        ]
         self.names = {CH_AUTO: "auto-ch", CH_ASK: "ask-ch", CH_RO: "ro-ch",
                       CH_BLOCKED: "blocked-ch", CH_UNLISTED: "unlisted-ch"}
 
@@ -92,15 +105,38 @@ class FakeAdapter:
 
     async def list_conversations(self, types="public_channel,private_channel,mpim,im", limit=200):
         self.calls.append(("list_conversations", types))
+        if types in ("im,mpim",):
+            return list(self.dms)
         return [ConversationInfo(id=i, name=n) for i, n in self.names.items()]
+
+    async def list_channels(self, types="public_channel,private_channel", limit=1000):
+        self.calls.append(("list_channels", types))
+        if self.channels_error:
+            raise RelayError(self.channels_error, "conversations.list")
+        return [ConversationInfo(id=i, name=n, is_channel=True) for i, n in self.names.items()] + list(
+            self.extra_channels
+        )
+
+    async def list_users(self, limit=5000):
+        self.calls.append(("list_users",))
+        return list(self.user_list)
+
+    async def auth_test(self):
+        self.calls.append(("auth_test",))
+        return AuthInfo(user_id=OWNER, team_id="T0TEAM001", team="Team", user="owner")
 
     async def open_dm(self, user_id):
         self.calls.append(("open_dm", user_id))
-        return SELF_DM
+        if self.fail_open_dm:
+            raise RelayError("internal_error", "conversations.open")
+        return OTHER_DM if user_id == OTHER_USER else SELF_DM
 
     def network_calls(self) -> list[tuple]:
         """Calls that touch message content (anything but name/DM resolution)."""
-        resolution = {"conversation_info", "list_conversations", "open_dm", "user_info"}
+        resolution = {
+            "conversation_info", "list_conversations", "open_dm", "user_info", "list_channels",
+            "list_users", "auth_test",
+        }
         return [c for c in self.calls if c[0] not in resolution]
 
 
@@ -156,7 +192,11 @@ class FakeService:
 
 class FakeRelayManager:
     def __init__(self, adapter: FakeAdapter, relay_id: str = "relay1") -> None:
-        self.relays = {relay_id: SimpleNamespace(owner_user_id=OWNER, adapter_type="slack")}
+        self.relays = {relay_id: SimpleNamespace(
+            owner_user_id=OWNER, adapter_type="slack", self_dm_channel_id=None,
+            workspace_id="T0TEAM001", workspace_name="Team",
+        )}
+        self.recorded_self_dm: list[tuple] = []
         self._adapter = adapter
 
     def has_token(self, relay_id, kind="user"):
@@ -164,6 +204,10 @@ class FakeRelayManager:
 
     def adapter_for(self, relay_id):
         return self._adapter
+
+    def record_self_dm(self, relay_id, owner_user_id, dm_channel_id):
+        self.recorded_self_dm.append((relay_id, owner_user_id, dm_channel_id))
+        self.relays[relay_id].self_dm_channel_id = dm_channel_id
 
 
 def make_env(tmp_path: Path, policies: dict | None = None, **config):

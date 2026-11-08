@@ -27,6 +27,7 @@ class RelayRecord:
     oauth_client_id: str | None = None
     oauth_client_secret_secret: str | None = None  # vault secret NAME
     owner_user_id: str | None = None
+    self_dm_channel_id: str | None = None  # owner's self-DM (D…); not secret
     created_at: datetime | None = None
     updated_at: datetime | None = None
 
@@ -47,6 +48,7 @@ class RelayRecord:
             "oauth_client_id": self.oauth_client_id,
             "oauth_client_secret_secret": self.oauth_client_secret_secret,
             "owner_user_id": self.owner_user_id,
+            "self_dm_channel_id": self.self_dm_channel_id,
             "created_at": self.created_at.isoformat(),
             "updated_at": self.updated_at.isoformat(),
         }
@@ -74,6 +76,7 @@ class RelayRecord:
             oauth_client_id=data.get("oauth_client_id"),
             oauth_client_secret_secret=data.get("oauth_client_secret_secret"),
             owner_user_id=data.get("owner_user_id"),
+            self_dm_channel_id=data.get("self_dm_channel_id"),
             created_at=datetime.fromisoformat(data["created_at"]) if data.get("created_at") else None,
             updated_at=datetime.fromisoformat(data["updated_at"]) if data.get("updated_at") else None,
         )

@@ -31,8 +31,9 @@ _RELAY_ID_RE = re.compile(r"^[A-Za-z0-9_-]{1,64}\Z")
 _FIELDS = (
     "ts", "event", "session_id", "handle", "session_name", "tool", "channel_id", "channel_name",
     "thread_ts", "message_ts", "outcome", "code", "policy", "approval", "text_sha256",
-    "text_preview",
+    "text_preview", "query_sha256", "query_preview", "kinds", "result_count",
 )
+QUERY_PREVIEW_LEN = 40
 
 
 def text_fields(text: str | None) -> dict[str, str | None]:
@@ -42,6 +43,16 @@ def text_fields(text: str | None) -> dict[str, str | None]:
     return {
         "text_sha256": hashlib.sha256(text.encode("utf-8")).hexdigest(),
         "text_preview": text[:TEXT_PREVIEW_LEN],
+    }
+
+
+def query_fields(query: str | None) -> dict[str, str | None]:
+    """sha256 + short preview for a discovery query (find_channels)."""
+    if not query:
+        return {"query_sha256": None, "query_preview": None}
+    return {
+        "query_sha256": hashlib.sha256(query.encode("utf-8")).hexdigest(),
+        "query_preview": query[:QUERY_PREVIEW_LEN],
     }
 
 

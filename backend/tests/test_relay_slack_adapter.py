@@ -297,3 +297,37 @@ async def test_issue_2103_search_text_falls_back_to_blocks():
 
     results = await make_adapter(handler).search("q", ["C0AUTO0001"])
     assert [r.text for r in results] == ["body one\nbody two", "hi https://x.y", "kept"]
+
+
+@pytest.mark.asyncio
+async def test_issue_2103_list_channels_and_users_paginate_and_parse():
+    seen = []
+
+    def handler(request):
+        method = str(request.url).rsplit("/", 1)[-1]
+        form = _form(request)
+        seen.append((method, form.get("types"), form.get("cursor")))
+        if method == "conversations.list":
+            return httpx.Response(200, json={
+                "ok": True,
+                "channels": [{"id": "C1", "name": "general", "is_channel": True}],
+                "response_metadata": {"next_cursor": "" if form.get("cursor") else "page2"},
+            })
+        return httpx.Response(200, json={
+            "ok": True,
+            "members": [
+                {"id": "U1", "name": "jane", "real_name": "Jane Doe", "deleted": False,
+                 "profile": {"display_name": "Jane", "real_name": "Jane Doe"}},
+                {"id": "U2", "name": "gone", "deleted": True, "is_bot": True, "profile": {}},
+            ],
+            "response_metadata": {"next_cursor": ""},
+        })
+
+    adapter = make_adapter(handler)
+    channels = await adapter.list_channels("public_channel,private_channel", 100)
+    assert [c.id for c in channels] == ["C1", "C1"]  # followed the cursor
+    assert seen[0][:2] == ("conversations.list", "public_channel,private_channel")
+    users = await adapter.list_users()
+    assert users[0].display_name == "Jane" and users[0].real_name == "Jane Doe"
+    assert users[0].handle == "jane" and users[0].name == "Jane" and not users[0].deleted
+    assert users[1].deleted and users[1].is_bot
