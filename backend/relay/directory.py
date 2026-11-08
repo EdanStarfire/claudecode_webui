@@ -17,7 +17,7 @@ import time
 import unicodedata
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, Protocol
 
 from .adapter import ConversationInfo, RelayError, UserInfo
 from .names import NameResolver, clean_name
@@ -25,7 +25,17 @@ from .policy import DENY, EffectivePolicy
 from .safety import safe_error_code
 
 if TYPE_CHECKING:
-    from .gate import RelayContext
+    from .adapter import RelayAdapter
+    from .adapters import AdapterSpec
+
+
+class DirectoryContext(Protocol):
+    """What the directory needs from a context: ``RelayContext`` satisfies it, and so does the
+    session-less context the settings UI builds (``RelayPolicyGate.relay_context``)."""
+
+    relay_id: str
+    spec: AdapterSpec
+    adapter: RelayAdapter
 
 KINDS = ("public", "private", "dm", "group_dm", "person")
 DEFAULT_KINDS = ("public", "private", "dm", "group_dm")  # people only by explicit kind + query
@@ -149,7 +159,7 @@ class RelayDirectory:
             snap.loaded_at, snap.failed_until = self._clock(), float("-inf")
         return snap
 
-    async def _conversations(self, ctx: RelayContext, *, force: bool = False) -> _Snapshot:
+    async def _conversations(self, ctx: DirectoryContext, *, force: bool = False) -> _Snapshot:
         async def fetch() -> tuple[list[DirectoryEntry], bool]:
             async def dm_listing() -> list[ConversationInfo]:
                 try:
@@ -181,7 +191,7 @@ class RelayDirectory:
             ctx.relay_id, "conversations", self._conversation_ttl, fetch, force=force
         )
 
-    async def _people(self, ctx: RelayContext, *, force: bool = False) -> _Snapshot:
+    async def _people(self, ctx: DirectoryContext, *, force: bool = False) -> _Snapshot:
         async def fetch() -> tuple[list[DirectoryEntry], bool]:
             users = await ctx.adapter.list_users(self._max + 1)
             entries = [self._person(u) for u in users if u.id and not u.deleted]
@@ -206,7 +216,7 @@ class RelayDirectory:
     def _candidate(e: DirectoryEntry) -> dict[str, Any]:
         return {"id": e.id, "kind": e.kind, "name": e.name}
 
-    async def resolve_channel(self, ctx: RelayContext, name: str) -> str:
+    async def resolve_channel(self, ctx: DirectoryContext, name: str) -> str:
         """Exact (case/diacritic-insensitive) public/private channel name -> ID."""
         target = fold(name.lstrip("#"))
         if not target:
@@ -229,7 +239,7 @@ class RelayDirectory:
             ) from None
         return self._single(matches, "channel", "a channel ID (C…/G…)")
 
-    async def resolve_user(self, ctx: RelayContext, name: str) -> str:
+    async def resolve_user(self, ctx: DirectoryContext, name: str) -> str:
         """Exact (case/diacritic-insensitive) display name, real name or handle -> user ID."""
         target = fold(name.lstrip("@"))
         if not target:
@@ -271,15 +281,20 @@ class RelayDirectory:
 
     async def search(
         self,
-        ctx: RelayContext,
+        ctx: DirectoryContext,
         query: str | None,
         kinds: tuple[str, ...] | None,
         limit: int,
         cursor: str | None,
         policies: dict[str, EffectivePolicy],
+        *,
+        with_dm_id: bool = False,
     ) -> DirectoryPage:
         """Entries matching *query* (folded substring on names; exact ID), sorted, policy status
-        attached, blocked ones hidden. Raises DirectoryLookupError / RelayError."""
+        attached, blocked ones hidden. Raises DirectoryLookupError / RelayError.
+
+        ``with_dm_id`` (settings UI only): a ``person`` row carries ``dm_id``, the known DM with
+        them or None. The agent's ``find_channels`` never sets it."""
         wanted = tuple(kinds) if kinds else DEFAULT_KINDS
         unknown = [k for k in wanted if k not in KINDS]
         if unknown:
@@ -350,9 +365,26 @@ class RelayDirectory:
                 row["user"] = e.peer
             if e.is_bot:
                 row["is_bot"] = True
+            if with_dm_id and e.kind == "person":
+                row["dm_id"] = policy_id
             rows.append(((order[e.kind], fold(name) or "\uffff", e.id), row))
         rows.sort(key=lambda r: r[0])
         entries = [r for _, r in rows]
         page = entries[offset : offset + limit]
         nxt = f"o:{offset + limit}" if offset + limit < len(entries) else None
         return DirectoryPage(page, nxt, truncated)
+
+
+def entry_label(row: dict[str, Any], owner_user_id: str | None) -> str:
+    """Owner-facing plain-text label for a directory row (same wording as
+    ``NameResolver.channel_label``): ``#name``, ``DM with <name>``, ``your self-DM``."""
+    kind, name, rid = row.get("kind"), row.get("name"), row.get("id")
+    if kind == "dm":
+        if owner_user_id and row.get("user") == owner_user_id:
+            return "your self-DM"
+        return f"DM with {name or row.get('user') or rid}"
+    if kind == "group_dm":
+        return f"group DM {name or rid}"
+    if kind == "person":
+        return name or rid
+    return f"#{name}" if name else rid

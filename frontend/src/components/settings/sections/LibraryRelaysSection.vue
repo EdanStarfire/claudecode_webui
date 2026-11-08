@@ -85,6 +85,12 @@
         <!-- Setup guide -->
         <RelaySetupGuide :relay-id="relay.relay_id" :open="!relay.has_user_token" />
 
+        <!-- Audit -->
+        <div class="relay-card" data-testid="relay-audit-card">
+          <h3>Audit</h3>
+          <RelayAuditView :relay-id="relay.relay_id" />
+        </div>
+
         <!-- OAuth -->
         <details class="relay-card" data-testid="relay-advanced">
           <summary>Advanced: authorize with OAuth</summary>
@@ -117,6 +123,7 @@ import { useRelayStore } from '@/stores/relay'
 import SettingsToolbar from '../SettingsToolbar.vue'
 import RelaySecretPickers from '../../relay/RelaySecretPickers.vue'
 import RelaySetupGuide from '../../relay/RelaySetupGuide.vue'
+import RelayAuditView from '../../relay/RelayAuditView.vue'
 
 const store = useRelayStore()
 const relay = computed(() => store.relay)

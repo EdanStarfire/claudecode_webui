@@ -35,6 +35,8 @@ def test_issue_2346_slack_spec_tool_map_and_model():
     with pytest.raises(ValueError):
         model.validate_value("yes")
     assert model.describe()["values"] == ["blocked", "read_only", "ask", "auto"]
+    described = model.describe()
+    assert set(described["value_help"]) == set(described["value_icons"]) == set(described["values"])
 
 
 def test_issue_2346_normalize_policies():

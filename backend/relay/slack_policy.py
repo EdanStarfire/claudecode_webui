@@ -81,6 +81,17 @@ def validate_policy_value(policy: object) -> str:
     return policy  # type: ignore[return-value]
 
 
+VALUE_HELP = {
+    "blocked": "Not readable or writable, and hidden from the agent.",
+    "read_only": "Read freely; sending is refused.",
+    "ask": "Read freely; each send asks for approval.",
+    "auto": "Read and send freely.",
+}
+
+
+VALUE_ICONS = {"blocked": "🚫", "read_only": "👁", "ask": "❓", "auto": "⚡"}
+
+
 class SlackPolicyModel:
     values = POLICY_VALUES
     target_pattern = CHANNEL_ID_PATTERN
@@ -100,6 +111,8 @@ class SlackPolicyModel:
             "target_pattern": self.target_pattern,
             "target_label": "Slack channel ID",
             "actions": list(ACTIONS),
+            "value_help": dict(VALUE_HELP),
+            "value_icons": dict(VALUE_ICONS),
         }
 
 

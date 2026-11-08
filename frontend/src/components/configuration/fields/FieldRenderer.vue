@@ -205,11 +205,6 @@
         @update:value="$emit('update:value', $event)"
       />
 
-      <RelayPoliciesSummary
-        v-else-if="field.widget === 'relay-policies-summary'"
-        :value="value"
-      />
-
       <div v-if="error" class="field-error" role="alert" :data-testid="`field-error-${field.key}`">{{ error }}</div>
 
       <small v-if="field.description" class="field-description">
@@ -237,7 +232,6 @@ import ProviderSelectWidget from './ProviderSelectWidget.vue'
 import ProviderModelSelectWidget from './ProviderModelSelectWidget.vue'
 import ClassifierModelWidget from './ClassifierModelWidget.vue'
 import RelaySelectWidget from './RelaySelectWidget.vue'
-import RelayPoliciesSummary from './RelayPoliciesSummary.vue'
 import SourceMarker from '../../settings/SourceMarker.vue'
 
 const props = defineProps({

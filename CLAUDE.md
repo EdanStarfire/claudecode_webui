@@ -433,7 +433,7 @@ secret is deleted, `has_*_token` turns false and `*_secret_missing` true (tools 
   **Test connection** and holds the credentials form (two pickers listing vault secrets by NAME, a "Create a secret" link to Library -> Secrets; no token is ever typed here) plus the collapsible **Slack app setup** guide (steps, manifest with Copy /
   Download, scope list with reasons). OAuth sits under "Advanced" and renders only on https or localhost. The **Relay**
   area (`RelaySection.vue`, profile area `relay`) is available in profile, template and session editors: relay select,
-  footer on/off + text, session-only handle (own endpoint), policy count (read-only until the policy editor).
+  footer on/off + text, session-only handle (saved by the form's Save through its own endpoint, first in the sequence), channel policy editor (UI stage 2b, below).
 - **Manifest**: `GET /api/relays/{id}/manifest` is generated from `backend/relay/slack_scopes.py` (`USER_SCOPES_*`,
   `USER_EVENTS_INBOUND`, `METHOD_SCOPES`). `test_relay_manifest.py` fails when `slack_adapter.py` calls a Slack method
   with no scope entry or a scope is unused; OAuth requests the same scope list. The app is "ccWebUI Relay", acts with the
@@ -442,6 +442,13 @@ secret is deleted, `has_*_token` turns false and `*_secret_missing` true (tools 
 - **Restart semantics**: attaching a relay (`relay_id` unset -> set) to a running session that launched without one adds the
   `relay_not_attached` reason to `restart_required` (existing amber banner / restart chip), because the MCP server is attached
   only at launch. Footer, handle, policies and switching or clearing `relay_id` are read live per call: no restart.
+
+### Policy editor, session surface and audit viewer (UI stage 2b)
+
+- **Policy editor** at every tier (`RelayPolicyEditor.vue`): live at session tier through the relay-qualified policy REST (no restart), own-tier-only nested emit into the whole-config form at profile/template/schedule tier. Inherited profile/template entries are shown with a tier marker and overridden per target; the UI never sends inherited keys (template/profile policies are inherited live, not copied; `_compute_initial_session_overrides` would otherwise freeze them). Rendered from `policy_model` (incl. adapter-owned `value_help`).
+- **Picker route** `GET /api/relays/{id}/conversations` (`backend/routers/relay.py`): wraps `RelayDirectory.search` through a session-less `RelayPolicyGate.relay_context()` (`DirectoryContext` protocol) with **no policies applied** (blocked and unlisted entries both appear; the agent's `find_channels` still hides blocked); `?ids=` returns `{labels}` through `NameResolver.channel_label`. Slack is called only on snapshot refresh, never per keystroke. There is no route to open a DM: a person without a known DM is shown disabled, the first agent message opens it and prompts for a policy.
+- **`SessionInfo.relay_summary`** (runtime-only, never persisted, like `restart_required`): `{relay_id, adapter_type, handle, policy_count}` or null, computed in memory by `RelayService.refresh_summary` (no Slack calls) after policy/handle edits, session create/config write/start, template/profile saves (iterating dependent sessions), relay delete and at startup; broadcast only on change.
+- **Audit viewer** on Library -> Relays reads `GET /api/relays/{id}/audit`; deep link `/settings/relays?session=<id>`.
 
 #### Relay setup (owner walkthrough)
 

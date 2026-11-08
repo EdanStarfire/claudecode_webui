@@ -45,24 +45,37 @@
         {{ relayNotAttachedReason }}
       </p>
 
+      <div v-if="policyEditorRelayId" class="policy-block" data-testid="relay-policy-block">
+        <RelayPolicyEditor
+          v-if="isSessionMode"
+          :key="`${entityId}:${policyEditorRelayId}`"
+          mode="live"
+          :session-id="entityId"
+          :template-name="boundTemplate?.name || null"
+          :profile-name="boundProfile?.name || null"
+        />
+        <RelayPolicyEditor
+          v-else-if="policyModel"
+          :key="policyEditorRelayId"
+          mode="local"
+          :relay-id="policyEditorRelayId"
+          :policy-model="policyModel"
+          :model-value="ownPolicies"
+          :inherited="inheritedPolicies"
+          :template-name="boundTemplate?.name || null"
+          :profile-name="boundProfile?.name || null"
+          @update:model-value="handleField('relay_channel_policies', $event)"
+        />
+      </div>
+
       <div v-if="isSessionMode" class="handle-block" data-testid="relay-handle-block">
         <FieldRenderer
           :field="HANDLE_FIELD"
-          :value="handleDraft"
+          :value="handleValue"
           :error="handleError"
           :show-badges="false"
-          @update:value="handleDraft = $event"
+          @update:value="handleField('relay_handle', $event)"
         />
-        <div class="handle-actions">
-          <button
-            type="button"
-            class="btn btn-sm btn-outline-primary"
-            :disabled="!handleDirty || handleSaving"
-            data-testid="relay-handle-save"
-            @click="saveHandle"
-          >{{ handleSaving ? 'Saving…' : 'Save handle' }}</button>
-          <small class="text-muted">Saved immediately, independent of the form's Save.</small>
-        </div>
       </div>
     </div>
   </div>
@@ -79,6 +92,8 @@ import SettingsToolbar from '../SettingsToolbar.vue'
 import FieldSection from '../../configuration/fields/FieldSection.vue'
 import FieldRenderer from '../../configuration/fields/FieldRenderer.vue'
 import { useRelayStore } from '@/stores/relay'
+import RelayPolicyEditor from '../../relay/RelayPolicyEditor.vue'
+import { normalizePolicies } from '@/utils/relayPolicies'
 import { useRestartRequired } from '@/composables/useRestartRequired'
 import { FIELD_SCHEMAS } from '../../configuration/fields/fieldSchemas.js'
 import { useEditSectionFieldStates } from '@/composables/useEditSectionFieldStates'
@@ -90,9 +105,10 @@ import { useScheduleSectionSave } from '@/composables/useScheduleSectionSave'
 const PROFILE_AREA = 'relay'
 const SECTION_KEY  = 'relay'
 
-// relay_handle is session-tier only and saved through its own endpoint (the backend keeps
-// the handle independent of the whole-config PATCH). relay_channel_policies is managed by
-// the policy editor. Neither is ever submitted by this form's Save.
+// relay_handle is session-tier only: part of the form state, saved by the form's Save through
+// its own endpoint first (never via the whole-config PATCH). relay_channel_policies is edited by
+// the policy editor: live (own endpoints) on a session, own-tier only in the form on profiles,
+// templates and schedules; a session's Save never submits it.
 const HANDLE_FIELD = {
   key: 'relay_handle',
   label: 'Handle',
@@ -167,7 +183,8 @@ const mergedConfig = computed(() => {
 const isDirty = computed(() => settingsStore.dirtyAreas.has(areaKey.value))
 const saving  = ref(false)
 
-const relayFields = FIELD_SCHEMAS.relay
+// The policy field is rendered by the policy editor below, which needs the own tier alone.
+const relayFields = FIELD_SCHEMAS.relay.filter(f => f.key !== 'relay_channel_policies')
 
 const { fieldStates } = useEditSectionFieldStates({
   isTemplateMode, isSessionMode, isScheduleMode, baseConfig, draft,
@@ -181,6 +198,46 @@ const relayNotAttachedReason = computed(() =>
   isSessionMode.value ? restartReasons.value.find(r => r.startsWith('Relay attached')) || '' : ''
 )
 
+// ── Channel policies ──────────────────────────────────────────────────────
+const soleRelayId = computed(() => (relayStore.relays.length === 1 ? relayStore.relays[0].relay_id : null))
+const policyModel = ref(null)
+
+// Live editing needs the relay to be the session's saved effective relay (the endpoints 409
+// otherwise); the forms use the (possibly unsaved) selection.
+const savedEffectiveRelayId = computed(() =>
+  ({ ...profileBase.value, ...templateBase.value, ...baseConfig.value }).relay_id || null)
+const policyEditorRelayId = computed(() => {
+  if (!entity.value || isPermanentScheduleNA.value || isNotApplicable.value) return ''
+  const id = isSessionMode.value ? savedEffectiveRelayId.value : mergedConfig.value.relay_id
+  return id && relayStore.relays.some(r => r.relay_id === id) ? id : ''
+})
+
+watch(policyEditorRelayId, async (id) => {
+  policyModel.value = null
+  if (!id || isSessionMode.value) return
+  try {
+    policyModel.value = await relayStore.getPolicyModel(id)
+  } catch {
+    policyModel.value = null
+  }
+}, { immediate: true })
+
+// Own tier only: the draft when edited, else this entity's own saved value (never the merged one).
+const ownPolicies = computed(() => normalizePolicies(
+  'relay_channel_policies' in (draft.value || {}) ? draft.value.relay_channel_policies : baseConfig.value.relay_channel_policies,
+  soleRelayId.value,
+))
+const inheritedPolicies = computed(() => {
+  const out = {}
+  const id = policyEditorRelayId.value
+  const tiers = [['profile', profileBase.value], ['template', templateBase.value]]
+  for (const [source, cfg] of tiers) {
+    const entries = normalizePolicies(cfg?.relay_channel_policies, soleRelayId.value)[id] || {}
+    for (const [target, policy] of Object.entries(entries)) out[target] = { policy, source }
+  }
+  return out
+})
+
 // ── Server-side validation messages ───────────────────────────────────────
 const saveError = ref('')
 const fieldErrors = ref({})
@@ -192,26 +249,29 @@ function attributeError(message) {
 }
 
 // ── Session handle ────────────────────────────────────────────────────────
+// Part of the form state (dirty guard, Save/Cancel). Saved through its dedicated endpoint (it
+// owns the 409 duplicate / 422 format rules) first in the save sequence, never via the
+// whole-config PATCH.
 const savedHandle = computed(() => entity.value?.config?.relay_handle || '')
-const handleDraft = ref('')
+const handleValue = computed(() => ('relay_handle' in (draft.value || {}) ? draft.value.relay_handle : savedHandle.value))
 const handleError = ref('')
-const handleSaving = ref(false)
-const handleDirty = computed(() => handleDraft.value !== savedHandle.value && handleDraft.value.trim() !== '')
 
-watch(savedHandle, (h) => { handleDraft.value = h }, { immediate: true })
-
-async function saveHandle() {
-  handleSaving.value = true
-  handleError.value = ''
-  try {
-    const { relay_handle: handle } = await relayStore.setSessionHandle(entityId.value, handleDraft.value.trim())
-    sessionStore.updateSession(entityId.value, { config: { ...(entity.value?.config || {}), relay_handle: handle } })
-    handleDraft.value = handle
-  } catch (err) {
-    handleError.value = err.message
-  } finally {
-    handleSaving.value = false
+/** Saves a changed handle; false (error shown under the field, draft kept) when it is rejected. */
+async function saveHandleIfChanged(d) {
+  if (!('relay_handle' in d)) return true
+  const wanted = String(d.relay_handle ?? '').trim()
+  delete d.relay_handle
+  if (wanted !== savedHandle.value) {
+    try {
+      const { relay_handle: handle } = await relayStore.setSessionHandle(entityId.value, wanted)
+      sessionStore.updateSession(entityId.value, { config: { ...(entity.value?.config || {}), relay_handle: handle } })
+    } catch (err) {
+      handleError.value = err.message
+      return false
+    }
   }
+  delete settingsStore.getDraft(areaKey.value).relay_handle
+  return true
 }
 
 const saveScheduleSessionConfig = useScheduleSectionSave({
@@ -252,8 +312,16 @@ async function handleSave() {
   saving.value = true
   saveError.value = ''
   fieldErrors.value = {}
+  handleError.value = ''
   try {
     const d = { ...draft.value }
+    if (isSessionMode.value) {
+      if (!(await saveHandleIfChanged(d))) return // nothing else is written; the form stays dirty
+      if (Object.keys(d).length === 0) {
+        settingsStore.markClean(areaKey.value)
+        return
+      }
+    }
     const keysToDelete = Object.keys(d).filter(k => d[k] === FIELD_RESET)
     for (const k of keysToDelete) delete d[k]
     if (isScheduleMode.value) {
@@ -293,6 +361,7 @@ async function handleSave() {
 function handleCancel() {
   saveError.value = ''
   fieldErrors.value = {}
+  handleError.value = ''
   settingsStore.discardDraft(areaKey.value)
 }
 
@@ -337,10 +406,7 @@ onMounted(() => {
 
 .restart-note { font-size: 12px; color: #d29922; margin: 8px 0 0; }
 .handle-block { margin-top: 8px; }
-.handle-actions { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; padding: 6px 0 0 232px; }
-@container settings-area (max-width: 599px) {
-  .handle-actions { padding-left: 0; }
-}
+.policy-block { margin-top: 14px; padding-top: 12px; border-top: 1px solid var(--bs-border-color); }
 
 .restart-chip {
   display: inline-flex;

@@ -108,7 +108,102 @@ export const useRelayStore = defineStore('relay', () => {
     return api.get(`/api/sessions/${encodeURIComponent(sessionId)}/relay`)
   }
 
+  // ── Policy editor / picker / audit (UI stage 2b) ─────────────────────────
+
+  /** The backend sends structured errors as {code, message} in `detail`. */
+  function errorMessage(e) {
+    const detail = e?.data?.detail
+    if (detail && typeof detail === 'object') return detail.message || detail.code || 'Request failed'
+    return e?.message || 'Request failed'
+  }
+
+  const policyModels = new Map()
+
+  /** The adapter-owned policy model (values, target pattern/label, value_help), cached. */
+  async function getPolicyModel(relayId) {
+    if (!policyModels.has(relayId)) {
+      policyModels.set(relayId, await api.get(`/api/relays/${encodeURIComponent(relayId)}/policy-model`))
+    }
+    return policyModels.get(relayId)
+  }
+
+  /** Picker search. Rows: {id, kind, name, label, user?, is_bot?, dm_id?}. Throws Error(message). */
+  async function searchConversations(relayId, { q, kinds, limit, cursor, signal } = {}) {
+    const params = { q: q || null, kinds: kinds?.length ? kinds.join(',') : null, limit: limit || null, cursor: cursor || null }
+    try {
+      return await api.get(`/api/relays/${encodeURIComponent(relayId)}/conversations`, { params, signal })
+    } catch (e) {
+      if (e?.name === 'AbortError') throw e
+      throw new Error(errorMessage(e))
+    }
+  }
+
+  // Labels are bare-ID policy targets resolved to "#name" etc.; bounded, keyed relay+id.
+  const LABEL_CACHE_MAX = 1000
+  const LABEL_CHUNK = 50
+  const labelCache = new Map()
+
+  function cachedLabel(relayId, id) {
+    return labelCache.get(`${relayId}:${id}`) || null
+  }
+
+  function rememberLabel(relayId, id, label) {
+    const key = `${relayId}:${id}`
+    labelCache.delete(key)
+    labelCache.set(key, label)
+    while (labelCache.size > LABEL_CACHE_MAX) labelCache.delete(labelCache.keys().next().value)
+  }
+
+  /** {id: label} for the ids; unresolved ids map to themselves. Never throws. */
+  async function resolveLabels(relayId, ids) {
+    const wanted = [...new Set(ids)]
+    const missing = wanted.filter(id => !labelCache.has(`${relayId}:${id}`))
+    for (let i = 0; i < missing.length; i += LABEL_CHUNK) {
+      const chunk = missing.slice(i, i + LABEL_CHUNK)
+      try {
+        const { labels } = await api.get(`/api/relays/${encodeURIComponent(relayId)}/conversations`,
+          { params: { ids: chunk.join(',') } })
+        // an unresolved ID (label === id) is not cached, so a later call retries the lookup
+        for (const id of chunk) {
+          if (labels?.[id] && labels[id] !== id) rememberLabel(relayId, id, labels[id])
+        }
+      } catch {
+        // best effort: the ID stays visible and editable; not cached so a later call retries
+      }
+    }
+    return Object.fromEntries(wanted.map(id => [id, cachedLabel(relayId, id) || id]))
+  }
+
+  const _policyUrl = (sessionId, relayId, target) =>
+    `/api/sessions/${encodeURIComponent(sessionId)}/relays/${encodeURIComponent(relayId)}/policies/${encodeURIComponent(target)}`
+
+  /** Live session-tier edits; both return the refreshed GET /relay payload. */
+  async function setPolicy(sessionId, relayId, target, policy) {
+    try {
+      return await api.put(_policyUrl(sessionId, relayId, target), { policy })
+    } catch (e) {
+      throw new Error(errorMessage(e))
+    }
+  }
+
+  async function removePolicy(sessionId, relayId, target) {
+    try {
+      return await api.delete(_policyUrl(sessionId, relayId, target))
+    } catch (e) {
+      throw new Error(errorMessage(e))
+    }
+  }
+
+  /** Audit records, newest first; `before` is the exclusive ISO timestamp cursor. */
+  async function loadAudit(relayId, { sessionId, channel, limit, before } = {}) {
+    const params = { session_id: sessionId || null, channel: channel || null, limit: limit || null, before: before || null }
+    const { records } = await api.get(`/api/relays/${encodeURIComponent(relayId)}/audit`, { params })
+    return records || []
+  }
+
   return {
+    getPolicyModel, searchConversations, resolveLabels, cachedLabel, setPolicy, removePolicy,
+    loadAudit, errorMessage, rememberLabel,
     relays, relay, loaded, loading, error,
     loadRelays, fetchIfEmpty, createRelay, updateRelay, deleteRelay, saveSecrets, testRelay,
     loadManifest, oauthInitiate, oauthStatus, setSessionHandle, getSessionRelay,

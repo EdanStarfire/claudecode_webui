@@ -55,6 +55,10 @@ class ApplicationService:
         return self.coordinator.relay_service
 
     @property
+    def relay_gate(self):
+        return self.coordinator.relay_gate
+
+    @property
     def relay_audit(self):
         return self.coordinator.relay_audit
 
@@ -243,7 +247,7 @@ class ApplicationService:
         capabilities: Any,
         permission_callback: Any,
     ) -> str:
-        return await self.coordinator.create_session(
+        created = await self.coordinator.create_session(
             session_id=session_id,
             project_id=project_id,
             config=config,
@@ -252,6 +256,8 @@ class ApplicationService:
             capabilities=capabilities,
             permission_callback=permission_callback,
         )
+        await self.relay_service.sync_session(session_id)  # issue #2103: handle + summary
+        return created
 
     async def list_sessions(self, limit: int = 500, offset: int = 0) -> dict:
         return await self.coordinator.list_sessions(limit=limit, offset=offset)
@@ -1229,6 +1235,8 @@ class ApplicationService:
         template = await self.coordinator.template_manager.update_template(
             template_id=template_id, **kwargs
         )
+        if template:
+            await self.relay_service.refresh_for_template(template_id)  # issue #2103
         return template.to_dict() if template else None
 
     async def delete_template(self, template_id: str) -> bool:
@@ -1268,6 +1276,7 @@ class ApplicationService:
         profile = await self.coordinator.profile_manager.update_profile(
             profile_id=profile_id, name=name, config=config
         )
+        await self.relay_service.refresh_for_profile(profile_id)  # issue #2103
         return profile.to_dict()
 
     async def delete_profile(self, profile_id: str) -> bool:

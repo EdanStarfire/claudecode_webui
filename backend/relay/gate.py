@@ -69,6 +69,16 @@ class RelayContext:
 
 
 @dataclass
+class SessionlessContext:
+    """Directory context without a session (settings UI): relay, spec and adapter only."""
+
+    relay_id: str
+    spec: AdapterSpec
+    adapter: RelayAdapter
+    owner_user_id: str | None
+
+
+@dataclass
 class GateResult:
     kind: str  # allow | deny | prompt | choose_policy
     tool: str
@@ -151,6 +161,20 @@ class RelayPolicyGate:
             owner_user_id=getattr(self.relay_manager.relays[relay_id], "owner_user_id", None),
             footer_enabled=True if enabled is None else bool(enabled),
             footer_template=attachment["relay_footer_template"],
+        )
+
+    def relay_context(self, relay_id: str) -> SessionlessContext | None:
+        """Session-less context for directory browsing; None when the relay is missing, has no
+        user token or its adapter type is unknown."""
+        record = self.relay_manager.relays.get(relay_id)
+        if record is None or not self.relay_manager.has_token(relay_id, "user"):
+            return None
+        spec = get_spec(getattr(record, "adapter_type", None))
+        if spec is None:
+            return None
+        return SessionlessContext(
+            relay_id, spec, self.relay_manager.adapter_for(relay_id),
+            getattr(record, "owner_user_id", None),
         )
 
     # ------------------------------------------------------- channel handling
