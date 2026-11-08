@@ -50,7 +50,7 @@ from backend.relay.gate import (
     error_result,
 )
 from backend.relay.policy import ALLOW, CHOOSE_POLICY, PROMPT
-from backend.relay.safety import safe_error_code, with_marker, wrap_untrusted
+from backend.relay.safety import has_agent_marker, safe_error_code, with_marker, wrap_untrusted
 from backend.relay.search import SEARCH_TEXT_LIMIT, RelaySearchService, message_dict
 
 if TYPE_CHECKING:
@@ -609,8 +609,15 @@ class RelayMCPTools:
             c: await names.channel_name(ctx.adapter, ctx.relay_id, c)
             for c in list(dict.fromkeys(m.channel for m in outcome.messages if m.channel))[:20]
         }
+        self_dm = None  # unknown -> the marker never flags; resolve only when a result could be marked
+        if any(m.user == ctx.owner_user_id and has_agent_marker(m.text) for m in outcome.messages):
+            try:
+                self_dm = await self.gate.selfdm.resolve(ctx)
+            except Exception:  # flagging is best-effort: never fail a search over it
+                logger.warning("Self-DM resolution failed during search; marker flags skipped")
         content = [{"type": "text", "text": wrap_untrusted(
-            [message_dict(m, SEARCH_TEXT_LIMIT, None, channels.get(m.channel), users)
+            [message_dict(m, SEARCH_TEXT_LIMIT, None, channels.get(m.channel), users,
+                          self_dm, ctx.owner_user_id)
              for m in outcome.messages]
         )}]
         if outcome.note:

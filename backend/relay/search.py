@@ -15,6 +15,7 @@ from .adapter import RelayMessage
 from .events import is_agent_message
 from .gate import GateError
 from .policy import ALLOW
+from .safety import has_agent_marker
 
 if TYPE_CHECKING:
     from .gate import RelayContext, RelayPolicyGate
@@ -30,10 +31,20 @@ def message_dict(
     channel: str | None = None,
     channel_name: str | None = None,
     user_names: dict[str, str | None] | None = None,
+    self_dm_id: str | None = None,
+    owner_user_id: str | None = None,
 ) -> dict[str, Any]:
     """One result entry. Everything Slack-user-controlled (text, names) lives here, and this
-    dict is only ever returned inside the untrusted wrapper."""
+    dict is only ever returned inside the untrusted wrapper.
+
+    Search results carry no app/bot identity or metadata, so an agent post is recognised by the
+    marker the relay puts on every self-DM post (issue #2355): only the owner's message, in the
+    owner's self-DM, starting with the marker. Unknown self-DM or owner -> never flagged."""
     text = msg.text or ""
+    marked = bool(
+        self_dm_id and owner_user_id and msg.channel == self_dm_id
+        and msg.user == owner_user_id and has_agent_marker(text)
+    )
     return {
         "channel": channel or msg.channel,
         "channel_name": channel_name,
@@ -43,7 +54,7 @@ def message_dict(
         "user_name": (user_names or {}).get(msg.user) if msg.user else None,
         "text": text[:text_limit] + ("…" if len(text) > text_limit else ""),
         "permalink": msg.permalink,
-        "is_agent_message": is_agent_message(msg),
+        "is_agent_message": is_agent_message(msg) or marked,
     }
 
 

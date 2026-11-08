@@ -410,6 +410,11 @@ secret is deleted, `has_*_token` turns false and `*_secret_missing` true (tools 
   characters stripped, 80 chars). They appear in the permission prompt (`channel_label`: `#name`, `DM with <name>`,
   `your self-DM` from the relay's `owner_user_id`; plain text), in audit records (`channel_name`) and inside the
   wrapper.
+- **Search flags self-DM agent posts (issue #2355)**: Slack search results carry no app/bot identity or metadata, so
+  `search` sets `is_agent_message` (in addition to `is_agent_message()` from `events.py`) only when the result's channel is
+  the owner's self-DM, its `user` is the relay's `owner_user_id` AND `has_agent_marker(text)` (the send path's matcher, on the
+  untruncated text). Unknown self-DM or owner -> never flagged (fail closed); the marker elsewhere or from anyone else never
+  flags. `read_thread` is unchanged. Edge case: the owner hand-typing the marker flags their own message.
 - **Outbound tagging**: every `post` / `reply` carries Slack metadata `event_type=cc_webui_agent_message` with
   `session_id`, `handle`, `relay_id`; a footer (default on, `relay_footer_enabled`) is a `context` block after the
   body `section` blocks (`{session_link}` renders empty: the Backend does not know a public URL). Footers show the
