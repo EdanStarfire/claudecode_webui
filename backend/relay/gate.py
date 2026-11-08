@@ -16,16 +16,12 @@ from pathlib import PurePath
 from typing import TYPE_CHECKING, Any
 
 from .adapter import RelayAdapter, RelayError
+from .adapters import SPECS, AdapterSpec, get_spec, parse_relay_tool
 from .grants import Grant, GrantStore
 from .names import NameResolver
-from .policy import (
-    ALLOW,
-    CHANNEL_ID_RE,
-    DENY,
-    PROMPT,
-    decide,
-)
+from .policy import ALLOW, DENY, PROMPT
 from .safety import contains_trigger_syntax, safe_error_code
+from .slack_policy import CHANNEL_ID_RE
 
 if TYPE_CHECKING:
     from backend.relay_manager import RelayManager
@@ -33,19 +29,6 @@ if TYPE_CHECKING:
 
     from .service import RelayService
 
-TOOL_PREFIX = "mcp__relay__"
-RELAY_TOOLS = ("post", "reply", "read_thread", "search", "upload_file", "react", "mark_read")
-# tool -> policy action (None: scope-filtered per channel inside the handler)
-TOOL_ACTIONS: dict[str, str | None] = {
-    "read_thread": "read",
-    "mark_read": "mark_read",
-    "post": "send",
-    "reply": "send",
-    "upload_file": "send",
-    "react": "send",
-    "search": None,
-}
-WRITE_TOOLS = frozenset({"post", "reply", "upload_file", "react", "mark_read"})
 # U… (and Enterprise Grid W…) are user IDs, never conversation IDs: they resolve to a DM.
 _USER_ID_RE = re.compile(r"^@?([UW][A-Z0-9]{6,})\Z")
 _NAME_RE = re.compile(r"^#?([a-z0-9][a-z0-9._-]{0,79})\Z")
@@ -54,9 +37,9 @@ PREVIEW_LEN = 40000  # the prompt shows everything that will be sent (bodies are
 
 
 def tool_short_name(tool_name: str) -> str | None:
-    """``mcp__relay__post`` / ``post`` -> ``post``; None for non-relay tools."""
-    short = tool_name[len(TOOL_PREFIX):] if tool_name.startswith(TOOL_PREFIX) else tool_name
-    return short if short in TOOL_ACTIONS else None
+    """``mcp__relay_slack__post`` -> ``post``; None for non-relay tools."""
+    parsed = parse_relay_tool(tool_name)
+    return parsed[1] if parsed and parsed[1] in parsed[0].tool_actions else None
 
 
 class GateError(Exception):
@@ -70,6 +53,7 @@ class GateError(Exception):
 class RelayContext:
     session_id: str
     relay_id: str
+    spec: AdapterSpec
     session_info: SessionInfo
     adapter: RelayAdapter
     handle: str | None
@@ -144,10 +128,14 @@ class RelayPolicyGate:
             return None
         if not self.relay_manager.has_token(relay_id, "user"):
             return None
+        spec = get_spec(getattr(self.relay_manager.relays[relay_id], "adapter_type", None))
+        if spec is None:
+            return None
         enabled = attachment["relay_footer_enabled"]
         return RelayContext(
             session_id=session_id,
             relay_id=relay_id,
+            spec=spec,
             session_info=info,
             adapter=self.relay_manager.adapter_for(relay_id),
             handle=info.config.get("relay_handle") or await self.service.ensure_handle(session_id),
@@ -240,11 +228,20 @@ class RelayPolicyGate:
         *,
         with_prompt: bool = True,
     ) -> GateResult:
-        tool = tool_short_name(tool_name)
-        if tool is None:
-            return GateResult(DENY, tool_name, code="unknown_tool", message="Unknown relay tool.")
-        action = TOOL_ACTIONS[tool]
+        parsed = parse_relay_tool(tool_name)
+        tool = parsed[1] if parsed else tool_name
         ctx = ctx or await self.context(session_id)
+        spec = parsed[0] if parsed else (ctx.spec if ctx else None)
+        if spec is None:  # bare tool name and no relay attached: not-attached beats unknown
+            if any(tool in s.tool_actions for s in SPECS.values()):
+                return GateResult(
+                    DENY, tool, None, "relay_not_attached",
+                    "No relay with a user token is attached to this session.",
+                )
+            return GateResult(DENY, tool_name, code="unknown_tool", message="Unknown relay tool.")
+        if tool not in spec.tool_actions or (ctx is not None and ctx.spec is not spec):
+            return GateResult(DENY, tool_name, code="unknown_tool", message="Unknown relay tool.")
+        action = spec.tool_actions[tool]
         if ctx is None:
             return GateResult(
                 DENY, tool, action, "relay_not_attached",
@@ -265,10 +262,10 @@ class RelayPolicyGate:
         except GateError as e:
             return GateResult(DENY, tool, action, e.code, e.message)
 
-        policies = await self.service.effective_policies(ctx.session_info)
+        policies = await self.service.effective_relay_policies(ctx.session_info, ctx.relay_id)
         eff = policies.get(channel_id)
         policy = eff.policy if eff else None
-        decision = decide(policy, action)
+        decision = ctx.spec.policy_model.decide(policy, action)
 
         # Messages to the agent carry IDs only: channel names are Slack-user-controlled text.
         if decision.kind == DENY:

@@ -1069,7 +1069,7 @@ describe('patchSession relay runtime keys (issue #2103)', () => {
     const { api } = await import('@/utils/api')
     const spy = vi.spyOn(api, 'patch').mockResolvedValue({ session: {} })
     const store = useSessionStore()
-    await store.patchSession('s1', { config: { model: 'x', relay_handle: 'h', relay_channel_policies: { C1: 'auto' } } })
+    await store.patchSession('s1', { config: { model: 'x', relay_handle: 'h', relay_channel_policies: { r1: { C1: 'auto' } } } })
     expect(spy).toHaveBeenCalledWith('/api/sessions/s1', { config: { model: 'x' } })
     spy.mockRestore()
   })

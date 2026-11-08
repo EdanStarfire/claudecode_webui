@@ -1,8 +1,8 @@
 """
 RelayMCPTools - MCP tools for an attached relay (Slack), issue #2103 outbound stage.
 
-Exposes (server name ``relay``):
-  mcp__relay__post / reply / read_thread / search / upload_file / react / mark_read
+Exposes (server name from the relay's adapter spec, ``relay_slack`` for Slack):
+  mcp__relay_slack__post / reply / read_thread / search / upload_file / react / mark_read
 
 There is deliberately no edit or delete tool. Every handler re-checks the channel policy
 through ``RelayPolicyGate.authorize`` (the authoritative gate); the permission callback is
@@ -25,6 +25,7 @@ except ImportError:  # pragma: no cover
     ToolAnnotations = None
 
 from backend.relay.adapter import RelayError
+from backend.relay.adapters import SLACK_SPEC, SPECS, AdapterSpec
 from backend.relay.audit import RelayAuditLog, text_fields
 from backend.relay.footer import (
     MAX_BODY_LENGTH,
@@ -34,7 +35,6 @@ from backend.relay.footer import (
     render_session_footer,
 )
 from backend.relay.gate import (
-    WRITE_TOOLS,
     GateError,
     RelayContext,
     RelayPolicyGate,
@@ -148,11 +148,12 @@ class RelayMCPTools:
 
     async def create_server_if_attached(self, session_id: str):
         """MCP server for the session, or None unless it has a relay with a user token."""
-        if await self.gate.context(session_id) is None:
+        ctx = await self.gate.context(session_id)
+        if ctx is None:
             return None
-        return self.create_mcp_server_for_session(session_id)
+        return self.create_mcp_server_for_session(session_id, ctx.spec)
 
-    def create_mcp_server_for_session(self, session_id: str):
+    def create_mcp_server_for_session(self, session_id: str, spec: AdapterSpec = SLACK_SPEC):
         if not tool or not create_sdk_mcp_server:
             logger.warning("Claude Agent SDK not available, cannot create relay MCP server")
             return None
@@ -269,7 +270,7 @@ class RelayMCPTools:
             return await self.handle_mark_read(session_id, args)
 
         return create_sdk_mcp_server(
-            name="relay",
+            name=spec.server_name,
             version="1.0.0",
             tools=[
                 post_tool, reply_tool, read_thread_tool, search_tool, upload_tool, react_tool,
@@ -285,7 +286,10 @@ class RelayMCPTools:
         channel_name: str | None = None, policy: str | None = None, approval: str = "auto",
         thread_ts: str | None = None, message_ts: str | None = None, text: str | None = None,
     ) -> None:
-        if tool_name not in WRITE_TOOLS:
+        write_tools = (
+            ctx.spec.write_tools if ctx else frozenset().union(*(s.write_tools for s in SPECS.values()))
+        )
+        if tool_name not in write_tools:
             return
         relay_id = relay_id or (ctx.relay_id if ctx else None)
         if not relay_id:

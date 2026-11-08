@@ -1,4 +1,5 @@
-"""Relay endpoints: /api/relays/* and /api/sessions/{id}/relay/* (issue #2103).
+"""Relay endpoints: /api/relays/*, /api/sessions/{id}/relay and /api/sessions/{id}/relays/{rid}/*
+(issue #2103, #2346).
 
 Responses never contain token values. Credentials are references to existing vault secrets:
 the record exposes the referenced secret NAMES plus has_* booleans (false when the secret is gone).
@@ -10,8 +11,9 @@ from fastapi import APIRouter, HTTPException
 
 from shared.exception_handlers import handle_exceptions
 
+from ..relay.adapters import get_spec
 from ..relay.handles import HandleConflictError
-from ..relay.service import SessionNotFoundError
+from ..relay.service import RelayNotAttachedError, SessionNotFoundError
 from ..relay.slack_scopes import build_manifest_response
 from ..relay_manager import (
     OAUTH_HTTPS_LIMITATION,
@@ -151,6 +153,17 @@ def build_router(webui) -> APIRouter:
             raise HTTPException(status_code=404, detail="Relay not found")
         return build_manifest_response(include_inbound)
 
+    @router.get("/api/relays/{relay_id}/policy-model")
+    @handle_exceptions("get relay policy model")
+    async def get_policy_model(relay_id: str):
+        """The adapter-owned policy model (values, target format, actions) for a relay."""
+        record = await manager().get_relay(relay_id)
+        spec = get_spec(record.adapter_type) if record else None
+        if spec is None:
+            raise HTTPException(status_code=404, detail="Relay not found")
+        return {"relay_id": relay_id, "adapter_type": spec.adapter_type,
+                **spec.policy_model.describe()}
+
     # ---- Audit log ----
 
     @router.get("/api/relays/{relay_id}/audit")
@@ -190,22 +203,29 @@ def build_router(webui) -> APIRouter:
             raise HTTPException(status_code=409, detail=str(e)) from e
         return {"relay_handle": handle}
 
-    @router.put("/api/sessions/{session_id}/relay/policies/{channel_id}")
+    def _policy_errors(e: Exception) -> HTTPException:
+        if isinstance(e, SessionNotFoundError):
+            return HTTPException(status_code=404, detail="Session not found")
+        if isinstance(e, RelayNotFoundError):
+            return HTTPException(status_code=404, detail="Relay not found")
+        return HTTPException(status_code=409, detail=str(e))
+
+    @router.put("/api/sessions/{session_id}/relays/{relay_id}/policies/{target}")
     @handle_exceptions("set relay policy", value_error_status=422)
-    async def put_policy(session_id: str, channel_id: str, request: RelayPolicyRequest):
+    async def put_policy(session_id: str, relay_id: str, target: str, request: RelayPolicyRequest):
         try:
-            await service().set_policy(session_id, channel_id, request.policy)
-        except SessionNotFoundError as e:
-            raise HTTPException(status_code=404, detail="Session not found") from e
+            await service().set_policy(session_id, relay_id, target, request.policy)
+        except (SessionNotFoundError, RelayNotFoundError, RelayNotAttachedError) as e:
+            raise _policy_errors(e) from e
         return await service().get_session_relay(session_id)
 
-    @router.delete("/api/sessions/{session_id}/relay/policies/{channel_id}")
+    @router.delete("/api/sessions/{session_id}/relays/{relay_id}/policies/{target}")
     @handle_exceptions("delete relay policy", value_error_status=422)
-    async def delete_policy(session_id: str, channel_id: str):
+    async def delete_policy(session_id: str, relay_id: str, target: str):
         try:
-            await service().delete_policy(session_id, channel_id)
-        except SessionNotFoundError as e:
-            raise HTTPException(status_code=404, detail="Session not found") from e
+            await service().delete_policy(session_id, relay_id, target)
+        except (SessionNotFoundError, RelayNotFoundError, RelayNotAttachedError) as e:
+            raise _policy_errors(e) from e
         return await service().get_session_relay(session_id)
 
     return router

@@ -62,7 +62,7 @@ describe('RelaySection', () => {
   it('renders the policy count read-only and never submits policies or handle', async () => {
     apiMock.patch.mockResolvedValue({ session: {} })
     const { wrapper, settingsStore } = await mountSession({
-      relay_id: 'r1', relay_handle: 'ea', relay_channel_policies: { C0AAAAAAAA: 'auto' },
+      relay_id: 'r1', relay_handle: 'ea', relay_channel_policies: { r1: { C0AAAAAAAA: 'auto' } },
     })
     expect(wrapper.find('[data-testid="relay-policies-summary"]').text()).toContain('1')
     settingsStore.setField('session:sess-1:relay', 'relay_footer_enabled', false)

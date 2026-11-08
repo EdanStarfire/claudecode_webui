@@ -633,12 +633,14 @@ class SessionLauncher:
                     coord_logger.info(f"Attaching Links MCP tools to session {session_id}")
 
             # Issue #2103: Attach relay MCP tools only when a relay with a user token is attached.
-            # "mcp__relay" is deliberately NOT added to mcp_tools_list (the auto-allow list):
+            # "mcp__relay_<adapter>" is deliberately NOT added to mcp_tools_list (the auto-allow list):
             # every relay call goes through the permission callback so sends can prompt.
+            relay_attached = False
             if self.relay_mcp_tools and effective_config.relay_id:
                 relay_mcp_server = await self.relay_mcp_tools.create_server_if_attached(session_id)
                 if relay_mcp_server:
-                    mcp_servers["relay"] = relay_mcp_server
+                    mcp_servers[relay_mcp_server["name"]] = relay_mcp_server
+                    relay_attached = True
                     coord_logger.info(f"Attaching Relay MCP tools to session {session_id}")
 
             # Issue #676: Attach user-selected global MCP server configs
@@ -1235,7 +1237,7 @@ class SessionLauncher:
             self._launch_snapshots[session_id] = build_launch_snapshot(
                 _pre_vet_config, litellm_routed=litellm_routed, live_alias=_launch_alias,
                 wants_compact_window=_wants_compact_window, compact_window=_launch_compact_window,
-                relay_wanted="relay" in mcp_servers,
+                relay_wanted=relay_attached,
             )
             self.session_manager.clear_restart_required(session_id)
             if _launch_alias:

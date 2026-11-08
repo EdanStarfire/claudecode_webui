@@ -6,13 +6,7 @@ from backend.relay.adapter import RelayMessage
 from backend.relay.events import RELAY_EVENT_TYPE, is_agent_message
 from backend.relay.footer import render_footer, validate_footer_template
 from backend.relay.handles import HandleConflictError, RelayHandleIndex, default_handle_base
-from backend.relay.policy import (
-    POLICY_VALUES,
-    decide,
-    merge_policies,
-    validate_channel_id,
-    validate_channel_policies,
-)
+from backend.relay.policy import merge_policies
 from backend.relay.safety import (
     HANDLE_PATTERN,
     HANDLE_RE,
@@ -20,7 +14,19 @@ from backend.relay.safety import (
     contains_trigger_syntax,
     validate_handle,
 )
-from backend.relay.validation import validate_assigned_secrets, validate_relay_config
+from backend.relay.slack_policy import POLICY_VALUES, decide, validate_channel_id
+from backend.relay.validation import (
+    validate_assigned_secrets,
+    validate_relay_config,
+    validate_relay_policies,
+)
+
+
+@pytest.fixture(autouse=True)
+def _no_registered_relay_manager(monkeypatch):
+    """Structure-only validation: a manager registered by an earlier coordinator must not leak in."""
+    monkeypatch.setattr("backend.relay.validation._relay_manager", None)
+
 
 # ------------------------------------------------------------------ trigger check
 
@@ -122,6 +128,7 @@ def test_issue_2103_merge_policies_per_key_precedence():
         [{"C1111111": "blocked", "C2222222": "read_only"}],
         {"C2222222": "ask", "C3333333": "ask"},
         {"C3333333": "auto"},
+        POLICY_VALUES.__contains__,
     )
     assert {k: (v.policy, v.source) for k, v in merged.items()} == {
         "C1111111": ("blocked", "profile"),  # kept: not replaced by the template dict
@@ -140,11 +147,11 @@ def test_issue_2103_channel_id_and_policy_validation():
     for bad in ("general", "c0123456", "C123", "#C0123456", None):
         with pytest.raises(ValueError):
             validate_channel_id(bad)
-    assert validate_channel_policies({"C0123456": "auto"}) == {"C0123456": "auto"}
+    assert validate_relay_policies({"r1": {"C0123456": "auto"}}) == {"r1": {"C0123456": "auto"}}
     with pytest.raises(ValueError):
-        validate_channel_policies({"C0123456": "yes"})
+        validate_relay_policies({"C0123456": "auto"})  # flat input is rejected
     with pytest.raises(ValueError):
-        validate_channel_policies(["C0123456"])
+        validate_relay_policies(["C0123456"])
 
 
 # ------------------------------------------------------------------------- footer
@@ -225,7 +232,7 @@ def test_issue_2103_relay_handle_is_session_tier_only():
 
 def test_issue_2103_validate_relay_config_fields():
     validate_relay_config({"relay_id": "r", "relay_footer_enabled": True,
-                           "relay_channel_policies": {"C0123456": "ask"}}, "profile")
+                           "relay_channel_policies": {"r1": {"C0123456": "ask"}}}, "profile")
     with pytest.raises(ValueError):
         validate_relay_config({"relay_footer_enabled": "yes"}, "profile")
     with pytest.raises(ValueError):
