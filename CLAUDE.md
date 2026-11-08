@@ -382,6 +382,10 @@ secret is deleted, `has_*_token` turns false and `*_secret_missing` true (tools 
   `auto` at SESSION tier live (no restart); `choose_policy` persists the chosen policy, and a policy that forbids
   the action (e.g. `read_only` for a send) denies it. Deny persists nothing. Relay prompts never offer
   permission-rule suggestions.
+- **Refusal parity (issue #2355)**: the permission pre-hook deny (default / acceptEdits, where the callback runs first) carries the
+  same content as the handler's refusal (auto): human message + `\n` + the structured JSON block, built by one shared
+  formatter (`relay/gate.py::refusal_text` / `refusal_detail`, also used by `error_result`). `blocked` stays "not accessible to
+  this session" with no name or label. Pre-hook audit rows are unchanged.
 - **Refusals** are `is_error` results with a human block plus a JSON block
   `{"error":"relay_policy","code":...,"channel","action","policy"}`; codes: `channel_blocked`,
   `send_not_permitted`, `approval_denied`, `approval_timeout`, `approval_unavailable`, `approval_cancelled`,

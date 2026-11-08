@@ -101,6 +101,30 @@ class GateResult:
             self.action or self.tool, self.policy, self.candidates,
         )
 
+    def refusal_text(self) -> str:
+        """The refusal as one string for a permission deny: the handler's message block and
+        structured JSON block joined by a newline (issue #2355)."""
+        return refusal_text(
+            self.code or "denied", self.message or "Not permitted.", self.channel_id,
+            self.action or self.tool, self.policy,
+        )
+
+
+def refusal_detail(code: str, channel: str | None, action: str, policy: str | None) -> str:
+    """The machine-readable refusal block (shared by the handler result and the pre-hook deny)."""
+    return json.dumps({
+        "error": "relay_policy", "code": code, "channel": channel, "action": action,
+        "policy": policy,
+    })
+
+
+def refusal_text(
+    code: str, message: str, channel: str | None, action: str, policy: str | None
+) -> str:
+    """Human message + structured block as one string: what a permission deny can carry, and
+    the same content as ``error_result`` so the agent sees one refusal in every permission mode."""
+    return f"{message}\n{refusal_detail(code, channel, action, policy)}"
+
 
 def error_result(
     code: str, message: str, channel: str | None, action: str, policy: str | None,
@@ -108,11 +132,9 @@ def error_result(
 ) -> dict[str, Any]:
     """Structured policy refusal: human text block + machine-readable JSON block (+ a fenced
     candidate list for an ambiguous name)."""
-    detail = {"error": "relay_policy", "code": code, "channel": channel, "action": action,
-              "policy": policy}
     content = [
         {"type": "text", "text": message},
-        {"type": "text", "text": json.dumps(detail)},
+        {"type": "text", "text": refusal_detail(code, channel, action, policy)},
     ]
     if candidates:
         content.append({"type": "text", "text": wrap_untrusted(candidates)})
