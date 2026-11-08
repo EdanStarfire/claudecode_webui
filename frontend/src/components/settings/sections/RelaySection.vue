@@ -48,7 +48,7 @@
       <div v-if="policyEditorRelayId" class="policy-block" data-testid="relay-policy-block">
         <RelayPolicyEditor
           v-if="isSessionMode"
-          :key="policyEditorRelayId"
+          :key="`${entityId}:${policyEditorRelayId}`"
           mode="live"
           :session-id="entityId"
         />
