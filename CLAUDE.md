@@ -348,20 +348,45 @@ secret is deleted, `has_*_token` turns false and `*_secret_missing` true (tools 
   (`relay/permission_bridge.py`, top of `permission_callback` for `mcp__relay_slack__*`) allows reads and `auto` sends
   without UI, denies `blocked` / `read_only`-send and `!handle` text, and prompts for `ask` / unlisted channels
   (`tool_call.permission.relay_prompt`, kinds `ask_send` / `choose_policy`, UI `RelayPermissionPrompt.vue`).
-  The **handler re-checks policy and is authoritative**: an `ask` send or unlisted channel needs a one-shot
-  grant (`relay/grants.py`; bound to session + tool + canonical input hash, 60 s, single use) that only an
-  approved prompt creates. Under `bypassPermissions`, pre-approved allow rules (`mcp__relay_slack__post` in
-  settings) or `deny_unattended_permission_prompts` no prompt can be answered, so
-  `ask` / unlisted sends **fail closed** (`approval_required` / `policy_unset`); set the channel to `auto`
-  explicitly or switch permission mode. Reads of already-readable channels work in every mode.
+  The **handler re-checks live policy and is authoritative** and never consults the permission mode. `auto` sends and
+  reads need no prompt in any mode; `blocked` / `read_only` refuse in any mode. A send that needs approval
+  (`ask` / unlisted) proceeds on a one-shot grant (`relay/grants.py`; bound to session + tool + canonical input hash,
+  60 s, single use) that the callback's approved prompt left (default / acceptEdits: audit `prompt_via=callback`, one
+  prompt in total), otherwise the **handler prompts the owner itself** (issue #2353; `relay/prompt_broker.py`,
+  `RelayPromptBroker`, over `PermissionService.request_decision`). That covers auto, `bypassPermissions`,
+  pre-approved allow rules and classifier-approved calls, where the callback never runs: bypass never widens what the
+  agent may post, only the channel's `auto` policy sends unprompted. The wait is bounded by
+  `RELAY_PROMPT_TIMEOUT_SECONDS = 600` (`relay/constants.py`). After an allow the handler **re-evaluates policy and the
+  relay attachment fresh** (a policy edited to `blocked` / `read_only`, a detached relay or a removed credential while
+  waiting refuses), and sends. Broker approvals mint no grant; the audit row has `prompt_via=handler`; `approval` values
+  are unchanged (`auto`, `prompt_allow`, `prompt_promote`). If the auto-mode classifier denies the call, the handler
+  never runs and no prompt appears (intended).
+- **Unattended = fail closed, immediately.** `PermissionService.can_prompt` is false when the launched SDK denies
+  unattended prompts (`deny_unattended_permission_prompts`), the session `is_ephemeral`, it has no permission callback
+  (scheduler launches pass none) or it is not running. A permanent-minion schedule only enqueues into an ordinary attended
+  session, so it prompts. Unattended `ask` -> `approval_unavailable`; unattended unlisted -> `policy_unset`; nothing waits.
+- **Interrupt / stop / restart / reset / task cancellation** while a handler prompt waits: the prompt is cleared
+  (`deny_for_session`, `cleanup_pending_for_session`, a new SDK epoch, or `CancelledError`), the call ends refused
+  (`approval_cancelled`), the card is marked denied and nothing is sent.
+- **Tool card linkage (AC8)**, in degrading order: (1) a record-only `PreToolUse` SDK hook
+  (`relay/call_registry.py`, `RelayCallRegistry`, registered by `session_launcher` only where the relay MCP server is
+  attached; matcher derived from the adapter specs, e.g. `mcp__relay_slack__.*`, so no other tool pays a round trip; it
+  returns `{}`, never allows/asks/denies and never raises) gives the handler its `tool_use_id`/`agent_id`
+  (FIFO per `(session, tool, input digest)`, 5 min expiry, claimed — and so discarded — by every gated handler call whether or not it prompts, cleared on terminate/new SDK epoch), so the prompt appears on
+  the call's own card, which shows "Waiting for your approval"; (2) no registry entry (hook not delivered, e.g.
+  `bare_mode` may skip hooks; unverified) -> scan the session's tracked tool calls for the same tool + input; (3) no
+  card -> a standalone `relay-prompt-{request_id}` card carries the prompt. In case 3 the owner still sees and answers the
+  prompt, but the original tool card only shows "running" and is not linked to it (degraded AC8; the synthetic card is
+  finalised on every outcome). Hook failures never block a tool call.
 - **Prompt answers** (`relay_choice` on the permission REST call): `Allow and set channel to auto` persists
   `auto` at SESSION tier live (no restart); `choose_policy` persists the chosen policy, and a policy that forbids
   the action (e.g. `read_only` for a send) denies it. Deny persists nothing. Relay prompts never offer
   permission-rule suggestions.
 - **Refusals** are `is_error` results with a human block plus a JSON block
   `{"error":"relay_policy","code":...,"channel","action","policy"}`; codes: `channel_blocked`,
-  `send_not_permitted`, `approval_required`, `policy_unset`, `trigger_syntax_refused`, `channel_unresolved`,
-  `no_readable_channels`. Blocked channels only say "not accessible to this session".
+  `send_not_permitted`, `approval_denied`, `approval_timeout`, `approval_unavailable`, `approval_cancelled`,
+  `policy_unset` (unattended + unlisted only), `trigger_syntax_refused`, `channel_unresolved`, `no_readable_channels`.
+  (`approval_required` is retired: the handler prompts instead.) Blocked channels only say "not accessible to this session".
 - **Search** (`relay/search.py`) is scoped with `in:` filters to read_only/ask/auto channels (chunks of 10;
   Slack treats several `in:` as OR), then post-filtered from result metadata against the same set. Unlisted
   channels are excluded (a note gives the count) rather than prompting. **Untrusted wrapper**: `search` and

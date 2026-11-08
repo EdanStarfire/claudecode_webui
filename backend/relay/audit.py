@@ -30,7 +30,7 @@ _RELAY_ID_RE = re.compile(r"^[A-Za-z0-9_-]{1,64}\Z")
 
 _FIELDS = (
     "ts", "event", "session_id", "handle", "session_name", "tool", "channel_id", "channel_name",
-    "thread_ts", "message_ts", "outcome", "code", "policy", "approval", "text_sha256",
+    "thread_ts", "message_ts", "outcome", "code", "policy", "approval", "prompt_via", "text_sha256",
     "text_preview", "query_sha256", "query_preview", "kinds", "result_count",
 )
 QUERY_PREVIEW_LEN = 40

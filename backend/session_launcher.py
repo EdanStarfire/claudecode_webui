@@ -51,6 +51,7 @@ from .litellm_proxy_manager import (
 )
 from .mcp_config_manager import McpServerType
 from .oauth_refresh_manager import OAuthRefreshManager
+from .relay.call_registry import hook_matcher
 from .restart_required import build_launch_snapshot
 from .restart_required import single_alias as config_single_alias
 from .session_lifecycle import is_restartable
@@ -1144,6 +1145,15 @@ class SessionLauncher:
             if litellm_env:
                 _merged_extra_env.update(litellm_env)
 
+            # Issue #2353: a record-only PreToolUse hook, only for relay tools (spec-derived
+            # matcher), lets a handler-raised approval prompt find its own tool card.
+            _factory_extras: dict[str, Any] = {}
+            if relay_attached:
+                _factory_extras["pre_tool_hooks"] = [(
+                    hook_matcher(),
+                    self._coordinator.relay.call_registry.make_hook(session_id),
+                )]
+
             sdk = self._sdk_factory(
                 session_id=session_id,
                 working_directory=session_info.working_directory,
@@ -1165,10 +1175,15 @@ class SessionLauncher:
                 recorder=recorder,
                 phase_callback=self._callbacks.create_phase_callback(session_id),
                 config_file=self.tenant_context.config_file,
+                **_factory_extras,
             )
             # Issue #707: Set auto-approval callback so can_use_tool can notify us
             sdk.auto_approval_callback = self._callbacks.create_auto_approval_callback(session_id)
             self._active_sdks[session_id] = sdk
+            # Issue #2353: a new SDK epoch (start/restart/reset): no prompt, grant or hook entry
+            # of the previous one may survive (a waiting relay prompt is denied -> refused).
+            if self._coordinator.permission_service is not None:
+                self._coordinator.permission_service.cleanup_pending_for_session(session_id)
 
             # Issue #1838: a new SDK subprocess starts its own cumulative usage/cost
             # counters from zero, so the per-turn delta baseline must reset here too —

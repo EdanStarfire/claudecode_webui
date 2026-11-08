@@ -2,8 +2,10 @@
 
 One decision path serves both gates: the permission-callback pre-hook (``evaluate``) and the
 authoritative tool-handler check (``authorize``). The handler's check is the one that
-cannot be bypassed: ``ask`` sends need a one-shot grant, unlisted channels need a chosen
-policy, and text containing ``!handle`` trigger syntax is refused before any network call.
+cannot be bypassed: it reads live policy (never the permission mode), ``ask`` sends need a
+one-shot grant from the callback's prompt or an answer to the handler's own prompt, unlisted
+channels need a chosen policy, and text containing ``!handle`` trigger syntax is refused
+before any network call.
 """
 
 from __future__ import annotations
@@ -20,7 +22,7 @@ from .adapters import SPECS, AdapterSpec, get_spec, parse_relay_tool
 from .directory import DirectoryLookupError, RelayDirectory
 from .grants import Grant, GrantStore
 from .names import NameResolver
-from .policy import ALLOW, DENY, PROMPT
+from .policy import ALLOW, CHOOSE_POLICY, DENY, PROMPT
 from .safety import contains_trigger_syntax, safe_error_code, wrap_untrusted
 from .selfdm import SelfDmResolver
 from .slack_policy import CHANNEL_ID_RE
@@ -91,6 +93,7 @@ class GateResult:
     policy: str | None = None
     prompt: dict[str, Any] | None = field(default=None)
     candidates: list[dict[str, Any]] | None = None
+    prompt_via: str | None = None  # callback | handler: how an approval was obtained (audit)
 
     def error_result(self) -> dict[str, Any]:
         return error_result(
@@ -331,8 +334,13 @@ class RelayPolicyGate:
     async def authorize(
         self, ctx: RelayContext, tool: str, args: dict[str, Any]
     ) -> tuple[GateResult, Grant | None]:
-        """Authoritative handler-side check; ``prompt``/``choose_policy`` outcomes must hold a
-        one-shot grant, else they fail closed."""
+        """Authoritative handler-side check, from live policy (never the permission mode).
+
+        ``allow`` / ``deny`` are final. A send that needs approval (``prompt`` / ``choose_policy``)
+        is allowed when a one-shot grant exists (the permission callback already prompted:
+        default / acceptEdits); otherwise the ``prompt`` / ``choose_policy`` result is returned,
+        carrying the prompt payload, and the handler asks the owner itself (issue #2353).
+        """
         result = await self.evaluate(ctx.session_id, tool, args, ctx, with_prompt=False)
         # Always consume: a grant for a call that is now plainly allowed (policy promoted by the
         # same prompt) must not linger.
@@ -343,19 +351,52 @@ class RelayPolicyGate:
             return GateResult(
                 ALLOW, tool, result.action, channel_id=result.channel_id, policy=result.policy,
             ), grant
-        label = result.channel_id or ""
-        if result.kind == PROMPT:
-            result.code = "approval_required"
-            result.message = (
-                f"Relay send to {label} requires approval but this session's permission mode "
-                "does not prompt; set the channel to `auto` explicitly or switch permission mode."
+        # Needs approval and no grant: build the prompt payload for the owner.
+        return await self.evaluate(ctx.session_id, tool, args, ctx, with_prompt=True), None
+
+    async def re_authorize(
+        self, ctx_session_id: str, tool: str, args: dict[str, Any], *, prompted_kind: str = PROMPT
+    ) -> tuple[RelayContext | None, GateResult]:
+        """Fresh re-evaluation after an in-handler approval (issue #2353): a new context (relay
+        still attached, user token still present, same relay) and a new policy decision, so edits
+        made while the prompt waited apply. ``prompt`` / ``choose_policy`` cannot be returned as an
+        approval: the owner has just answered, so they are reported as ``allow`` - except that an
+        approved ``ask`` send whose channel lost its policy meanwhile is refused (``policy_unset``):
+        an unlisted channel needs a chosen policy."""
+        ctx = await self.context(ctx_session_id)
+        if ctx is None:
+            return None, GateResult(
+                DENY, tool, None, "relay_not_attached",
+                "No relay with a user token is attached to this session.",
             )
-        else:
-            result.code = "policy_unset"
-            result.message = (
-                f"Channel {label} has no policy for this session and this session's permission "
-                "mode does not prompt for one. Ask the user to set the channel policy "
-                "(blocked/read_only/ask/auto)."
+        result = await self.evaluate(ctx_session_id, tool, args, ctx, with_prompt=False)
+        if result.kind == CHOOSE_POLICY and prompted_kind == PROMPT:
+            return ctx, GateResult(
+                DENY, tool, result.action, "policy_unset",
+                f"Channel {result.channel_id} no longer has a policy; nothing was sent.",
+                result.channel_id,
             )
-        result.kind = DENY
-        return result, None
+        if result.kind in (PROMPT, CHOOSE_POLICY):
+            result = GateResult(
+                ALLOW, tool, result.action, channel_id=result.channel_id, policy=result.policy,
+            )
+        return ctx, result
+
+
+def approval_refusal(code: str, channel_id: str | None, action: str, policy: str | None = None) -> dict[str, Any]:
+    """Agent-facing refusal for an approval that did not end in an allow (IDs only)."""
+    texts = {
+        "approval_denied": "The owner declined this send. Nothing was sent. Do not retry unless asked.",
+        "approval_timeout": "No answer from the owner within 10 minutes; nothing was sent.",
+        "approval_unavailable": (
+            "No one is available to approve this send (unattended session). Nothing was sent; "
+            "ask the user to set the channel to `auto` or run an attended session."
+        ),
+        "approval_cancelled": (
+            "The session was interrupted or stopped before the owner answered; nothing was sent."
+        ),
+        "policy_unset": (
+            f"Channel {channel_id or ''} has no policy and no one is available to choose one."
+        ),
+    }
+    return error_result(code, texts[code], channel_id, action, policy)

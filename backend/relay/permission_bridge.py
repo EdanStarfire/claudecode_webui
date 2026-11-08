@@ -4,7 +4,8 @@
 reads on readable channels and ``auto`` sends are allowed without UI, blocked/read_only
 sends are denied, and ``ask`` / unlisted channels fall through into the normal prompt flow
 carrying ``relay_prompt`` metadata. ``apply_response`` turns the user's answer
-(``relay_choice``) into a one-shot grant plus an optional SESSION-tier policy change.
+(``relay_choice``) into a one-shot grant plus an optional SESSION-tier policy change; the
+same answer handling serves the prompt the tool handler raises itself (issue #2353).
 """
 
 from __future__ import annotations
@@ -60,9 +61,13 @@ class RelayPermissionBridge:
         args: dict[str, Any],
         gate_result: GateResult,
         response: dict[str, Any],
+        *,
+        mint_grant: bool = True,
     ) -> dict[str, Any]:
         """Post-process an ``allow`` response to a relay prompt. Returns the response to hand
-        the SDK (possibly converted to a deny)."""
+        the SDK (possibly converted to a deny, with a ``reason``) and records the approval kind
+        as ``relay_approval``. ``mint_grant=False`` is the handler-raised prompt (issue #2353):
+        the answer is consumed directly, so no one-shot grant is left behind."""
         prompt = gate_result.prompt or {}
         short = tool_short_name(tool_name) or gate_result.tool
         choice = response.get("relay_choice") or {}
@@ -72,11 +77,17 @@ class RelayPermissionBridge:
         action = gate_result.action or "send"
         ctx = await self.gate.context(session_id)
         if ctx is None:
-            return {"behavior": "deny", "message": "No relay is attached to this session."}
+            return {
+                "behavior": "deny", "message": "No relay is attached to this session.",
+                "reason": "not_attached",
+            }
         model = ctx.spec.policy_model
 
         if chosen is not None and chosen not in model.values:
-            return {"behavior": "deny", "message": "Invalid relay policy choice."}
+            return {
+                "behavior": "deny", "message": "Invalid relay policy choice.",
+                "reason": "invalid_choice",
+            }
         approval = "prompt_allow"
         new_policy: str | None = None
         if prompt.get("kind") == "ask_send":
@@ -84,7 +95,10 @@ class RelayPermissionBridge:
                 new_policy = "auto"
         else:  # choose_policy: a policy is mandatory
             if chosen is None:
-                return {"behavior": "deny", "message": "No channel policy was chosen."}
+                return {
+                    "behavior": "deny", "message": "No channel policy was chosen.",
+                    "reason": "invalid_choice",
+                }
             new_policy = chosen
         if new_policy is not None:
             approval = "prompt_promote"
@@ -98,9 +112,11 @@ class RelayPermissionBridge:
                         f"Channel policy saved as {new_policy}; this {action} is not permitted "
                         "under it."
                     ),
+                    "reason": "policy_forbids",
                 }
-        self.gate.grants.add(session_id, short, args, approval)
-        return response
+        if mint_grant:
+            self.gate.grants.add(session_id, short, args, approval)
+        return {**response, "relay_approval": approval}
 
     async def _audit_policy_change(
         self, session_id: str, channel_id: str | None, gate_result: GateResult, policy: str
