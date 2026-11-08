@@ -11,31 +11,33 @@
     <template v-else>
       <div v-if="!rows.length" class="editor-muted" data-testid="relay-policy-empty">No channel policies yet.</div>
       <ul v-else class="policy-rows">
-        <li v-for="row in rows" :key="row.target" class="policy-row" :data-testid="`relay-policy-row-${row.target}`">
-          <div class="row-main">
-            <span class="row-label" data-testid="relay-policy-label">{{ labelOf(row.target) }}</span>
-            <code class="row-target">{{ row.target }}</code>
-          </div>
-          <span class="tier-slot"><span v-if="!row.own" class="tier-marker" data-testid="relay-policy-tier">{{ row.source }}</span></span>
-          <select
-            class="form-select form-select-sm row-select"
-            :value="row.policy"
+        <li
+          v-for="row in rows"
+          :key="row.target"
+          class="policy-row"
+          :title="`${labelOf(row.target)} · ${row.target}`"
+          :data-testid="`relay-policy-row-${row.target}`"
+        >
+          <SourceMarker :kind="markerKind(row)" :template-name="templateName" :profile-name="profileName" data-testid="relay-policy-tier" />
+          <span class="row-label" data-testid="relay-policy-label">{{ labelOf(row.target) }}</span>
+          <RelayPolicyStrip
+            :model="model"
+            :model-value="row.policy"
             :disabled="busy.has(row.target)"
-            :aria-label="`Policy for ${labelOf(row.target)}`"
-            data-testid="relay-policy-select"
-            @change="change(row.target, $event.target.value)"
-          >
-            <option v-for="v in model.values" :key="v" :value="v">{{ v }}</option>
-          </select>
+            :label="`Policy for ${labelOf(row.target)}`"
+            @update:model-value="change(row.target, $event)"
+          />
           <button
             v-if="row.own"
             type="button"
-            class="btn btn-sm btn-outline-secondary row-remove"
+            class="field-reset-btn"
+            title="Reset to inherited value"
+            :aria-label="`Reset policy for ${labelOf(row.target)}`"
             :disabled="busy.has(row.target)"
-            :aria-label="`Remove policy for ${labelOf(row.target)}`"
             data-testid="relay-policy-remove"
             @click="remove(row.target)"
-          >Remove</button>
+          >↩</button>
+          <span v-else class="reset-slot" />
         </li>
       </ul>
 
@@ -46,11 +48,12 @@
           :relay-id="effectiveRelayId"
           :policy-model="model"
           :status-for="statusFor"
+          :template-name="templateName"
+          :profile-name="profileName"
           @select="add"
         />
-        <select v-model="newPolicy" class="form-select form-select-sm add-select" aria-label="Policy for the new entry" data-testid="relay-policy-new-value">
-          <option v-for="v in model.values" :key="v" :value="v">{{ v }}</option>
-        </select>
+        <RelayPolicyStrip v-model="newPolicy" :model="model" label="Policy for the new entry" data-testid="relay-policy-new-value" />
+        <span class="reset-slot" />
       </div>
 
       <details class="explain" data-testid="relay-policy-explain">
@@ -68,6 +71,8 @@
 import { computed, reactive, ref, watch } from 'vue'
 import { useRelayStore } from '@/stores/relay'
 import RelayChannelPicker from './RelayChannelPicker.vue'
+import RelayPolicyStrip from './RelayPolicyStrip.vue'
+import SourceMarker from '../settings/SourceMarker.vue'
 
 /**
  * Channel policy editor (issue #2103, UI stage 2b), rendered from the adapter's policy model.
@@ -85,6 +90,8 @@ const props = defineProps({
   policyModel: { type: Object, default: null },
   modelValue: { type: Object, default: null },
   inherited: { type: Object, default: () => ({}) },
+  templateName: { type: String, default: null },
+  profileName: { type: String, default: null },
 })
 const emit = defineEmits(['update:modelValue'])
 
@@ -122,7 +129,12 @@ const rows = computed(() => {
 })
 
 const labelOf = (target) => labels.value[target] || target
-const statusFor = (target) => rows.value.find(r => r.target === target)?.policy || null
+const statusFor = (target) => {
+  const row = rows.value.find(r => r.target === target)
+  return row ? { policy: row.policy, kind: markerKind(row) } : null
+}
+// the app's SourceMarker kinds: own tier = S, inherited = T / P
+const markerKind = (row) => (row.own || row.source === 'session' ? 'S' : row.source === 'template' ? 'T' : 'P')
 
 let loadSeq = 0
 
@@ -249,24 +261,19 @@ defineExpose({ reload: loadLive })
 .editor-title { font-weight: 600; }
 .editor-note, .editor-muted { color: var(--bs-secondary-color); font-size: 12px; }
 .editor-error { color: #f87171; font-size: 12px; }
-.policy-rows { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 6px; }
-.policy-row { display: flex; align-items: center; gap: 8px; }
-.row-main { flex: 1; min-width: 0; display: flex; flex-direction: column; }
-.row-label { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.row-target { font-size: 11px; color: var(--bs-secondary-color); }
-.tier-slot { flex: none; width: 76px; text-align: right; }
-.tier-marker { font-size: 11px; color: var(--bs-secondary-color); border: 1px solid var(--bs-border-color); border-radius: 10px; padding: 0 7px; }
-.row-select { width: 120px; flex: none; }
-.add-row { display: flex; gap: 8px; align-items: flex-start; }
-.add-select { width: 120px; flex: none; }
+.policy-rows { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 4px; }
+.add-row { position: relative; }
+.policy-row, .add-row { display: flex; align-items: center; gap: 6px; flex-wrap: nowrap; min-width: 0; }
+.row-label { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.reset-slot { flex: none; width: 14px; }
+.field-reset-btn { flex: none; width: 14px; background: none; border: none; padding: 0; font-size: 0.85rem; color: #6c757d; cursor: pointer; line-height: 1; }
+.field-reset-btn:hover { color: #dc3545; }
 .explain { font-size: 12px; color: var(--bs-secondary-color); }
 .explain summary { cursor: pointer; }
 .explain ul { margin: 6px 0 4px; padding-left: 18px; }
 .explain p { margin: 4px 0 0; }
 @media (max-width: 600px) {
-  .policy-row { flex-wrap: wrap; }
-  .row-main { flex-basis: 100%; }
-  .tier-slot { width: auto; }
-  .row-select { flex: 1; }
+  .policy-editor { font-size: 12px; }
+  .policy-row, .add-row { gap: 4px; }
 }
 </style>

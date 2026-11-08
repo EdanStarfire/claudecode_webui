@@ -89,6 +89,9 @@ VALUE_HELP = {
 }
 
 
+VALUE_ICONS = {"blocked": "🚫", "read_only": "👁", "ask": "❓", "auto": "⚡"}
+
+
 class SlackPolicyModel:
     values = POLICY_VALUES
     target_pattern = CHANNEL_ID_PATTERN
@@ -109,6 +112,7 @@ class SlackPolicyModel:
             "target_label": "Slack channel ID",
             "actions": list(ACTIONS),
             "value_help": dict(VALUE_HELP),
+            "value_icons": dict(VALUE_ICONS),
         }
 
 

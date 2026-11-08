@@ -51,6 +51,8 @@
           :key="`${entityId}:${policyEditorRelayId}`"
           mode="live"
           :session-id="entityId"
+          :template-name="boundTemplate?.name || null"
+          :profile-name="boundProfile?.name || null"
         />
         <RelayPolicyEditor
           v-else-if="policyModel"
@@ -60,6 +62,8 @@
           :policy-model="policyModel"
           :model-value="ownPolicies"
           :inherited="inheritedPolicies"
+          :template-name="boundTemplate?.name || null"
+          :profile-name="boundProfile?.name || null"
           @update:model-value="handleField('relay_channel_policies', $event)"
         />
       </div>

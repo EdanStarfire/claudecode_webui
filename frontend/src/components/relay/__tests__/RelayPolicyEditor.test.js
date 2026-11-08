@@ -40,9 +40,11 @@ async function mountLive(policies) {
 describe('RelayPolicyEditor (live)', () => {
   it('renders values, target label and help from the policy model only', async () => {
     const w = await mountLive({ [A]: { policy: 'v2', source: 'session' } })
-    const options = w.findAll('[data-testid="relay-policy-select"] option').map(o => o.text())
+    const options = w.findAll('[data-testid="relay-policy-row-C0AAAAAAA1"] .strip-btn').map(o => o.attributes('aria-label'))
     expect(options).toEqual(['v1', 'v2', 'v3'])
-    expect(w.find('[data-testid="relay-picker-input"]').attributes('placeholder')).toContain('Test target ID')
+    expect(w.find('[data-testid="relay-policy-row-C0AAAAAAA1"] [aria-checked="true"]').attributes('aria-label')).toBe('v2')
+    expect(w.find('[data-testid="relay-policy-opt-v1"]').attributes('title')).toContain('first help')
+    expect(w.find('[data-testid="relay-picker-input"]').attributes('placeholder')).toBe('#channel, @person or paste an ID')
     expect(w.find('[data-testid="relay-policy-explain"]').text()).toContain('second help')
     expect(w.find('[data-testid="relay-policy-live-note"]').text()).toBe('Applies immediately.')
   })
@@ -55,33 +57,34 @@ describe('RelayPolicyEditor (live)', () => {
     expect(w.find('[data-testid="relay-policy-empty"]').exists()).toBe(true)
   })
 
-  it('resolves labels for policy targets and keeps the bare ID visible', async () => {
+  it('resolves labels for policy targets and keeps the bare ID in the hover text', async () => {
     const w = await mountLive({ [A]: { policy: 'v1', source: 'session' } })
     const row = w.find(`[data-testid="relay-policy-row-${A}"]`)
     expect(row.find('[data-testid="relay-policy-label"]').text()).toBe(`#name-${A}`)
-    expect(row.find('code').text()).toBe(A)
+    expect(row.attributes('title')).toContain(A) // the ID lives in the hover text
   })
 
-  it('shows a tier marker only for inherited rows and no remove button for them', async () => {
+  it('tags every row with the app\'s SourceMarker (P/T/S) and offers reset only on own rows', async () => {
     const w = await mountLive({
       [A]: { policy: 'v1', source: 'template' }, [B]: { policy: 'v2', source: 'session' },
     })
     const inherited = w.find(`[data-testid="relay-policy-row-${A}"]`)
     const own = w.find(`[data-testid="relay-policy-row-${B}"]`)
-    expect(inherited.find('[data-testid="relay-policy-tier"]').text()).toBe('template')
+    expect(inherited.find('[data-testid="relay-policy-tier"]').text()).toBe('T')
+    expect(inherited.find('[data-testid="relay-policy-tier"]').attributes('title')).toBe('Inherited from template')
     expect(inherited.find('[data-testid="relay-policy-remove"]').exists()).toBe(false)
-    expect(own.find('[data-testid="relay-policy-tier"]').exists()).toBe(false)
-    expect(own.find('[data-testid="relay-policy-remove"]').exists()).toBe(true)
+    expect(own.find('[data-testid="relay-policy-tier"]').text()).toBe('S')
+    expect(own.find('[data-testid="relay-policy-remove"]').attributes('title')).toBe('Reset to inherited value')
   })
 
   it('change / override calls the exact relay-qualified PUT and adopts the returned payload', async () => {
     const w = await mountLive({ [A]: { policy: 'v1', source: 'template' } })
     apiMock.put.mockResolvedValue(payload({ [A]: { policy: 'v3', source: 'session' } }))
-    await w.find('[data-testid="relay-policy-select"]').setValue('v3')
+    await w.find('[data-testid="relay-policy-opt-v3"]').trigger('click')
     await flushPromises()
     expect(apiMock.put).toHaveBeenCalledWith(`/api/sessions/s1/relays/r1/policies/${A}`, { policy: 'v3' })
-    expect(w.find('[data-testid="relay-policy-tier"]').exists()).toBe(false)
-    expect(w.find('[data-testid="relay-policy-select"]').element.value).toBe('v3')
+    expect(w.find('[data-testid="relay-policy-tier"]').text()).toBe('S')
+    expect(w.find('[data-testid="relay-policy-row-C0AAAAAAA1"] [aria-checked="true"]').attributes('aria-label')).toBe('v3')
   })
 
   it('remove calls DELETE and shows the revealed lower-tier value from the payload', async () => {
@@ -90,16 +93,16 @@ describe('RelayPolicyEditor (live)', () => {
     await w.find('[data-testid="relay-policy-remove"]').trigger('click')
     await flushPromises()
     expect(apiMock.delete).toHaveBeenCalledWith(`/api/sessions/s1/relays/r1/policies/${A}`)
-    expect(w.find('[data-testid="relay-policy-tier"]').text()).toBe('profile')
+    expect(w.find('[data-testid="relay-policy-tier"]').text()).toBe('P')
   })
 
   it.each([409, 422])('rolls back and shows the error on a %s', async (status) => {
     const w = await mountLive({ [A]: { policy: 'v1', source: 'session' } })
     apiMock.put.mockRejectedValue(Object.assign(new Error('nope'), { status, data: { detail: `rejected ${status}` } }))
-    await w.find('[data-testid="relay-policy-select"]').setValue('v3')
+    await w.find('[data-testid="relay-policy-opt-v3"]').trigger('click')
     await flushPromises()
     expect(w.find('[data-testid="relay-policy-error"]').text()).toContain('nope')
-    expect(w.find('[data-testid="relay-policy-select"]').element.value).toBe('v1')
+    expect(w.find('[aria-checked="true"]').attributes('aria-label')).toBe('v1')
   })
 
   it('serialises concurrent edits and a failed edit rolls back only its own target', async () => {
@@ -107,14 +110,14 @@ describe('RelayPolicyEditor (live)', () => {
     let releaseA
     apiMock.put.mockImplementationOnce(() => new Promise((resolve) => { releaseA = () => resolve(payload({ [A]: { policy: 'v2', source: 'session' }, [B]: { policy: 'v1', source: 'session' } })) }))
     apiMock.put.mockRejectedValueOnce(new Error('rejected'))
-    const selects = w.findAll('[data-testid="relay-policy-select"]')
-    await selects[0].setValue('v2')
-    await selects[1].setValue('v3')
+    const rowOf = (t) => w.find(`[data-testid="relay-policy-row-${t}"]`)
+    await rowOf(A).find('[data-testid="relay-policy-opt-v2"]').trigger('click')
+    await rowOf(B).find('[data-testid="relay-policy-opt-v3"]').trigger('click')
     expect(apiMock.put).toHaveBeenCalledTimes(1) // B waits for A
     releaseA()
     await flushPromises()
     expect(apiMock.put).toHaveBeenCalledTimes(2)
-    const rows = w.findAll('[data-testid="relay-policy-select"]').map(x => x.element.value)
+    const rows = [A, B].map(t => rowOf(t).find('[aria-checked="true"]').attributes('aria-label'))
     expect(rows).toEqual(['v2', 'v1']) // A kept its new value; B rolled back alone
     expect(w.find('[data-testid="relay-policy-error"]').text()).toContain('rejected')
   })
@@ -138,7 +141,7 @@ describe('RelayPolicyEditor (live)', () => {
   it('adding from the picker PUTs the chosen value for the picked target', async () => {
     const w = await mountLive({})
     apiMock.put.mockResolvedValue(payload({ [B]: { policy: 'v2', source: 'session' } }))
-    await w.find('[data-testid="relay-policy-new-value"]').setValue('v2')
+    await w.find('[data-testid="relay-policy-new-value"] [data-testid="relay-policy-opt-v2"]').trigger('click')
     w.findComponent({ name: 'RelayChannelPicker' }).vm.$emit('select', { target: B, label: '#picked' })
     await flushPromises()
     expect(apiMock.put).toHaveBeenCalledWith(`/api/sessions/s1/relays/r1/policies/${B}`, { policy: 'v2' })
@@ -175,7 +178,7 @@ describe('RelayPolicyEditor (local)', () => {
       inherited: { [B]: { policy: 'v3', source: 'profile' } },
     })
     await flushPromises()
-    await w.find(`[data-testid="relay-policy-row-${A}"] [data-testid="relay-policy-select"]`).setValue('v2')
+    await w.find(`[data-testid="relay-policy-row-${A}"] [data-testid="relay-policy-opt-v2"]`).trigger('click')
     expect(w.emitted('update:modelValue').at(-1)[0]).toEqual({ r1: { [A]: 'v2' } })
     expect(apiMock.put).not.toHaveBeenCalled()
     expect(w.find('[data-testid="relay-policy-live-note"]').exists()).toBe(false)
@@ -184,7 +187,7 @@ describe('RelayPolicyEditor (local)', () => {
   it('overriding an inherited row emits one own entry, not the inherited set', async () => {
     const w = mountLocal({ modelValue: null, inherited: { [B]: { policy: 'v3', source: 'template' }, [A]: { policy: 'v1', source: 'profile' } } })
     await flushPromises()
-    await w.find(`[data-testid="relay-policy-row-${B}"] [data-testid="relay-policy-select"]`).setValue('v1')
+    await w.find(`[data-testid="relay-policy-row-${B}"] [data-testid="relay-policy-opt-v1"]`).trigger('click')
     expect(w.emitted('update:modelValue').at(-1)[0]).toEqual({ r1: { [B]: 'v1' } })
   })
 
@@ -202,5 +205,17 @@ describe('RelayPolicyEditor (local)', () => {
     await flushPromises()
     const emitted = w.emitted('update:modelValue').at(-1)[0]
     expect(emitted).toEqual({ r1: { [A]: 'v1' } })
+  })
+})
+
+describe('RelayPolicyEditor layout contract', () => {
+  it('a row is one line: tag, truncating label with full text in the title, strip, reset', async () => {
+    const w = await mountLive({ [A]: { policy: 'v1', source: 'session' } })
+    const row = w.find(`[data-testid="relay-policy-row-${A}"]`)
+    expect(row.attributes('title')).toBe(`#name-${A} · ${A}`)
+    expect(row.find('code').exists()).toBe(false) // no second line with the monospace ID
+    const kids = [...row.element.children].map(c => c.className.split(' ')[0])
+    expect(kids).toEqual(['source-marker', 'row-label', 'policy-strip', 'field-reset-btn'])
+    expect(row.find('select').exists()).toBe(false)
   })
 })

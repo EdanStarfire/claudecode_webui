@@ -24,7 +24,7 @@ beforeEach(() => {
 afterEach(() => vi.useRealTimers())
 
 const mk = (props = {}) => mount(RelayChannelPicker, {
-  props: { relayId: 'r1', policyModel: MODEL, statusFor: t => ({ C0BLOCKED1: 'blocked' }[t] || null), ...props },
+  props: { relayId: 'r1', policyModel: MODEL, statusFor: t => (t === 'C0BLOCKED1' ? { policy: 'blocked', kind: 'S' } : null), ...props },
   attachTo: document.body,
 })
 
@@ -62,17 +62,62 @@ describe('RelayChannelPicker', () => {
     w.unmount()
   })
 
-  it('people are behind a toggle and need two characters', async () => {
+  it('has no people checkbox; the hint names the prefixes', async () => {
+    const w = mk()
+    expect(w.find('input[type="checkbox"]').exists()).toBe(false)
+    expect(w.find('[data-testid="relay-picker-input"]').attributes('placeholder')).toBe('#channel, @person or paste an ID')
+    w.unmount()
+  })
+
+  it('# searches channels only and strips the prefix', async () => {
     const w = mk()
     await w.find('input').trigger('focus')
     await vi.runAllTimersAsync()
     apiMock.get.mockClear()
-    await w.find('[data-testid="relay-picker-people"]').setValue(true)
-    await vi.runAllTimersAsync()
-    expect(apiMock.get.mock.calls.at(-1)[1].params.kinds).toBeNull()
-    await w.find('[data-testid="relay-picker-input"]').setValue('al')
+    await w.find('[data-testid="relay-picker-input"]').setValue('#gen')
     await vi.advanceTimersByTimeAsync(250)
-    expect(apiMock.get.mock.calls.at(-1)[1].params.kinds).toContain('person')
+    const params = apiMock.get.mock.calls.at(-1)[1].params
+    expect(params.q).toBe('gen')
+    expect(params.kinds).toBe('public,private')
+    w.unmount()
+  })
+
+  it('@ searches people only, strips the prefix and needs two characters', async () => {
+    const w = mk()
+    await w.find('input').trigger('focus')
+    await vi.runAllTimersAsync()
+    apiMock.get.mockClear()
+    await w.find('[data-testid="relay-picker-input"]').setValue('@a')
+    await vi.advanceTimersByTimeAsync(250)
+    expect(apiMock.get).not.toHaveBeenCalled()
+    expect(w.find('[data-testid="relay-picker-hint"]').exists()).toBe(true)
+    await w.find('[data-testid="relay-picker-input"]').setValue('@al')
+    await vi.advanceTimersByTimeAsync(250)
+    const params = apiMock.get.mock.calls.at(-1)[1].params
+    expect(params.q).toBe('al')
+    expect(params.kinds).toBe('person')
+    w.unmount()
+  })
+
+  it('plain text searches the default kinds (no kinds param)', async () => {
+    const w = mk()
+    await w.find('input').trigger('focus')
+    await vi.runAllTimersAsync()
+    apiMock.get.mockClear()
+    await w.find('[data-testid="relay-picker-input"]').setValue('dev')
+    await vi.advanceTimersByTimeAsync(250)
+    const params = apiMock.get.mock.calls.at(-1)[1].params
+    expect(params).toMatchObject({ q: 'dev', kinds: null })
+    w.unmount()
+  })
+
+  it('rows carry the SourceMarker tag: EMPTY when unlisted, the tier kind when set', async () => {
+    const w = mk({ statusFor: t => (t === 'C0BLOCKED1' ? { policy: 'blocked', kind: 'P' } : null) })
+    await w.find('input').trigger('focus')
+    await vi.runAllTimersAsync()
+    await flushPromises()
+    expect(w.find('[data-testid="relay-picker-row-C0BLOCKED1"] .source-marker').text()).toBe('P')
+    expect(w.find('[data-testid="relay-picker-row-C0PUBLIC01"] .source-marker').text()).toBe('∅')
     w.unmount()
   })
 

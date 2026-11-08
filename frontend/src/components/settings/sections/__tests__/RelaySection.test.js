@@ -151,9 +151,9 @@ describe('RelaySection policy editor on template and profile tiers', () => {
       { relay_id: 'r1', relay_channel_policies: { r1: { C0OWNOWN01: 'ask' } } },
       { relay_channel_policies: { r1: { C0FROMPROF1: 'blocked' } } },
     )
-    expect(wrapper.find('[data-testid="relay-policy-row-C0FROMPROF1"] [data-testid="relay-policy-tier"]').text()).toBe('profile')
-    expect(wrapper.find('[data-testid="relay-policy-row-C0OWNOWN01"] [data-testid="relay-policy-tier"]').exists()).toBe(false)
-    await wrapper.find('[data-testid="relay-policy-row-C0OWNOWN01"] [data-testid="relay-policy-select"]').setValue('blocked')
+    expect(wrapper.find('[data-testid="relay-policy-row-C0FROMPROF1"] [data-testid="relay-policy-tier"]').text()).toBe('P')
+    expect(wrapper.find('[data-testid="relay-policy-row-C0OWNOWN01"] [data-testid="relay-policy-tier"]').text()).toBe('S')
+    await wrapper.find('[data-testid="relay-policy-row-C0OWNOWN01"] [data-testid="relay-policy-opt-blocked"]').trigger('click')
     expect(settingsStore.getDraft('template:t1:relay').relay_channel_policies)
       .toEqual({ r1: { C0OWNOWN01: 'blocked' } })
   })
@@ -161,7 +161,7 @@ describe('RelaySection policy editor on template and profile tiers', () => {
   it('overriding an inherited row writes an own entry for that target only', async () => {
     const { wrapper, settingsStore } = await mountTemplate(
       { relay_id: 'r1' }, { relay_channel_policies: { r1: { C0FROMPROF1: 'blocked' } } })
-    await wrapper.find('[data-testid="relay-policy-row-C0FROMPROF1"] [data-testid="relay-policy-select"]').setValue('ask')
+    await wrapper.find('[data-testid="relay-policy-row-C0FROMPROF1"] [data-testid="relay-policy-opt-ask"]').trigger('click')
     expect(settingsStore.getDraft('template:t1:relay').relay_channel_policies).toEqual({ r1: { C0FROMPROF1: 'ask' } })
   })
 

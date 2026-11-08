@@ -17,16 +17,13 @@
         @keydown.enter.prevent="chooseActive"
         @keydown.esc="open = false"
       />
-      <label class="people-toggle">
-        <input v-model="includePeople" type="checkbox" data-testid="relay-picker-people" @change="search(true)" />
-        Include people
-      </label>
     </div>
 
     <div v-if="open" class="picker-panel" role="listbox" data-testid="relay-picker-panel">
       <div v-if="error" class="picker-error" role="alert" data-testid="relay-picker-error">{{ error }}</div>
+      <div v-else-if="needMore" class="picker-empty" data-testid="relay-picker-hint">Type at least 2 characters after @.</div>
       <div v-else-if="loading && !rows.length" class="picker-empty">Searching…</div>
-      <div v-else-if="!rows.length && !pastedTarget" class="picker-empty" data-testid="relay-picker-empty">No matches</div>
+      <div v-else-if="!rows.length && !pastedTarget && !loading" class="picker-empty" data-testid="relay-picker-empty">No matches</div>
 
       <button
         v-if="pastedTarget"
@@ -36,8 +33,8 @@
         data-testid="relay-picker-paste"
         @click="emitTarget(pastedTarget, pastedTarget)"
       >
-        <span class="row-label">Use ID</span>
-        <code class="row-id">{{ pastedTarget }}</code>
+        <SourceMarker :kind="markerOf(pastedTarget)" :template-name="templateName" :profile-name="profileName" />
+        <span class="row-label">Use ID <code class="row-id">{{ pastedTarget }}</code></span>
         <span class="row-status">{{ statusText(pastedTarget) }}</span>
       </button>
 
@@ -54,8 +51,9 @@
           :data-testid="`relay-picker-row-${row.id}`"
           @click="choose(row)"
         >
-          <span class="row-label">{{ row.label }}</span>
-          <code class="row-id">{{ targetOf(row) || row.id }}</code>
+          <SourceMarker v-if="targetOf(row)" :kind="markerOf(targetOf(row))" :template-name="templateName" :profile-name="profileName" />
+          <span v-else class="marker-slot" />
+          <span class="row-label" :title="`${row.label} · ${targetOf(row) || row.id}`">{{ row.label }}</span>
           <span v-if="!targetOf(row)" class="row-status">no DM yet</span>
           <span v-else class="row-status" :class="{ 'is-set': statusFor(targetOf(row)) }">{{ statusText(targetOf(row)) }}</span>
         </button>
@@ -77,19 +75,22 @@
 <script setup>
 import { computed, onBeforeUnmount, ref } from 'vue'
 import { useRelayStore } from '@/stores/relay'
+import SourceMarker from '../settings/SourceMarker.vue'
 
 const props = defineProps({
   relayId: { type: String, required: true },
   policyModel: { type: Object, default: null },
   // target -> policy value (or null when unlisted)
+  // target -> {policy, kind: 'S'|'T'|'P'} or null (unlisted)
   statusFor: { type: Function, default: () => null },
+  templateName: { type: String, default: null },
+  profileName: { type: String, default: null },
 })
 const emit = defineEmits(['select'])
 
 const store = useRelayStore()
 const root = ref(null)
 const query = ref('')
-const includePeople = ref(false)
 const open = ref(false)
 const loading = ref(false)
 const error = ref('')
@@ -100,6 +101,7 @@ const activeIndex = ref(0)
 
 const DEBOUNCE_MS = 250
 const MIN_PERSON_QUERY = 2
+const CHANNEL_KINDS = ['public', 'private']
 const KIND_TITLES = { public: 'Channels', private: 'Private channels', dm: 'Direct messages', group_dm: 'Group DMs', person: 'People' }
 const KIND_ORDER = Object.keys(KIND_TITLES)
 
@@ -109,8 +111,16 @@ let seq = 0
 // The query a cursor belongs to: "Load more" must continue THAT search, not the box's current text.
 let searched = { q: '', kinds: null }
 
-const placeholder = computed(() =>
-  props.policyModel?.target_label ? `Search, or paste a ${props.policyModel.target_label}` : 'Search')
+const placeholder = '#channel, @person or paste an ID'
+
+// "@" searches people, "#" searches channels, anything else channels + DMs + group DMs.
+const parsed = computed(() => {
+  const raw = query.value.trim()
+  if (raw.startsWith('@')) return { q: raw.slice(1).trim(), kinds: ['person'] }
+  if (raw.startsWith('#')) return { q: raw.slice(1).trim(), kinds: CHANNEL_KINDS }
+  return { q: raw, kinds: null }
+})
+const needMore = computed(() => parsed.value.kinds?.[0] === 'person' && parsed.value.q.length < MIN_PERSON_QUERY)
 
 const pastedTarget = computed(() => {
   const pattern = props.policyModel?.target_pattern
@@ -133,13 +143,11 @@ function targetOf(row) {
 }
 
 function statusText(target) {
-  return props.statusFor(target) || 'unlisted'
+  return props.statusFor(target)?.policy || 'unlisted'
 }
 
-function kindsParam() {
-  return includePeople.value && query.value.trim().length >= MIN_PERSON_QUERY
-    ? [...KIND_ORDER] : null
-}
+// the app's SourceMarker kind for a target: where its value comes from, EMPTY when unset
+const markerOf = (target) => props.statusFor(target)?.kind || 'EMPTY'
 
 async function search(reset) {
   clearTimeout(timer)
@@ -147,7 +155,14 @@ async function search(reset) {
   controller = new AbortController()
   const mine = ++seq
   const cursor = reset ? null : nextCursor.value
-  if (reset) searched = { q: query.value.trim(), kinds: kindsParam() }
+  if (reset) searched = { q: parsed.value.q, kinds: parsed.value.kinds }
+  if (reset && needMore.value) {
+    rows.value = []
+    nextCursor.value = null
+    error.value = ''
+    loading.value = false
+    return
+  }
   loading.value = true
   error.value = ''
   try {
@@ -230,10 +245,9 @@ onBeforeUnmount(() => {
 </script>
 
 <style scoped>
-.relay-picker { position: relative; flex: 1; min-width: 0; }
-.picker-input-row { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
-.picker-input-row > input[type='text'] { flex: 1; min-width: 160px; }
-.people-toggle { font-size: 12px; color: var(--bs-secondary-color); display: inline-flex; align-items: center; gap: 4px; white-space: nowrap; }
+.relay-picker { flex: 1; min-width: 0; } /* the panel anchors to the editor's add row */
+.picker-input-row { display: flex; }
+.picker-input-row > input { flex: 1; min-width: 0; }
 .picker-panel {
   position: absolute; z-index: 20; left: 0; right: 0; margin-top: 4px; max-height: 320px; overflow-y: auto;
   background: var(--bs-body-bg); border: 1px solid var(--bs-border-color); border-radius: 6px;
@@ -241,13 +255,14 @@ onBeforeUnmount(() => {
 }
 .picker-group { font-size: 11px; text-transform: uppercase; letter-spacing: 0.04em; color: var(--bs-secondary-color); padding: 6px 10px 2px; }
 .picker-row {
-  display: flex; align-items: baseline; gap: 8px; width: 100%; padding: 5px 10px; background: none; border: 0;
+  display: flex; align-items: center; gap: 6px; width: 100%; padding: 5px 10px; background: none; border: 0;
   text-align: left; color: var(--bs-body-color); font-size: 13px; cursor: pointer;
 }
 .picker-row:hover:not(:disabled), .picker-row.active { background: var(--bs-secondary-bg); }
 .picker-row.disabled { opacity: 0.55; cursor: default; }
 .row-label { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .row-id { font-size: 11px; color: var(--bs-secondary-color); }
+.marker-slot { flex: none; width: 16px; }
 .row-status { font-size: 11px; color: var(--bs-secondary-color); min-width: 56px; text-align: right; }
 .row-status.is-set { color: var(--bs-body-color); font-weight: 600; }
 .picker-more { width: 100%; padding: 6px; background: none; border: 0; border-top: 1px solid var(--bs-border-color); font-size: 12px; color: var(--bs-link-color); }
@@ -255,5 +270,6 @@ onBeforeUnmount(() => {
 .picker-error { color: #f87171; }
 @media (max-width: 600px) {
   .row-id { display: none; }
+  .picker-row { padding: 4px 6px; font-size: 12px; }
 }
 </style>
