@@ -36,7 +36,7 @@ from .application_service import ApplicationService
 from .config_manager import default_config_file
 from .gc_tuning import freeze_startup_heap
 from .message_parser import MessageParser, MessageProcessor
-from .models.messages import MessageRecord, PermissionInfo, ToolCall
+from .models.messages import MessageRecord, PermissionInfo, ToolCall, ToolState
 from .permission_service import PermissionService
 from .principal import Principal, set_current_principal
 from .session_coordinator import SessionCoordinator
@@ -1171,6 +1171,14 @@ class BackendApp:
                         # see a pending record, so they fall back to create_tool_call
                         # exactly as before.
                         existing = self.coordinator._get_active_tool_call(session_id, tool_id)
+                        if (
+                            existing is not None
+                            and existing.status != ToolState.PENDING
+                            and existing.input == input_params
+                        ):
+                            # Issue #2355: the permission request already carried this input
+                            # and wrote the record; re-emitting would repeat the same status.
+                            continue
                         if existing is not None:
                             tool_call = self.coordinator.update_tool_call_input(
                                 session_id, tool_id, input_params

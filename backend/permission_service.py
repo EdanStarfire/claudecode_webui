@@ -315,6 +315,16 @@ class PermissionService:
                         ),                               # Issue #2103
                     )
 
+                    # Issue #2355: the SDK callback always has the real input, while the tracked
+                    # call may still hold the content_block_start placeholder ({}) when the turn
+                    # barrier above passed early. Set it first (no separate record) so the one
+                    # awaiting_permission record carries it and the tool_use message that
+                    # arrives later is a no-op for the tracker.
+                    if input_params and tool_call.input != input_params:
+                        self.coordinator.update_tool_call_input(
+                            session_id, tool_call.tool_use_id, dict(input_params), store=False
+                        )
+
                     # Update tool call status
                     updated_tool_call = self.coordinator.update_tool_call_permission_request(
                         session_id,

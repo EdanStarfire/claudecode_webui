@@ -378,6 +378,13 @@ secret is deleted, `has_*_token` turns false and `*_secret_missing` true (tools 
   card -> a standalone `relay-prompt-{request_id}` card carries the prompt. In case 3 the owner still sees and answers the
   prompt, but the original tool card only shows "running" and is not linked to it (degraded AC8; the synthetic card is
   finalised on every outcome). Hook failures never block a tool call.
+- **One awaiting record per tool call (issue #2355)**: the #1694 ordering barrier is keyed by TURN id and a turn is several SDK
+  assistant messages, so after a text-only message of the turn the permission request can reach the tracker before the
+  tool_use message that carries the input. `request_decision` therefore sets the callback's real input on the tracked call first
+  (`update_tool_call_input(..., store=False)`, no separate record) so the single awaiting_permission record has it, and
+  `update_tool_call_input` is a no-op (no store; `_emit_tool_call_updates` skips the re-emit) when the call is no longer PENDING
+  and the input is unchanged. A different input still stores; the #2109 `{}` -> real input fill of a PENDING placeholder is intact.
+  Applies to every permission-gated tool, not only relay.
 - **Prompt answers** (`relay_choice` on the permission REST call): `Allow and set channel to auto` persists
   `auto` at SESSION tier live (no restart); `choose_policy` persists the chosen policy, and a policy that forbids
   the action (e.g. `read_only` for a send) denies it. Deny persists nothing. Relay prompts never offer

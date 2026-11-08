@@ -7,6 +7,7 @@ Versioning: [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 ## [Unreleased]
 
 ### Fixed
+- A permission prompt could log two `awaiting_permission` records on one tool card (one with an empty input) when the permission request reached the tracker before the assistant message announcing the tool call, as in a turn that started with a text-only message; the card now gets exactly one record carrying the full input, in every permission mode and for every permission-gated tool (#2355)
 - Relay `search` now flags the agent's own self-DM posts as agent messages (the owner's message in the owner's self-DM that starts with the agent marker); messages elsewhere or from other users are never flagged by the marker (#2355, part of #2103)
 - A `blocked` / `read_only` relay refusal now reaches the agent with the same structured detail (code, channel, action, policy) in default and Accept Edits mode as in auto mode; `blocked` still reveals nothing beyond "not accessible to this session" (#2355, part of #2103)
 - Relay policy changes are now audited whatever made them: the session policy editor, a config save, create-time overrides and profile/template edits (once per changed target per tier edit, session-less, no per-session fan-out) join prompt answers in the relay audit log with old and new policy and a source (`editor`, `config`, `prompt`, `template`, `profile`); the audit viewer shows `old → new` with a source/tier tag (#2355, part of #2103)

@@ -90,6 +90,7 @@ class FakeCoordinator:
             "create_tool_call", "update_tool_call_permission_request",
             "update_tool_call_permission_response", "update_tool_call_result",
             "get_tool_call_by_id", "get_tool_call_by_request_id", "get_tool_call_event",
+            "update_tool_call_input", "_get_active_tool_call",
         }:
             return getattr(self.tracker, name)
         raise AttributeError(name)
