@@ -62,7 +62,6 @@ class PermissionService:
 
             # Generate unique request ID to correlate request/response
             request_id = str(uuid.uuid4())
-            request_time = time.time()
 
             # Issue #953: Extract tool_use_id and agent_id from SDK v0.1.52+ context
             tool_use_id = getattr(context, 'tool_use_id', None) if context else None
@@ -122,467 +121,515 @@ class PermissionService:
             if relay_gate_result is not None:
                 suggestions = []  # relay approvals never persist allow rules (handler gate)
 
-            # Store permission request message using dataclass (Phase 0, Issue #310)
+            return await self.request_decision(
+                session_id, tool_name, input_params,
+                request_id=request_id,
+                tool_use_id=tool_use_id,
+                agent_id=agent_id,
+                context_fields={
+                    "decision_reason": decision_reason,
+                    "blocked_path": blocked_path,
+                    "title": title,
+                    "display_name": display_name,
+                    "description": description,
+                },
+                suggestions=suggestions,
+                relay_gate_result=relay_gate_result,
+                relay_bridge=relay_bridge,
+            )
+
+        return permission_callback
+
+    async def request_decision(
+        self,
+        session_id: str,
+        tool_name: str,
+        input_params: dict,
+        *,
+        request_id: str | None = None,
+        tool_use_id: str | None = None,
+        agent_id: str | None = None,
+        context_fields: dict[str, Any] | None = None,
+        suggestions: list[dict] | None = None,
+        relay_gate_result: Any = None,
+        relay_bridge: Any = None,
+    ) -> dict:
+        """Raise one permission prompt and wait for the owner's decision (issue #2353).
+
+        The prompt body of the SDK permission callback, shared with callers that prompt from
+        elsewhere (the relay tool handler). Records the request, flips the tool call to
+        awaiting_permission, pauses the session, awaits the Future that the REST resolve
+        route completes, persists the response and returns the SDK permission response.
+        """
+        request_id = request_id or str(uuid.uuid4())
+        request_time = time.time()
+        context_fields = context_fields or {}
+        decision_reason = context_fields.get("decision_reason")
+        blocked_path = context_fields.get("blocked_path")
+        title = context_fields.get("title")
+        display_name = context_fields.get("display_name")
+        description = context_fields.get("description")
+        suggestions = suggestions or []
+
+        # Store permission request message using dataclass (Phase 0, Issue #310)
+        try:
+            # Convert suggestions to dataclass format
+            suggestion_objects = [
+                PermissionSuggestion.from_dict(s) if isinstance(s, dict) else s
+                for s in suggestions
+            ]
+
+            # Create permission request dataclass
+            permission_request = PermissionRequestMessage(
+                request_id=request_id,
+                tool_name=tool_name,
+                input_params=input_params,
+                suggestions=suggestion_objects,
+                timestamp=request_time,
+                session_id=session_id,
+                tool_use_id=tool_use_id,       # Issue #953
+                agent_id=agent_id,              # Issue #953
+                decision_reason=decision_reason, # Issue #1302
+                blocked_path=blocked_path,       # Issue #1302
+                title=title,                     # Issue #1302
+                display_name=display_name,       # Issue #1302
+                description=description,         # Issue #1302
+            )
+
+            # Issue #2084 (stage 3-B, §5): the flat PermissionRequestMessage dict is the
+            # one triggering_message fed to both the ToolCallUpdate storage write (via
+            # update_tool_call_permission_request below) and the live tool_call
+            # emission (via MessageRecord.from_tool_call below) — no more StoredMessage
+            # wrapper, and no more two independently-built tool_call_data shapes.
+            request_dict = permission_request.to_dict()
+
+            # Issue #324: Update ToolCall to awaiting_permission and emit unified tool_call message
             try:
-                # Convert suggestions to dataclass format
-                suggestion_objects = [
-                    PermissionSuggestion.from_dict(s) if isinstance(s, dict) else s
-                    for s in suggestions
-                ]
-
-                # Create permission request dataclass
-                permission_request = PermissionRequestMessage(
-                    request_id=request_id,
-                    tool_name=tool_name,
-                    input_params=input_params,
-                    suggestions=suggestion_objects,
-                    timestamp=request_time,
-                    session_id=session_id,
-                    tool_use_id=tool_use_id,       # Issue #953
-                    agent_id=agent_id,              # Issue #953
-                    decision_reason=decision_reason, # Issue #1302
-                    blocked_path=blocked_path,       # Issue #1302
-                    title=title,                     # Issue #1302
-                    display_name=display_name,       # Issue #1302
-                    description=description,         # Issue #1302
-                )
-
-                # Issue #2084 (stage 3-B, §5): the flat PermissionRequestMessage dict is the
-                # one triggering_message fed to both the ToolCallUpdate storage write (via
-                # update_tool_call_permission_request below) and the live tool_call
-                # emission (via MessageRecord.from_tool_call below) — no more StoredMessage
-                # wrapper, and no more two independently-built tool_call_data shapes.
-                request_dict = permission_request.to_dict()
-
-                # Issue #324: Update ToolCall to awaiting_permission and emit unified tool_call message
-                try:
-                    # Issue #953: O(1) lookup by tool_use_id (always present — SDK
-                    # pinned well above the v0.1.52 floor that introduced it).
-                    tool_call = None
-                    if tool_use_id:
+                # Issue #953: O(1) lookup by tool_use_id (always present — SDK
+                # pinned well above the v0.1.52 floor that introduced it).
+                tool_call = None
+                if tool_use_id:
+                    tool_call = self.coordinator.get_tool_call_by_id(session_id, tool_use_id)
+                    if not tool_call:
+                        # Tool call not yet tracked — short wait for async creation
+                        event = self.coordinator.get_tool_call_event(session_id)
+                        event.clear()
+                        try:
+                            await asyncio.wait_for(event.wait(), timeout=2.0)
+                        except TimeoutError:
+                            pass
                         tool_call = self.coordinator.get_tool_call_by_id(session_id, tool_use_id)
-                        if not tool_call:
-                            # Tool call not yet tracked — short wait for async creation
-                            event = self.coordinator.get_tool_call_event(session_id)
+
+                if tool_call:
+                    # Issue #1694: Wait for the assistant message envelope that produced
+                    # this tool_call to be queued before appending the awaiting_permission
+                    # update, so the frontend always sees the assistant bubble ahead of its
+                    # permission prompt. Fail-open on timeout: this barrier only affects
+                    # display ordering, not tool execution correctness, so we log a warning
+                    # and proceed rather than risk a spurious deny. No-op (zero behavior
+                    # change) for any ToolCall built without turn_id.
+                    if tool_call.turn_id and not self.coordinator.is_assistant_message_emitted(
+                        session_id, tool_call.turn_id
+                    ):
+                        event = self.coordinator.get_message_emitted_event(session_id)
+                        loop = asyncio.get_running_loop()
+                        deadline = loop.time() + 2.0  # 2-second fail-open timeout
+                        while True:
+                            remaining = deadline - loop.time()
+                            if remaining <= 0:
+                                break
+                            # Clear before check+wait to avoid missing a signal that
+                            # arrives between our check and the wait() call.
                             event.clear()
-                            try:
-                                await asyncio.wait_for(event.wait(), timeout=2.0)
-                            except TimeoutError:
-                                pass
-                            tool_call = self.coordinator.get_tool_call_by_id(session_id, tool_use_id)
-
-                    if tool_call:
-                        # Issue #1694: Wait for the assistant message envelope that produced
-                        # this tool_call to be queued before appending the awaiting_permission
-                        # update, so the frontend always sees the assistant bubble ahead of its
-                        # permission prompt. Fail-open on timeout: this barrier only affects
-                        # display ordering, not tool execution correctness, so we log a warning
-                        # and proceed rather than risk a spurious deny. No-op (zero behavior
-                        # change) for any ToolCall built without turn_id.
-                        if tool_call.turn_id and not self.coordinator.is_assistant_message_emitted(
-                            session_id, tool_call.turn_id
-                        ):
-                            event = self.coordinator.get_message_emitted_event(session_id)
-                            loop = asyncio.get_running_loop()
-                            deadline = loop.time() + 2.0  # 2-second fail-open timeout
-                            while True:
-                                remaining = deadline - loop.time()
-                                if remaining <= 0:
-                                    break
-                                # Clear before check+wait to avoid missing a signal that
-                                # arrives between our check and the wait() call.
-                                event.clear()
-                                if self.coordinator.is_assistant_message_emitted(
-                                    session_id, tool_call.turn_id
-                                ):
-                                    break
-                                try:
-                                    await asyncio.wait_for(event.wait(), timeout=remaining)
-                                except TimeoutError:
-                                    break
-                                if self.coordinator.is_assistant_message_emitted(
-                                    session_id, tool_call.turn_id
-                                ):
-                                    break
-
-                            # Fail open regardless of which branch above ended the wait —
-                            # this barrier only affects display ordering, never tool
-                            # execution correctness, so we log and proceed rather than deny.
-                            if not self.coordinator.is_assistant_message_emitted(
+                            if self.coordinator.is_assistant_message_emitted(
                                 session_id, tool_call.turn_id
                             ):
-                                debug_logger.warning(
-                                    f"[PERMISSIONS] Assistant message envelope for "
-                                    f"turn_id {tool_call.turn_id} not emitted after "
-                                    f"2.0s in session {session_id}. Proceeding anyway "
-                                    f"(fail-open; affects display order only)."
-                                )
+                                break
+                            try:
+                                await asyncio.wait_for(event.wait(), timeout=remaining)
+                            except TimeoutError:
+                                break
+                            if self.coordinator.is_assistant_message_emitted(
+                                session_id, tool_call.turn_id
+                            ):
+                                break
 
-                        # Create PermissionInfo from suggestions
-                        permission_info = PermissionInfo(
-                            message=f"Allow {tool_name}?",
-                            suggestions=[s.to_dict() for s in suggestion_objects],
-                            risk_level="medium",
-                            decision_reason=decision_reason, # Issue #1302
-                            blocked_path=blocked_path,       # Issue #1302
-                            title=title,                     # Issue #1302
-                            display_name=display_name,       # Issue #1302
-                            description=description,         # Issue #1302
-                            relay_prompt=(
-                                relay_gate_result.prompt if relay_gate_result else None
-                            ),                               # Issue #2103
-                        )
+                        # Fail open regardless of which branch above ended the wait —
+                        # this barrier only affects display ordering, never tool
+                        # execution correctness, so we log and proceed rather than deny.
+                        if not self.coordinator.is_assistant_message_emitted(
+                            session_id, tool_call.turn_id
+                        ):
+                            debug_logger.warning(
+                                f"[PERMISSIONS] Assistant message envelope for "
+                                f"turn_id {tool_call.turn_id} not emitted after "
+                                f"2.0s in session {session_id}. Proceeding anyway "
+                                f"(fail-open; affects display order only)."
+                            )
 
-                        # Update tool call status
-                        updated_tool_call = self.coordinator.update_tool_call_permission_request(
-                            session_id,
-                            tool_call.tool_use_id,
-                            permission_info,
-                            request_id=request_id,
-                            triggering_message=request_dict,  # Issue #494: embed permission request data
-                        )
+                    # Create PermissionInfo from suggestions
+                    permission_info = PermissionInfo(
+                        message=f"Allow {tool_name}?",
+                        suggestions=[s.to_dict() for s in suggestion_objects],
+                        risk_level="medium",
+                        decision_reason=decision_reason, # Issue #1302
+                        blocked_path=blocked_path,       # Issue #1302
+                        title=title,                     # Issue #1302
+                        display_name=display_name,       # Issue #1302
+                        description=description,         # Issue #1302
+                        relay_prompt=(
+                            relay_gate_result.prompt if relay_gate_result else None
+                        ),                               # Issue #2103
+                    )
 
-                        if updated_tool_call:
-                            # Emit unified tool_call message — request_id promoted onto the
-                            # flat payload automatically by MessageRecord.from_tool_call (§1).
-                            tool_call_data = MessageRecord.from_tool_call(
-                                updated_tool_call, triggering_message=request_dict
-                            ).to_dict()
-                            # _triggering_message is a storage-only embedding — never
-                            # previously reached the frontend live; strip it before emitting.
-                            tool_call_data.pop("_triggering_message", None)
+                    # Update tool call status
+                    updated_tool_call = self.coordinator.update_tool_call_permission_request(
+                        session_id,
+                        tool_call.tool_use_id,
+                        permission_info,
+                        request_id=request_id,
+                        triggering_message=request_dict,  # Issue #494: embed permission request data
+                    )
 
-                            if session_id in self.session_queues:
-                                emit(
-                                    self.session_queues[session_id], QUEUE_SESSION, "tool_call",
-                                    {
-                                        "session_id": session_id,
-                                        "data": tool_call_data,
-                                        "timestamp": datetime.now(UTC).isoformat(),
-                                    },
-                                    scope=session_id, backend_id=self.coordinator.tenant_context.backend_id,
-                                )
-                            debug_logger.info(f"Appended tool_call awaiting_permission for {tool_name} in session {session_id}")
-                    else:
-                        # Issue #616: No ToolCall found — auto-deny to prevent deadlock
-                        debug_logger.warning(
-                            f"No ToolCall found for permission request: "
-                            f"{tool_name} in session {session_id}. Auto-denying."
-                        )
-                        return {"behavior": "deny"}
+                    if updated_tool_call:
+                        # Emit unified tool_call message — request_id promoted onto the
+                        # flat payload automatically by MessageRecord.from_tool_call (§1).
+                        tool_call_data = MessageRecord.from_tool_call(
+                            updated_tool_call, triggering_message=request_dict
+                        ).to_dict()
+                        # _triggering_message is a storage-only embedding — never
+                        # previously reached the frontend live; strip it before emitting.
+                        tool_call_data.pop("_triggering_message", None)
 
-                    # Issue #491: Legacy permission_request broadcast removed.
-                    # Only unified tool_call messages are emitted for permission lifecycle.
-                except Exception:
-                    logger.exception("Failed to broadcast permission request to WebSocket")
-                    # Issue #616: If broadcast failed, auto-deny rather than deadlock
+                        if session_id in self.session_queues:
+                            emit(
+                                self.session_queues[session_id], QUEUE_SESSION, "tool_call",
+                                {
+                                    "session_id": session_id,
+                                    "data": tool_call_data,
+                                    "timestamp": datetime.now(UTC).isoformat(),
+                                },
+                                scope=session_id, backend_id=self.coordinator.tenant_context.backend_id,
+                            )
+                        debug_logger.info(f"Appended tool_call awaiting_permission for {tool_name} in session {session_id}")
+                else:
+                    # Issue #616: No ToolCall found — auto-deny to prevent deadlock
+                    debug_logger.warning(
+                        f"No ToolCall found for permission request: "
+                        f"{tool_name} in session {session_id}. Auto-denying."
+                    )
                     return {"behavior": "deny"}
 
+                # Issue #491: Legacy permission_request broadcast removed.
+                # Only unified tool_call messages are emitted for permission lifecycle.
             except Exception:
-                logger.exception("Failed to store permission request message")
+                logger.exception("Failed to broadcast permission request to WebSocket")
+                # Issue #616: If broadcast failed, auto-deny rather than deadlock
                 return {"behavior": "deny"}
 
-            # Issue #616: Session pause, Future creation, and await are now INSIDE the
-            # successful tool_call path. We only reach here if the permission prompt was
-            # successfully broadcast to the frontend.
+        except Exception:
+            logger.exception("Failed to store permission request message")
+            return {"behavior": "deny"}
 
-            # Issue #1746: Track this request in the per-session open set before
-            # pausing, so concurrent requests on the same session only pause
-            # once and only resume the session once every sibling request has
-            # resolved.
-            session_pending = self.pending_by_session.setdefault(session_id, set())
-            is_first_pending_for_session = not session_pending
-            session_pending.add(request_id)
+        # Issue #616: Session pause, Future creation, and await are now INSIDE the
+        # successful tool_call path. We only reach here if the permission prompt was
+        # successfully broadcast to the frontend.
 
-            # Set session state to PAUSED while waiting for permission response
-            # This provides visual feedback that the session is blocked on user input
-            try:
-                if is_first_pending_for_session:
-                    # Issue #2184: pause_session() now fires the "pause" lifecycle-record
-                    # callback itself (SessionCoordinator._on_session_manager_lifecycle_record),
-                    # replacing the manual recorder.record_lifecycle("pause") call this used
-                    # to make here.
-                    await self.coordinator.session_manager.pause_session(session_id)
-                    debug_logger.info(f"Set session {session_id} to PAUSED state while waiting for permission")
-            except Exception:
-                logger.exception(f"Failed to pause session {session_id} for permission wait")
+        # Issue #1746: Track this request in the per-session open set before
+        # pausing, so concurrent requests on the same session only pause
+        # once and only resume the session once every sibling request has
+        # resolved.
+        session_pending = self.pending_by_session.setdefault(session_id, set())
+        is_first_pending_for_session = not session_pending
+        session_pending.add(request_id)
 
-            # Wait for user permission decision via WebSocket
-            debug_logger.info(f"PERMISSION CALLBACK: Creating Future for request_id {request_id}")
+        # Set session state to PAUSED while waiting for permission response
+        # This provides visual feedback that the session is blocked on user input
+        try:
+            if is_first_pending_for_session:
+                # Issue #2184: pause_session() now fires the "pause" lifecycle-record
+                # callback itself (SessionCoordinator._on_session_manager_lifecycle_record),
+                # replacing the manual recorder.record_lifecycle("pause") call this used
+                # to make here.
+                await self.coordinator.session_manager.pause_session(session_id)
+                debug_logger.info(f"Set session {session_id} to PAUSED state while waiting for permission")
+        except Exception:
+            logger.exception(f"Failed to pause session {session_id} for permission wait")
 
-            # Create a Future to wait for user response
-            permission_future = asyncio.Future()
-            self.pending_permissions[request_id] = permission_future
+        # Wait for user permission decision via WebSocket
+        debug_logger.info(f"PERMISSION CALLBACK: Creating Future for request_id {request_id}")
 
-            try:
-                # Wait for user decision (no timeout - wait indefinitely)
-                debug_logger.info(f"PERMISSION CALLBACK: Waiting for user decision on request_id {request_id}")
-                response = await permission_future
-                debug_logger.info(f"PERMISSION CALLBACK: Received user decision for request_id {request_id}: {response}")
+        # Create a Future to wait for user response
+        permission_future = asyncio.Future()
+        self.pending_permissions[request_id] = permission_future
 
-                # Issue #1746: Only restore ACTIVE once no sibling request is
-                # still open for this session — resolving one agent's request
-                # must not clear another agent's still-open PAUSED state.
-                self._discard_pending(session_id, request_id)
-                await self._maybe_resume_session(session_id)
+        try:
+            # Wait for user decision (no timeout - wait indefinitely)
+            debug_logger.info(f"PERMISSION CALLBACK: Waiting for user decision on request_id {request_id}")
+            response = await permission_future
+            debug_logger.info(f"PERMISSION CALLBACK: Received user decision for request_id {request_id}: {response}")
 
+            # Issue #1746: Only restore ACTIVE once no sibling request is
+            # still open for this session — resolving one agent's request
+            # must not clear another agent's still-open PAUSED state.
+            self._discard_pending(session_id, request_id)
+            await self._maybe_resume_session(session_id)
+
+            decision = response.get("behavior")
+            reasoning = f"User {decision}ed permission"
+
+            # Issue #2103: relay prompt answer -> grant + optional policy promotion
+            if decision == "allow" and relay_gate_result is not None:
+                response = await relay_bridge.apply_response(
+                    session_id, tool_name, input_params, relay_gate_result, response
+                )
                 decision = response.get("behavior")
                 reasoning = f"User {decision}ed permission"
 
-                # Issue #2103: relay prompt answer -> grant + optional policy promotion
-                if decision == "allow" and relay_gate_result is not None:
-                    response = await relay_bridge.apply_response(
-                        session_id, tool_name, input_params, relay_gate_result, response
+            # Handle permission updates if user chose to apply suggestions
+            if decision == "allow" and response.get("apply_suggestions") and suggestions:
+                updated_permissions = []
+                applied_updates_for_storage = []
+
+                # Use selected_suggestions if provided (granular selection),
+                # otherwise fall back to full suggestions list (backward compatibility)
+                suggestions_to_apply = response.get("selected_suggestions", suggestions)
+
+                for suggestion in suggestions_to_apply:
+                    # Force destination to 'session' as per requirements
+                    suggestion_dict = dict(suggestion)
+                    suggestion_dict['destination'] = 'session'
+
+                    # Convert rules from dicts to PermissionRuleValue objects if present
+                    rules_param = None
+                    if suggestion_dict.get('rules'):
+                        rules_param = []
+                        for rule_dict in suggestion_dict['rules']:
+                            # SDK uses snake_case (tool_name, rule_content) but suggestions come in camelCase
+                            rule_obj = PermissionRuleValue(
+                                tool_name=rule_dict.get('toolName', ''),
+                                rule_content=rule_dict.get('ruleContent') or ""
+                            )
+                            rules_param.append(rule_obj)
+
+                    update = PermissionUpdate(
+                        type=suggestion_dict['type'],
+                        mode=suggestion_dict.get('mode'),
+                        rules=rules_param,
+                        behavior=suggestion_dict.get('behavior'),
+                        directories=suggestion_dict.get('directories'),
+                        destination='session'
                     )
-                    decision = response.get("behavior")
-                    reasoning = f"User {decision}ed permission"
+                    updated_permissions.append(update)
+                    applied_updates_for_storage.append(suggestion_dict)
 
-                # Handle permission updates if user chose to apply suggestions
-                if decision == "allow" and response.get("apply_suggestions") and suggestions:
-                    updated_permissions = []
-                    applied_updates_for_storage = []
-
-                    # Use selected_suggestions if provided (granular selection),
-                    # otherwise fall back to full suggestions list (backward compatibility)
-                    suggestions_to_apply = response.get("selected_suggestions", suggestions)
-
-                    for suggestion in suggestions_to_apply:
-                        # Force destination to 'session' as per requirements
-                        suggestion_dict = dict(suggestion)
-                        suggestion_dict['destination'] = 'session'
-
-                        # Convert rules from dicts to PermissionRuleValue objects if present
-                        rules_param = None
-                        if suggestion_dict.get('rules'):
-                            rules_param = []
-                            for rule_dict in suggestion_dict['rules']:
-                                # SDK uses snake_case (tool_name, rule_content) but suggestions come in camelCase
-                                rule_obj = PermissionRuleValue(
-                                    tool_name=rule_dict.get('toolName', ''),
-                                    rule_content=rule_dict.get('ruleContent') or ""
-                                )
-                                rules_param.append(rule_obj)
-
-                        update = PermissionUpdate(
-                            type=suggestion_dict['type'],
-                            mode=suggestion_dict.get('mode'),
-                            rules=rules_param,
-                            behavior=suggestion_dict.get('behavior'),
-                            directories=suggestion_dict.get('directories'),
-                            destination='session'
-                        )
-                        updated_permissions.append(update)
-                        applied_updates_for_storage.append(suggestion_dict)
-
-                        # Issue #630: Persist addDirectories to session configuration
-                        if suggestion_dict['type'] == 'addDirectories' and suggestion_dict.get('directories'):
-                            try:
-                                await self.coordinator.session_manager.update_additional_directories(
-                                    session_id, suggestion_dict['directories']
-                                )
-                                debug_logger.info(
-                                    f"Updated session {session_id} additional_directories "
-                                    f"with {len(suggestion_dict['directories'])} dirs"
-                                )
-                            except Exception:
-                                logger.exception("Failed to update session directories")
-
-                    response['updated_permissions'] = updated_permissions
-                    response['applied_updates_for_storage'] = applied_updates_for_storage
-                    debug_logger.info(f"Built {len(updated_permissions)} permission updates from suggestions")
-
-                    # Issue #631: Audit log when user edits permission suggestion text
-                    if response.get("selected_suggestions"):
-                        for sg_applied in suggestions_to_apply:
-                            if sg_applied.get('type') != 'addRules':
-                                continue
-                            for rule in sg_applied.get('rules') or []:
-                                tool_name_applied = rule.get('toolName', '')
-                                rule_content_applied = rule.get('ruleContent', '')
-                                applied_text = (
-                                    f"{tool_name_applied}({rule_content_applied})"
-                                    if rule_content_applied else tool_name_applied
-                                )
-                                # Check if this rule differs from any original suggestion
-                                for orig_sg in suggestions:
-                                    if orig_sg.get('type') != 'addRules':
-                                        continue
-                                    for orig_rule in orig_sg.get('rules') or []:
-                                        orig_tool = orig_rule.get('toolName', '')
-                                        orig_content = orig_rule.get('ruleContent', '')
-                                        orig_text = (
-                                            f"{orig_tool}({orig_content})"
-                                            if orig_content else orig_tool
-                                        )
-                                        if orig_tool == tool_name_applied and orig_text != applied_text:
-                                            debug_logger.info(
-                                                f"Permission edited by user: "
-                                                f"original='{orig_text}' → edited='{applied_text}' "
-                                                f"in session {session_id}"
-                                            )
-
-                    # Issue #433: Persist approved tool names to session allowed_tools
-                    # SDK suggestions split tool spec into toolName + ruleContent,
-                    # e.g. toolName="Bash", ruleContent="gh issue view:*"
-                    # Reconstruct full format: "Bash(gh issue view:*)"
-                    tools_to_persist = set()
-                    for suggestion_dict in applied_updates_for_storage:
-                        if (
-                            suggestion_dict.get('type') == 'addRules'
-                            and suggestion_dict.get('behavior') == 'allow'
-                        ):
-                            for rule in suggestion_dict.get('rules') or []:
-                                tool_name_r = rule.get('toolName', '')
-                                rule_content = rule.get('ruleContent', '')
-                                if tool_name_r:
-                                    if rule_content:
-                                        tools_to_persist.add(f"{tool_name_r}({rule_content})")
-                                    else:
-                                        tools_to_persist.add(tool_name_r)
-
-                    if tools_to_persist:
+                    # Issue #630: Persist addDirectories to session configuration
+                    if suggestion_dict['type'] == 'addDirectories' and suggestion_dict.get('directories'):
                         try:
-                            await self.coordinator.session_manager.update_allowed_tools(
-                                session_id, list(tools_to_persist)
+                            await self.coordinator.session_manager.update_additional_directories(
+                                session_id, suggestion_dict['directories']
                             )
                             debug_logger.info(
-                                f"Persisted {len(tools_to_persist)} approved tools to session "
-                                f"{session_id} allowed_tools: {tools_to_persist}"
+                                f"Updated session {session_id} additional_directories "
+                                f"with {len(suggestion_dict['directories'])} dirs"
                             )
                         except Exception:
-                            logger.exception("Failed to persist approved tools")
+                            logger.exception("Failed to update session directories")
 
-            except Exception as e:
-                # Handle any errors (e.g., session termination)
-                logger.exception("PERMISSION CALLBACK: Error waiting for permission decision")
-                decision = "deny"
-                reasoning = f"Permission request failed: {str(e)}"
-                response = {
-                    "behavior": "deny",
-                    "message": reasoning
-                }
+                response['updated_permissions'] = updated_permissions
+                response['applied_updates_for_storage'] = applied_updates_for_storage
+                debug_logger.info(f"Built {len(updated_permissions)} permission updates from suggestions")
 
-                # Clean up the pending permission
-                self.pending_permissions.pop(request_id, None)
-                # Issue #1746: This path bypasses resolve() entirely (e.g. session
-                # termination while awaiting), so the per-session open set must be
-                # cleaned up here too — otherwise a session can be left stuck PAUSED
-                # forever if this was its last outstanding request.
-                self._discard_pending(session_id, request_id)
-                await self._maybe_resume_session(session_id)
-
-            finally:
-                # Issue #1746: asyncio.CancelledError is a BaseException, not caught
-                # by `except Exception` above — without this, a coroutine cancelled
-                # while awaiting permission_future (e.g. abrupt shutdown) would leak
-                # its entry in pending_by_session and could leave the session stuck
-                # PAUSED forever. Idempotent with the explicit calls above.
-                self._discard_pending(session_id, request_id)
-                await self._maybe_resume_session(session_id)
-
-            # Store permission response message using dataclass (Phase 0, Issue #310)
-            decision_time = time.time()
-            try:
-                # Extract clarification message if it was provided
-                clarification_msg = response.get("message") if decision == "deny" and not response.get("interrupt", True) else None
-                interrupt_flag = response.get("interrupt", True)
-
-                # Convert applied updates to PermissionSuggestion objects
-                applied_update_objects = []
-                if decision == "allow" and response.get("applied_updates_for_storage"):
-                    applied_update_objects = [
-                        PermissionSuggestion.from_dict(u) if isinstance(u, dict) else u
-                        for u in response["applied_updates_for_storage"]
-                    ]
-
-                # Extract updated_input for AskUserQuestion (contains answers)
-                updated_input_data = response.get("updated_input")
-
-                # Create permission response dataclass
-                permission_response_msg = PermissionResponseMessage(
-                    request_id=request_id,
-                    decision=decision,
-                    tool_name=tool_name,
-                    reasoning=reasoning,
-                    response_time_ms=int((decision_time - request_time) * 1000),
-                    applied_updates=applied_update_objects,
-                    clarification_message=clarification_msg,
-                    interrupt=interrupt_flag,
-                    timestamp=decision_time,
-                    session_id=session_id,
-                    updated_input=updated_input_data,
-                )
-
-                # Issue #2084 (stage 3-B, §5): the flat PermissionResponseMessage dict is the
-                # one triggering_message fed to both the ToolCallUpdate storage write (via
-                # update_tool_call_permission_response below) and the live tool_call
-                # emission (via MessageRecord.from_tool_call below) — no more StoredMessage
-                # wrapper, and no more two independently-built tool_call_data shapes.
-                response_dict = permission_response_msg.to_dict()
-
-                # Issue #324: Update ToolCall after permission response and emit unified tool_call message
-                try:
-                    # Issue #953/#2109: tool_use_id first, then request_id — no
-                    # name+status fallback.
-                    tool_call = None
-                    if tool_use_id:
-                        tool_call = self.coordinator.get_tool_call_by_id(session_id, tool_use_id)
-                    if not tool_call and request_id:
-                        tool_call = self.coordinator.get_tool_call_by_request_id(session_id, request_id)
-
-                    if tool_call:
-                        # Update tool call with permission decision
-                        granted = decision == "allow"
-                        # Issue #520: Pass applied_updates so they're stored on the ToolCall
-                        applied_updates_dicts = [
-                            u.to_dict() if hasattr(u, 'to_dict') else u
-                            for u in applied_update_objects
-                        ] if applied_update_objects else []
-                        updated_tool_call = self.coordinator.update_tool_call_permission_response(
-                            session_id,
-                            tool_call.tool_use_id,
-                            granted,
-                            triggering_message=response_dict,  # Issue #494: embed permission response data
-                            applied_updates=applied_updates_dicts,
-                        )
-
-                        if updated_tool_call:
-                            # Emit unified tool_call message — request_id promoted onto the
-                            # flat payload automatically by MessageRecord.from_tool_call (§1).
-                            tool_call_data = MessageRecord.from_tool_call(
-                                updated_tool_call, triggering_message=response_dict
-                            ).to_dict()
-                            # _triggering_message is a storage-only embedding — never
-                            # previously reached the frontend live; strip it before emitting.
-                            tool_call_data.pop("_triggering_message", None)
-
-                            if session_id in self.session_queues:
-                                emit(
-                                    self.session_queues[session_id], QUEUE_SESSION, "tool_call",
-                                    {
-                                        "session_id": session_id,
-                                        "data": tool_call_data,
-                                        "timestamp": datetime.now(UTC).isoformat(),
-                                    },
-                                    scope=session_id, backend_id=self.coordinator.tenant_context.backend_id,
-                                )
-                            debug_logger.info(
-                                f"Appended tool_call {'running' if granted else 'denied'} "
-                                f"for {tool_name} in session {session_id}"
+                # Issue #631: Audit log when user edits permission suggestion text
+                if response.get("selected_suggestions"):
+                    for sg_applied in suggestions_to_apply:
+                        if sg_applied.get('type') != 'addRules':
+                            continue
+                        for rule in sg_applied.get('rules') or []:
+                            tool_name_applied = rule.get('toolName', '')
+                            rule_content_applied = rule.get('ruleContent', '')
+                            applied_text = (
+                                f"{tool_name_applied}({rule_content_applied})"
+                                if rule_content_applied else tool_name_applied
                             )
-                except Exception:
-                    logger.exception("Failed to update ToolCall for permission response")
+                            # Check if this rule differs from any original suggestion
+                            for orig_sg in suggestions:
+                                if orig_sg.get('type') != 'addRules':
+                                    continue
+                                for orig_rule in orig_sg.get('rules') or []:
+                                    orig_tool = orig_rule.get('toolName', '')
+                                    orig_content = orig_rule.get('ruleContent', '')
+                                    orig_text = (
+                                        f"{orig_tool}({orig_content})"
+                                        if orig_content else orig_tool
+                                    )
+                                    if orig_tool == tool_name_applied and orig_text != applied_text:
+                                        debug_logger.info(
+                                            f"Permission edited by user: "
+                                            f"original='{orig_text}' → edited='{applied_text}' "
+                                            f"in session {session_id}"
+                                        )
 
-                # Issue #491: Legacy permission_response broadcast removed.
-                # Only unified tool_call messages are emitted for permission lifecycle.
+                # Issue #433: Persist approved tool names to session allowed_tools
+                # SDK suggestions split tool spec into toolName + ruleContent,
+                # e.g. toolName="Bash", ruleContent="gh issue view:*"
+                # Reconstruct full format: "Bash(gh issue view:*)"
+                tools_to_persist = set()
+                for suggestion_dict in applied_updates_for_storage:
+                    if (
+                        suggestion_dict.get('type') == 'addRules'
+                        and suggestion_dict.get('behavior') == 'allow'
+                    ):
+                        for rule in suggestion_dict.get('rules') or []:
+                            tool_name_r = rule.get('toolName', '')
+                            rule_content = rule.get('ruleContent', '')
+                            if tool_name_r:
+                                if rule_content:
+                                    tools_to_persist.add(f"{tool_name_r}({rule_content})")
+                                else:
+                                    tools_to_persist.add(tool_name_r)
 
+                if tools_to_persist:
+                    try:
+                        await self.coordinator.session_manager.update_allowed_tools(
+                            session_id, list(tools_to_persist)
+                        )
+                        debug_logger.info(
+                            f"Persisted {len(tools_to_persist)} approved tools to session "
+                            f"{session_id} allowed_tools: {tools_to_persist}"
+                        )
+                    except Exception:
+                        logger.exception("Failed to persist approved tools")
+
+        except Exception as e:
+            # Handle any errors (e.g., session termination)
+            logger.exception("PERMISSION CALLBACK: Error waiting for permission decision")
+            decision = "deny"
+            reasoning = f"Permission request failed: {str(e)}"
+            response = {
+                "behavior": "deny",
+                "message": reasoning
+            }
+
+            # Clean up the pending permission
+            self.pending_permissions.pop(request_id, None)
+            # Issue #1746: This path bypasses resolve() entirely (e.g. session
+            # termination while awaiting), so the per-session open set must be
+            # cleaned up here too — otherwise a session can be left stuck PAUSED
+            # forever if this was its last outstanding request.
+            self._discard_pending(session_id, request_id)
+            await self._maybe_resume_session(session_id)
+
+        finally:
+            # Issue #1746: asyncio.CancelledError is a BaseException, not caught
+            # by `except Exception` above — without this, a coroutine cancelled
+            # while awaiting permission_future (e.g. abrupt shutdown) would leak
+            # its entry in pending_by_session and could leave the session stuck
+            # PAUSED forever. Idempotent with the explicit calls above.
+            self._discard_pending(session_id, request_id)
+            await self._maybe_resume_session(session_id)
+
+        # Store permission response message using dataclass (Phase 0, Issue #310)
+        decision_time = time.time()
+        try:
+            # Extract clarification message if it was provided
+            clarification_msg = response.get("message") if decision == "deny" and not response.get("interrupt", True) else None
+            interrupt_flag = response.get("interrupt", True)
+
+            # Convert applied updates to PermissionSuggestion objects
+            applied_update_objects = []
+            if decision == "allow" and response.get("applied_updates_for_storage"):
+                applied_update_objects = [
+                    PermissionSuggestion.from_dict(u) if isinstance(u, dict) else u
+                    for u in response["applied_updates_for_storage"]
+                ]
+
+            # Extract updated_input for AskUserQuestion (contains answers)
+            updated_input_data = response.get("updated_input")
+
+            # Create permission response dataclass
+            permission_response_msg = PermissionResponseMessage(
+                request_id=request_id,
+                decision=decision,
+                tool_name=tool_name,
+                reasoning=reasoning,
+                response_time_ms=int((decision_time - request_time) * 1000),
+                applied_updates=applied_update_objects,
+                clarification_message=clarification_msg,
+                interrupt=interrupt_flag,
+                timestamp=decision_time,
+                session_id=session_id,
+                updated_input=updated_input_data,
+            )
+
+            # Issue #2084 (stage 3-B, §5): the flat PermissionResponseMessage dict is the
+            # one triggering_message fed to both the ToolCallUpdate storage write (via
+            # update_tool_call_permission_response below) and the live tool_call
+            # emission (via MessageRecord.from_tool_call below) — no more StoredMessage
+            # wrapper, and no more two independently-built tool_call_data shapes.
+            response_dict = permission_response_msg.to_dict()
+
+            # Issue #324: Update ToolCall after permission response and emit unified tool_call message
+            try:
+                # Issue #953/#2109: tool_use_id first, then request_id — no
+                # name+status fallback.
+                tool_call = None
+                if tool_use_id:
+                    tool_call = self.coordinator.get_tool_call_by_id(session_id, tool_use_id)
+                if not tool_call and request_id:
+                    tool_call = self.coordinator.get_tool_call_by_request_id(session_id, request_id)
+
+                if tool_call:
+                    # Update tool call with permission decision
+                    granted = decision == "allow"
+                    # Issue #520: Pass applied_updates so they're stored on the ToolCall
+                    applied_updates_dicts = [
+                        u.to_dict() if hasattr(u, 'to_dict') else u
+                        for u in applied_update_objects
+                    ] if applied_update_objects else []
+                    updated_tool_call = self.coordinator.update_tool_call_permission_response(
+                        session_id,
+                        tool_call.tool_use_id,
+                        granted,
+                        triggering_message=response_dict,  # Issue #494: embed permission response data
+                        applied_updates=applied_updates_dicts,
+                    )
+
+                    if updated_tool_call:
+                        # Emit unified tool_call message — request_id promoted onto the
+                        # flat payload automatically by MessageRecord.from_tool_call (§1).
+                        tool_call_data = MessageRecord.from_tool_call(
+                            updated_tool_call, triggering_message=response_dict
+                        ).to_dict()
+                        # _triggering_message is a storage-only embedding — never
+                        # previously reached the frontend live; strip it before emitting.
+                        tool_call_data.pop("_triggering_message", None)
+
+                        if session_id in self.session_queues:
+                            emit(
+                                self.session_queues[session_id], QUEUE_SESSION, "tool_call",
+                                {
+                                    "session_id": session_id,
+                                    "data": tool_call_data,
+                                    "timestamp": datetime.now(UTC).isoformat(),
+                                },
+                                scope=session_id, backend_id=self.coordinator.tenant_context.backend_id,
+                            )
+                        debug_logger.info(
+                            f"Appended tool_call {'running' if granted else 'denied'} "
+                            f"for {tool_name} in session {session_id}"
+                        )
             except Exception:
-                logger.exception("Failed to store permission response message")
+                logger.exception("Failed to update ToolCall for permission response")
 
-            debug_logger.info(f"Permission {decision} for tool: {tool_name} (request_id: {request_id})")
-            return response
+            # Issue #491: Legacy permission_response broadcast removed.
+            # Only unified tool_call messages are emitted for permission lifecycle.
 
-        return permission_callback
+        except Exception:
+            logger.exception("Failed to store permission response message")
+
+        debug_logger.info(f"Permission {decision} for tool: {tool_name} (request_id: {request_id})")
+        return response
 
     def _discard_pending(self, session_id: str, request_id: str) -> None:
         """Remove request_id from the per-session open-request set (issue #1746)."""
