@@ -136,15 +136,15 @@ async def test_marked_text_respects_body_limit(env):
     assert env.adapter.network_calls() == []
 
 
-async def test_marker_survives_round_trip_through_search(env):
+async def test_marker_survives_round_trip_through_search_tool(env):
     await env.tools.handle_post("s1", "post", {"channel": SELF_DM, "text": "hello"})
-    sent = posted(env)[2]
     env.adapter.search_results = [
-        RelayMessage(ts="1.1", text=sent, user=OWNER, channel=SELF_DM),
+        RelayMessage(ts="1.1", text=posted(env)[2], user=OWNER, channel=SELF_DM),
         RelayMessage(ts="1.2", text="human text", user=OWNER, channel=SELF_DM),
     ]
-    assert has_agent_marker(env.adapter.search_results[0].text)
-    assert not has_agent_marker(env.adapter.search_results[1].text)
+    result = await env.tools.handle_search("s1", {"query": "x"})
+    texts = {m["ts"]: m["text"] for m in fence_payload(result["content"][0]["text"])}
+    assert has_agent_marker(texts["1.1"]) and not has_agent_marker(texts["1.2"])
 
 
 @pytest.mark.parametrize("target", [SELF_DM, OWNER, "@Owner Person", OTHER_DM])

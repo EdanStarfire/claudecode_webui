@@ -24,17 +24,18 @@ logger = logging.getLogger(__name__)
 class SelfDmResolver:
     def __init__(self, relay_manager: RelayManager) -> None:
         self._manager = relay_manager
-        self._cache: dict[tuple[str, str], str] = {}
+        self._cache: dict[tuple[str, str, str | None], str] = {}
 
     async def resolve(self, ctx: RelayContext) -> str | None:
         """The owner's self-DM channel ID, or None when it cannot be determined."""
         owner = ctx.owner_user_id
         if not owner:
             return None
-        key = (ctx.relay_id, owner)
+        record = self._manager.relays.get(ctx.relay_id)
+        # keyed by workspace too: the same user ID can exist in another workspace (Enterprise Grid)
+        key = (ctx.relay_id, owner, getattr(record, "workspace_id", None))
         if key in self._cache:
             return self._cache[key]
-        record = self._manager.relays.get(ctx.relay_id)
         persisted = getattr(record, "self_dm_channel_id", None)
         if persisted and getattr(record, "owner_user_id", None) == owner:
             self._cache[key] = persisted

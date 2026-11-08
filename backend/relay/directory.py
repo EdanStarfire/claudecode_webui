@@ -151,11 +151,16 @@ class RelayDirectory:
 
     async def _conversations(self, ctx: RelayContext, *, force: bool = False) -> _Snapshot:
         async def fetch() -> tuple[list[DirectoryEntry], bool]:
-            channels = await ctx.adapter.list_channels("public_channel,private_channel", self._max)
-            try:
-                dms = await ctx.adapter.list_conversations("im,mpim", self._max)
-            except RelayError:  # DMs are optional for channel-name lookups
-                dms = []
+            async def dm_listing() -> list[ConversationInfo]:
+                try:
+                    return await ctx.adapter.list_conversations("im,mpim", self._max)
+                except RelayError:  # DMs are optional for channel-name lookups
+                    return []
+
+            channels, dms = await asyncio.gather(
+                ctx.adapter.list_channels("public_channel,private_channel", self._max),
+                dm_listing(),
+            )
             seen: dict[str, DirectoryEntry] = {}
             for c in [*channels, *dms]:
                 if not c.id or c.id in seen:
@@ -259,10 +264,7 @@ class RelayDirectory:
             "name_ambiguous",
             f"Several {what}s match that name; the candidates are listed below as untrusted "
             f"content. Retry with {id_hint}.",
-            [
-                {"id": e.id, "kind": e.kind, "name": e.name}
-                for e in matches[:MAX_CANDIDATES]
-            ],
+            [RelayDirectory._candidate(e) for e in matches[:MAX_CANDIDATES]],
         )
 
     # ------------------------------------------------------------ find_channels

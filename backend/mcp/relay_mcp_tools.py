@@ -354,7 +354,7 @@ class RelayMCPTools:
             await self._audit(
                 ctx, None, session_id, tool_name, "denied", code=result.code,
                 channel_id=result.channel_id or (
-                    args.get("channel") if isinstance(args.get("channel"), str) else None
+                    args["channel"][:80] if isinstance(args.get("channel"), str) else None
                 ),
                 channel_name=result.channel_name, policy=result.policy,
                 thread_ts=args.get("thread_ts"),

@@ -340,7 +340,7 @@ secret is deleted, `has_*_token` turns false and `*_secret_missing` true (tools 
 - **MCP server `relay_slack`** (`backend/mcp/relay_mcp_tools.py`; tools `mcp__relay_slack__*`; **hard break**: the former
   `mcp__relay__*` names have no alias, saved allow rules for them stop matching and sessions started before the upgrade
   must be restarted): `post`, `reply`, `read_thread`, `search`,
-  `upload_file`, `react`, `mark_read` (no edit/delete). Attached by `session_launcher` only when the
+  `upload_file`, `react`, `mark_read` (no edit/delete; 1c-ii adds read-only `get_identity` and `find_channels`). Attached by `session_launcher` only when the
   effective config has `relay_id` and the relay has a user token. `mcp__relay_slack` is deliberately **not** in the
   auto-allow list, so every call reaches the permission callback. `channel` accepts an ID, `#name`, `@name`, or a user ID
   (`U…`, DM via `conversations.open`) and is resolved to a canonical ID before any policy check (see 1c-ii below).
@@ -389,6 +389,7 @@ secret is deleted, `has_*_token` turns false and `*_secret_missing` true (tools 
 - **Audit** (`relay/audit.py`): `data/relays/{relay_id}/audit.jsonl`, 10 MB x 5 rotation, whitelisted fields only
   (text is a sha256 + 200-char preview), covers post/reply/upload/react/mark_read outcomes, denied attempts and
   policy changes; `GET /api/relays/{id}/audit`.
+
 ### Self-DM marker, identity and discovery (outbound stage 1c-ii)
 
 - **Marker**: the relay (never the agent) prefixes every `post` / `reply` / `upload_file` comment sent into the owner's

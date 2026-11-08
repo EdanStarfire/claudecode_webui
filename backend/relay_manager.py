@@ -277,27 +277,28 @@ class RelayManager:
 
         info = await self._verify_user_token(values["user_token_secret"]) if "user_token_secret" in values else None
         if info is not None:
-            previous_owner = record.owner_user_id
+            previous_owner, previous_ws = record.owner_user_id, record.workspace_id
             record.owner_user_id = info.user_id or None
             record.workspace_id = info.team_id or None
             record.workspace_name = info.team
             record.user_token_secret = user_token_secret.strip()
-
-            async def _candidate() -> str:
-                return values["user_token_secret"]
-
-            await self._refresh_self_dm(record, previous_owner, self._adapter_factory(_candidate))
+            await self._refresh_self_dm(
+                record, previous_owner, self._adapter_for_token(values["user_token_secret"]), previous_ws
+            )
         if "app_token_secret" in values:
             record.app_token_secret = app_token_secret.strip()
         self._save(record)
         return record
 
     async def _refresh_self_dm(
-        self, record: RelayRecord, previous_owner: str | None, adapter: RelayAdapter
+        self, record: RelayRecord, previous_owner: str | None, adapter: RelayAdapter,
+        previous_workspace: str | None = None,
     ) -> None:
         """Persist the owner's self-DM channel ID; a changed owner invalidates the stored one.
         Best effort: a failure leaves it unset and the send path resolves it (or fails closed)."""
-        if previous_owner != record.owner_user_id:
+        if previous_owner != record.owner_user_id or (
+            previous_workspace and previous_workspace != record.workspace_id
+        ):
             record.self_dm_channel_id = None
         if not record.owner_user_id:
             return
@@ -318,12 +319,17 @@ class RelayManager:
             record.self_dm_channel_id = dm_channel_id
             self._save(record)
 
-    async def _verify_user_token(self, user_token: str):
-        async def _candidate() -> str:
-            return user_token
+    def _adapter_for_token(self, token: str) -> RelayAdapter:
+        """Adapter bound to a candidate token (not yet stored on the record)."""
 
+        async def _token() -> str:
+            return token
+
+        return self._adapter_factory(_token)
+
+    async def _verify_user_token(self, user_token: str):
         try:
-            return await self._adapter_factory(_candidate).auth_test()
+            return await self._adapter_for_token(user_token).auth_test()
         except RelayError as e:
             raise RelayTokenError(f"Slack rejected the user token ({e.code})") from None
 
@@ -334,11 +340,11 @@ class RelayManager:
             info = await self.adapter_for(relay_id).auth_test()
         except RelayError as e:
             return {"ok": False, "error": e.code}
-        previous_owner = record.owner_user_id
+        previous_owner, previous_ws = record.owner_user_id, record.workspace_id
         record.owner_user_id = info.user_id or record.owner_user_id
         record.workspace_id = info.team_id or record.workspace_id
         record.workspace_name = info.team or record.workspace_name
-        await self._refresh_self_dm(record, previous_owner, self.adapter_for(relay_id))
+        await self._refresh_self_dm(record, previous_owner, self.adapter_for(relay_id), previous_ws)
         self._save(record)
         return {
             "ok": True,
@@ -419,15 +425,11 @@ class RelayManager:
             info = await self._verify_user_token(token)
             # The token becomes a normal (relay-prefixed) vault secret, referenced by name.
             record.user_token_secret = await self._store_secret(record.relay_id, "user-token", token)
-            previous_owner = record.owner_user_id
+            previous_owner, previous_ws = record.owner_user_id, record.workspace_id
             record.owner_user_id = info.user_id or None
             record.workspace_id = info.team_id or None
             record.workspace_name = info.team
-
-            async def _oauth_token() -> str:
-                return token
-
-            await self._refresh_self_dm(record, previous_owner, self._adapter_factory(_oauth_token))
+            await self._refresh_self_dm(record, previous_owner, self._adapter_for_token(token), previous_ws)
             self._save(record)
         except Exception as e:
             self._oauth_results[state] = {"status": "error", "error": str(e)}
