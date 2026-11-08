@@ -155,6 +155,7 @@ def build_core_managers(
     pending_store = PendingStore()
 
     relay_manager = RelayManager(data_dir, credential_vault)
+    secrets_service.relay_manager = relay_manager  # relay credentials count as secret usage
     relay_service = RelayService(
         relay_manager, RelayHandleIndex(session_manager.has_session),
         session_manager, template_manager, profile_manager,

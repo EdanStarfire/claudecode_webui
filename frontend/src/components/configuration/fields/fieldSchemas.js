@@ -280,6 +280,39 @@ export const FIELD_SCHEMAS = {
       widget: 'mcp-panel',
     },
   ],
+  relay: [
+    {
+      key: 'relay_id',
+      label: 'Relay',
+      widget: 'relay-select',
+      defaultValue: null,
+      description: 'The external messaging workspace this session can use. Adding a relay to a ' +
+                   'running session applies when the session next starts.',
+    },
+    {
+      key: 'relay_footer_enabled',
+      label: 'Footer',
+      widget: 'toggle',
+      defaultValue: true,
+      description: 'Append a small footer naming the session to every message the agent posts. Applies immediately.',
+    },
+    {
+      key: 'relay_footer_template',
+      label: 'Footer text',
+      widget: 'textarea',
+      rows: 2,
+      placeholder: 'Sent by {session_name} ({session_handle})',
+      showWhen: (config) => config.relay_footer_enabled !== false,
+      description: 'Up to 500 characters. Variables: {session_name}, {session_handle}, ' +
+                   '{session_link}. Must not contain !word syntax. Applies immediately.',
+    },
+    {
+      key: 'relay_channel_policies',
+      label: 'Channel policies',
+      widget: 'relay-policies-summary',
+      defaultValue: null,
+    },
+  ],
 
   isolation: [
     {
@@ -393,39 +426,6 @@ export const FIELD_SCHEMAS = {
     },
   ],
 
-  relay: [
-    {
-      key: 'relay_id',
-      label: 'Relay',
-      widget: 'relay-select',
-      defaultValue: null,
-      description: 'The external messaging workspace this session can use. Adding a relay to a ' +
-                   'running session applies when the session next starts.',
-    },
-    {
-      key: 'relay_footer_enabled',
-      label: 'Footer',
-      widget: 'toggle',
-      defaultValue: true,
-      description: 'Append a small footer naming the session to every message the agent posts. Applies immediately.',
-    },
-    {
-      key: 'relay_footer_template',
-      label: 'Footer text',
-      widget: 'textarea',
-      rows: 2,
-      placeholder: 'Sent by {session_name} ({session_handle})',
-      showWhen: (config) => config.relay_footer_enabled !== false,
-      description: 'Up to 500 characters. Variables: {session_name}, {session_handle}, ' +
-                   '{session_link}. Must not contain !word syntax. Applies immediately.',
-    },
-    {
-      key: 'relay_channel_policies',
-      label: 'Channel policies',
-      widget: 'relay-policies-summary',
-      defaultValue: null,
-    },
-  ],
   features: [
     {
       key: 'history_distillation_enabled',

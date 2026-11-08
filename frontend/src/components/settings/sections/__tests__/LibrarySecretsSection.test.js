@@ -46,6 +46,12 @@ describe('LibrarySecretsSection usage chip', () => {
               usage: { sessions: 0, templates: 0, profiles: 0, mcp_servers: 0, oauth2_dependents: ['github-oauth'], total: 1 },
             },
             {
+              name: 'relay-secret',
+              type: 'generic',
+              target_hosts: [],
+              usage: { sessions: 0, templates: 0, profiles: 0, mcp_servers: 0, oauth2_dependents: [], relays: ['Slack'], total: 1 },
+            },
+            {
               name: 'no-usage-field-secret',
               type: 'generic',
               target_hosts: ['example.com'],
@@ -92,5 +98,13 @@ describe('LibrarySecretsSection usage chip', () => {
     const chip = usageChipFor(wrapper, 'no-usage-field-secret')
     expect(chip.text()).toBe('Unused')
     expect(chip.classes()).toContain('usage-chip--unused')
+  })
+
+  it('lists a relay credential reference in the usage tooltip (issue #2103)', async () => {
+    const { wrapper } = renderWithStores(LibrarySecretsSection)
+    await flush()
+    const chip = usageChipFor(wrapper, 'relay-secret')
+    expect(chip.text()).toBe('1 in use')
+    expect(chip.attributes('title')).toContain('Relay: Slack')
   })
 })

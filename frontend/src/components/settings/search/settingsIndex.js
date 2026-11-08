@@ -29,6 +29,38 @@ export const settingsIndex = [
   { section: 'read-aloud', fieldKey: 'pitch',        label: 'Pitch' },
   { section: 'read-aloud', fieldKey: 'speech',       label: 'Speech Synthesis' },
 
+  // Templates section (LibraryTemplatesSection)
+  { section: 'templates', fieldKey: 'template_name',        label: 'Template Name' },
+  { section: 'templates', fieldKey: 'template_description', label: 'Description' },
+  { section: 'templates', fieldKey: 'template_model',       label: 'Model' },
+  { section: 'templates', fieldKey: 'template_system_prompt', label: 'System Prompt' },
+  { section: 'templates', fieldKey: 'template_permission_mode', label: 'Permission Mode' },
+  { section: 'templates', fieldKey: 'template_allowed_tools',  label: 'Allowed Tools' },
+  { section: 'templates', fieldKey: 'template_capabilities',   label: 'Capabilities' },
+  { section: 'templates', fieldKey: 'template_role',           label: 'Role' },
+
+  // Profiles section (LibraryProfilesSection)
+  { section: 'profiles', fieldKey: 'profile_name',        label: 'Profile Name' },
+  { section: 'profiles', fieldKey: 'profile_area',        label: 'Area' },
+  { section: 'profiles', fieldKey: 'profile_model',       label: 'Model' },
+  { section: 'profiles', fieldKey: 'profile_permission',  label: 'Permission Mode' },
+  { section: 'profiles', fieldKey: 'profile_system_prompt', label: 'System Prompt' },
+  { section: 'profiles', fieldKey: 'profile_features',    label: 'Features' },
+  { section: 'profiles', fieldKey: 'profile_mcp',         label: 'MCP Servers' },
+  { section: 'profiles', fieldKey: 'profile_isolation',   label: 'Isolation' },
+  { section: 'profiles', fieldKey: 'profile_relay',       label: 'Relay' },
+
+  // Secrets section (LibrarySecretsSection + SecretGeneralSection)
+  { section: 'secrets', fieldKey: 'secret_name',          label: 'Secret Name' },
+  { section: 'secrets', fieldKey: 'secret_type',          label: 'Type' },
+  { section: 'secrets', fieldKey: 'secret_api_key',       label: 'API Key' },
+  { section: 'secrets', fieldKey: 'secret_token',         label: 'Token' },
+  { section: 'secrets', fieldKey: 'secret_target_hosts',  label: 'Target Hosts' },
+  { section: 'secrets', fieldKey: 'secret_inject_env',    label: 'Inject Env Var' },
+  { section: 'secrets', fieldKey: 'secret_inject_file',   label: 'Inject File Path' },
+  { section: 'secrets', fieldKey: 'secret_oauth2',        label: 'OAuth2 Refresh' },
+  { section: 'secrets', fieldKey: 'secret_ssh_key',       label: 'SSH Key' },
+
   // Providers section (ProvidersTab)
   { section: 'providers', fieldKey: 'provider_entries',       label: 'Provider Catalog' },
   { section: 'providers', fieldKey: 'provider_id',            label: 'Provider ID' },
@@ -51,34 +83,6 @@ export const settingsIndex = [
   { section: 'mcp-servers', fieldKey: 'mcp_url',     label: 'URL' },
   { section: 'mcp-servers', fieldKey: 'oauth',       label: 'OAuth' },
 
-  // Hooks section (HookPanel)
-  { section: 'hooks', fieldKey: 'hooks',         label: 'Hooks' },
-  { section: 'hooks', fieldKey: 'hook_event',    label: 'Event' },
-  { section: 'hooks', fieldKey: 'hook_matcher',  label: 'Matcher' },
-  { section: 'hooks', fieldKey: 'hook_command',  label: 'Command' },
-  { section: 'hooks', fieldKey: 'hook_url',      label: 'URL' },
-
-  // Templates section (LibraryTemplatesSection)
-  { section: 'templates', fieldKey: 'template_name',        label: 'Template Name' },
-  { section: 'templates', fieldKey: 'template_description', label: 'Description' },
-  { section: 'templates', fieldKey: 'template_model',       label: 'Model' },
-  { section: 'templates', fieldKey: 'template_system_prompt', label: 'System Prompt' },
-  { section: 'templates', fieldKey: 'template_permission_mode', label: 'Permission Mode' },
-  { section: 'templates', fieldKey: 'template_allowed_tools',  label: 'Allowed Tools' },
-  { section: 'templates', fieldKey: 'template_capabilities',   label: 'Capabilities' },
-  { section: 'templates', fieldKey: 'template_role',           label: 'Role' },
-
-  // Profiles section (LibraryProfilesSection)
-  { section: 'profiles', fieldKey: 'profile_name',        label: 'Profile Name' },
-  { section: 'profiles', fieldKey: 'profile_area',        label: 'Area' },
-  { section: 'profiles', fieldKey: 'profile_model',       label: 'Model' },
-  { section: 'profiles', fieldKey: 'profile_permission',  label: 'Permission Mode' },
-  { section: 'profiles', fieldKey: 'profile_system_prompt', label: 'System Prompt' },
-  { section: 'profiles', fieldKey: 'profile_features',    label: 'Features' },
-  { section: 'profiles', fieldKey: 'profile_mcp',         label: 'MCP Servers' },
-  { section: 'profiles', fieldKey: 'profile_isolation',   label: 'Isolation' },
-  { section: 'profiles', fieldKey: 'profile_relay',       label: 'Relay' },
-
   // Relays section (LibraryRelaysSection)
   { section: 'relays', fieldKey: 'relay_name',          label: 'Relay Name' },
   { section: 'relays', fieldKey: 'relay_tokens',        label: 'Slack Tokens' },
@@ -86,16 +90,12 @@ export const settingsIndex = [
   { section: 'relays', fieldKey: 'relay_manifest',      label: 'Slack App Manifest' },
   { section: 'relays', fieldKey: 'relay_oauth',         label: 'Relay OAuth' },
 
-  // Secrets section (LibrarySecretsSection + SecretGeneralSection)
-  { section: 'secrets', fieldKey: 'secret_name',          label: 'Secret Name' },
-  { section: 'secrets', fieldKey: 'secret_type',          label: 'Type' },
-  { section: 'secrets', fieldKey: 'secret_api_key',       label: 'API Key' },
-  { section: 'secrets', fieldKey: 'secret_token',         label: 'Token' },
-  { section: 'secrets', fieldKey: 'secret_target_hosts',  label: 'Target Hosts' },
-  { section: 'secrets', fieldKey: 'secret_inject_env',    label: 'Inject Env Var' },
-  { section: 'secrets', fieldKey: 'secret_inject_file',   label: 'Inject File Path' },
-  { section: 'secrets', fieldKey: 'secret_oauth2',        label: 'OAuth2 Refresh' },
-  { section: 'secrets', fieldKey: 'secret_ssh_key',       label: 'SSH Key' },
+  // Hooks section (HookPanel)
+  { section: 'hooks', fieldKey: 'hooks',         label: 'Hooks' },
+  { section: 'hooks', fieldKey: 'hook_event',    label: 'Event' },
+  { section: 'hooks', fieldKey: 'hook_matcher',  label: 'Matcher' },
+  { section: 'hooks', fieldKey: 'hook_command',  label: 'Command' },
+  { section: 'hooks', fieldKey: 'hook_url',      label: 'URL' },
 
   // Template / Profile edit sections (shared 7-section edit surface)
   // General section
@@ -123,6 +123,13 @@ export const settingsIndex = [
   { section: 'edit-mcp-servers', fieldKey: 'mcp_server_ids',              label: 'MCP Servers' },
   { section: 'edit-mcp-servers', fieldKey: 'enable_claudeai_mcp_servers', label: 'Claude AI MCP Servers' },
   { section: 'edit-mcp-servers', fieldKey: 'strict_mcp_config',           label: 'Strict MCP Config' },
+
+  // Relay section
+  { section: 'edit-relay', fieldKey: 'relay_id',               label: 'Relay' },
+  { section: 'edit-relay', fieldKey: 'relay_footer_enabled',   label: 'Relay Footer' },
+  { section: 'edit-relay', fieldKey: 'relay_footer_template',  label: 'Relay Footer Text' },
+  { section: 'edit-relay', fieldKey: 'relay_handle',           label: 'Relay Handle' },
+  { section: 'edit-relay', fieldKey: 'relay_channel_policies', label: 'Channel Policies' },
 
   { section: 'edit-hooks', fieldKey: 'hook_ids', label: 'Hooks' },
 
@@ -163,11 +170,4 @@ export const settingsIndex = [
   { section: 'edit-isolation', fieldKey: 'env_scrub_enabled',              label: 'Scrub Subprocess Credentials' },
   { section: 'edit-isolation', fieldKey: 'recording_enabled',              label: 'Record Session' },
   { section: 'edit-isolation', fieldKey: 'max_subagent_spawn_depth',       label: 'Max Subagent Spawn Depth' },
-
-  // Relay section
-  { section: 'edit-relay', fieldKey: 'relay_id',               label: 'Relay' },
-  { section: 'edit-relay', fieldKey: 'relay_footer_enabled',   label: 'Relay Footer' },
-  { section: 'edit-relay', fieldKey: 'relay_footer_template',  label: 'Relay Footer Text' },
-  { section: 'edit-relay', fieldKey: 'relay_handle',           label: 'Relay Handle' },
-  { section: 'edit-relay', fieldKey: 'relay_channel_policies', label: 'Channel Policies' },
 ]

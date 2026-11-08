@@ -244,6 +244,9 @@ function usageTitle(secret) {
     `Profiles: ${u.profiles}`,
     `MCP servers: ${u.mcp_servers}`,
   ]
+  if (u.relays?.length) {
+    parts.push(`Relay: ${u.relays.join(', ')}`)
+  }
   if (u.oauth2_dependents?.length) {
     parts.push(`OAuth2 dependency: ${u.oauth2_dependents.join(', ')}`)
   }

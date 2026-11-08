@@ -215,3 +215,16 @@ def test_zero_usage_secret_all_buckets_zero():
     assert entry["mcp_servers"] == 0
     assert entry["oauth2_dependents"] == []
     assert entry["total"] == 0
+
+
+def test_relay_credential_references_count_as_usage_issue_2103():
+    relay = SimpleNamespace(
+        name="Slack", user_token_secret="slack-user", app_token_secret="Slack-App",
+        oauth_client_secret_secret=None,
+    )
+    usage = compute_secret_usage(
+        [_secret("slack-user"), _secret("slack-app"), _secret("unused")], [], [], [], [], relays=[relay],
+    )
+    assert usage["slack-user"]["relays"] == ["Slack"] and usage["slack-user"]["total"] == 1
+    assert usage["slack-app"]["relays"] == ["Slack"]
+    assert usage["unused"]["relays"] == [] and usage["unused"]["total"] == 0

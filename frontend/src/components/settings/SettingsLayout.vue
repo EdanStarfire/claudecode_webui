@@ -97,11 +97,11 @@ const EDIT_SECTION_MAP = {
   'model-tuning':      ModelTuningSection,
   'tools-permissions': ToolsPermissionsSection,
   'mcp-servers':       McpServersSection,
+  'relay':             RelaySection,
   'hooks':             HooksSection,
   'features':          FeaturesSection,
   'system-prompt':     SystemPromptSection,
   'isolation':         IsolationSection,
-  'relay':             RelaySection,
 }
 
 const sectionComponent = computed(() => {

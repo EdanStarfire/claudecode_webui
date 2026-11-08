@@ -4,10 +4,9 @@ Responses never contain token values. Credentials are references to existing vau
 the record exposes the referenced secret NAMES plus has_* booleans (false when the secret is gone).
 """
 
-from typing import Annotated
 from urllib.parse import urlparse
 
-from fastapi import APIRouter, HTTPException, Query
+from fastapi import APIRouter, HTTPException
 
 from shared.exception_handlers import handle_exceptions
 
@@ -48,29 +47,18 @@ def build_router(webui) -> APIRouter:
     def service():
         return webui.service.relay_service
 
-    async def _with_sharing(record) -> dict:
-        """Public record plus, computed live, where the referenced secrets are also used (names
-        only): ``user_secret_shared`` / ``app_secret_shared`` (null when not shared)."""
-        data = manager().public_dict(record)
-        refs = {k: data[f"{k}_token_secret"] for k in ("user", "app") if data.get(f"{k}_token_secret")}
-        users = await webui.service.secret_users(list(refs.values())) if refs else {}
-        for kind, name in refs.items():
-            shared = users.get(name) or {}
-            data[f"{kind}_secret_shared"] = shared if any(shared.values()) else None
-        return data
-
     async def _public(relay_id: str) -> dict:
         record = await manager().get_relay(relay_id)
         if record is None:
             raise HTTPException(status_code=404, detail="Relay not found")
-        return await _with_sharing(record)
+        return manager().public_dict(record)
 
     # ---- Relay asset CRUD ----
 
     @router.get("/api/relays")
     @handle_exceptions("list relays")
     async def list_relays():
-        return {"relays": [await _with_sharing(r) for r in await manager().list_relays()]}
+        return {"relays": [manager().public_dict(r) for r in await manager().list_relays()]}
 
     @router.post("/api/relays", status_code=201)
     @handle_exceptions("create relay", value_error_status=400)
@@ -84,7 +72,7 @@ def build_router(webui) -> APIRouter:
             )
         except RelayConflictError as e:
             raise HTTPException(status_code=409, detail=str(e)) from e
-        return await _with_sharing(record)
+        return manager().public_dict(record)
 
     @router.get("/api/relays/{relay_id}")
     @handle_exceptions("get relay")
@@ -103,7 +91,7 @@ def build_router(webui) -> APIRouter:
             )
         except RelayNotFoundError as e:
             raise HTTPException(status_code=404, detail="Relay not found") from e
-        return await _with_sharing(record)
+        return manager().public_dict(record)
 
     @router.delete("/api/relays/{relay_id}")
     @handle_exceptions("delete relay")
@@ -129,16 +117,7 @@ def build_router(webui) -> APIRouter:
             raise HTTPException(status_code=404, detail="Relay not found") from e
         except RelayTokenError as e:
             raise HTTPException(status_code=400, detail=str(e)) from e
-        return await _with_sharing(record)
-
-    @router.get("/api/relays/{relay_id}/secret-usage")
-    @handle_exceptions("get relay secret usage")
-    async def get_secret_usage(relay_id: str, name: Annotated[list[str] | None, Query()] = None):
-        """Where candidate credential secrets are also used (consumer NAMES only), for the
-        non-blocking "also exposed to ..." warning in the credential picker."""
-        if await manager().get_relay(relay_id) is None:
-            raise HTTPException(status_code=404, detail="Relay not found")
-        return {"usage": await webui.service.secret_users((name or [])[:20])}
+        return manager().public_dict(record)
 
     @router.post("/api/relays/{relay_id}/test")
     @handle_exceptions("test relay")

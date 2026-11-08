@@ -179,7 +179,7 @@ which mode is active for a given session.
 
 1. Settings -> Library -> Relays -> **Create Slack relay**.
 2. Open **Slack app setup**: copy or download the generated manifest (app "ccWebUI Relay", your own user token, no bot) and create a Slack app **From a manifest**; install it to your workspace.
-3. Create a Generic secret in **Library -> Secrets** for the User OAuth Token (`xoxp-`) and one for an app-level token with `connections:write` (`xapp-`, used by the upcoming inbound stage). A dedicated secret is recommended; a secret also assigned to sessions works, but those sessions can then call Slack directly with it (the UI warns).
+3. Create a Generic secret in **Library -> Secrets** for the User OAuth Token (`xoxp-`) and one for an app-level token with `connections:write` (`xapp-`, used by the upcoming inbound stage).
 4. On the Relays page pick both secrets, **Save credentials** and press **Test connection**. The relay only references the secrets; values are never shown or copied.
 5. In a profile, template or session, open the **Relay** area to attach the relay, set the footer and (sessions) the `!handle`.
 

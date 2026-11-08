@@ -22,6 +22,7 @@ def empty_usage() -> dict[str, Any]:
         "profiles": 0,
         "mcp_servers": 0,
         "oauth2_dependents": [],
+        "relays": [],
         "total": 0,
     }
 
@@ -56,6 +57,7 @@ def compute_secret_usage(
     templates: list,
     profiles: list,
     mcp_configs: list,
+    relays: list | None = None,
 ) -> dict[str, dict]:
     """Compute a per-secret-name usage breakdown.
 
@@ -104,6 +106,15 @@ def compute_secret_usage(
             if slug in usage:
                 usage[slug]["oauth2_dependents"].append(secret["name"])
 
+    # Issue #2103: relay credential references (names of the relays using the secret)
+    for relay in relays or []:
+        for secret_name in (
+            relay.user_token_secret, relay.app_token_secret, relay.oauth_client_secret_secret
+        ):
+            slug = slugify_secret(secret_name) if secret_name else None
+            if slug in usage and relay.name not in usage[slug]["relays"]:
+                usage[slug]["relays"].append(relay.name)
+
     for entry in usage.values():
         entry["total"] = (
             entry["sessions"]
@@ -111,40 +122,8 @@ def compute_secret_usage(
             + entry["profiles"]
             + entry["mcp_servers"]
             + len(entry["oauth2_dependents"])
+            + len(entry["relays"])
         )
 
     return usage
 
-
-def find_secret_users(
-    names: list[str],
-    sessions: list,
-    templates: list,
-    profiles: list,
-    mcp_configs: list,
-) -> dict[str, dict[str, list[str]]]:
-    """Where each named secret is used, by NAME of the consumer (issue #2103: relay credential
-    sharing warning). Returns {secret_name: {sessions, templates, profiles, mcp_servers}} with
-    consumer display names; secrets without any other use map to empty lists. Pure, no I/O."""
-    wanted = {slugify_secret(n): n for n in names}
-    result = {n: {"sessions": [], "templates": [], "profiles": [], "mcp_servers": []} for n in names}
-
-    def _label(item) -> str:
-        return str(getattr(item, "name", None) or getattr(item, "session_id", "") or "unnamed")
-
-    for bucket, items in (("sessions", sessions), ("templates", templates), ("profiles", profiles)):
-        for item in items:
-            for assigned in _assigned_secret_names(item.config.get("assigned_secrets")):
-                original = wanted.get(slugify_secret(assigned))
-                if original is not None:
-                    result[original][bucket].append(_label(item))
-    for mcp_config in mcp_configs:
-        refs = set()
-        for value in [*mcp_config.env.values(), *mcp_config.headers.values(), mcp_config.url,
-                      mcp_config.command, mcp_config.oauth_client_secret, *mcp_config.args]:
-            refs.update(find_secret_ref_names(value))
-        for ref in refs:
-            original = wanted.get(slugify_secret(ref))
-            if original is not None:
-                result[original]["mcp_servers"].append(_label(mcp_config))
-    return result

@@ -62,3 +62,41 @@ describe('relay area is present in every hard-coded area list', () => {
     for (const k of keys) expect(fieldArea(k)).toBe('relay')
   })
 })
+
+// Relay sits immediately after MCP Servers wherever both appear (and before Hooks).
+describe('relay ordering is consistent (issue #2103)', () => {
+  const order = (text, re) => [...text.matchAll(re)].map(m => m[1])
+
+  it('PROFILE_AREAS and labels', () => {
+    const i = PROFILE_AREAS.indexOf('mcp')
+    expect(PROFILE_AREAS[i + 1]).toBe('relay')
+    expect(PROFILE_AREAS[i + 2]).toBe('hooks')
+    const labelKeys = Object.keys(PROFILE_AREA_LABELS)
+    expect(labelKeys[labelKeys.indexOf('mcp') + 1]).toBe('relay')
+  })
+
+  it('area editor sidebar list, Library sidebar group and component area arrays', () => {
+    const sidebar = read('components/settings/SettingsSidebar.vue')
+    const edit = order(sidebar, /\{ section: '([a-z-]+)',\s+icon:/g)
+    expect(edit[edit.indexOf('mcp-servers') + 1]).toBe('relay')
+    expect(edit[edit.indexOf('mcp-servers') + 2]).toBe('hooks')
+    const lib = order(sidebar, /\{ to: '\/settings\/([a-z-]+)',\s+icon:/g)
+    expect(lib.slice(lib.indexOf('mcp-servers'))).toEqual(['mcp-servers', 'relays', 'hooks'])
+    for (const f of ['components/settings/sections/GeneralSection.vue',
+      'components/settings/sections/LibraryProfilesSection.vue']) {
+      const keys = order(read(f), /\{ key: '([a-z_]+)',\s+label:/g)
+      expect(keys[keys.indexOf('mcp') + 1], f).toBe('relay')
+    }
+  })
+
+  it('settings search index groups follow the same order', () => {
+    const sections = []
+    for (const m of read('components/settings/search/settingsIndex.js').matchAll(/section: '([a-z-]+)'/g)) {
+      if (sections[sections.length - 1] !== m[1]) sections.push(m[1])
+    }
+    expect(sections[sections.indexOf('mcp-servers') + 1]).toBe('relays')
+    expect(sections[sections.indexOf('relays') + 1]).toBe('hooks')
+    expect(sections[sections.indexOf('edit-mcp-servers') + 1]).toBe('edit-relay')
+    expect(sections[sections.indexOf('edit-relay') + 1]).toBe('edit-hooks')
+  })
+})

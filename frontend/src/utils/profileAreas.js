@@ -11,10 +11,10 @@ export const PROFILE_AREAS = Object.freeze([
   'permissions',
   'system_prompt',
   'mcp',
+  'relay',
   'hooks',
   'isolation',
   'features',
-  'relay',
 ])
 
 export const PROFILE_AREA_LABELS = Object.freeze({
@@ -22,8 +22,8 @@ export const PROFILE_AREA_LABELS = Object.freeze({
   permissions: 'Permissions',
   system_prompt: 'System Prompt',
   mcp: 'MCP',
+  relay: 'Relay',
   hooks: 'Hooks',
   isolation: 'Isolation',
   features: 'Features',
-  relay: 'Relay',
 })

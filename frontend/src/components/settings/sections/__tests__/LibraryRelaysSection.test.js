@@ -75,7 +75,7 @@ describe('LibraryRelaysSection', () => {
     expect(wrapper.find('[data-testid="relay-create-error"]').text()).toBe('A relay already exists')
   })
 
-  it('offers vault secrets by name only, in-use ones stay selectable with a count note', async () => {
+  it('offers vault secrets by name only; secrets used elsewhere are plain selectable options', async () => {
     const secrets = [
       { name: 'slack-user', type: 'generic', usage: { total: 0 } },
       { name: 'in-use', type: 'generic', usage: { sessions: 2, templates: 1, total: 3 } },
@@ -84,48 +84,29 @@ describe('LibraryRelaysSection', () => {
     apiMock.get.mockImplementation((url) => {
       if (url === '/api/relays') return Promise.resolve({ relays: [REC] })
       if (url === '/api/secrets') return Promise.resolve({ secrets: secrets.map(s => ({ ...s })) })
-      if (url.includes('/secret-usage')) return Promise.resolve({ usage: { 'in-use': { sessions: ['Debug helper', 'Other'], templates: ['Tpl'], profiles: [], mcp_servers: [] } } })
       if (url.includes('/manifest')) return Promise.resolve(MANIFEST)
       return Promise.resolve({})
     })
-    apiMock.put.mockResolvedValue({ ...REC, has_user_token: true, user_token_secret: 'in-use',
-      user_secret_shared: { sessions: ['Debug helper', 'Other'], templates: ['Tpl'], profiles: [], mcp_servers: [] } })
+    apiMock.put.mockResolvedValue({ ...REC, has_user_token: true, user_token_secret: 'in-use' })
     const { wrapper } = renderWithStores(LibraryRelaysSection)
     await flush()
     expect(wrapper.find('[data-testid="relay-secret-pickers"] input').exists()).toBe(false)
     expect(wrapper.find('[data-testid="relay-user-token"]').exists()).toBe(false)
     const select = wrapper.find('[data-testid="relay-pick-user"]')
     const optionEls = select.findAll('option')
-    const opts = optionEls.map(o => o.text())
-    expect(opts).toContain('slack-user')
-    expect(opts.some(o => o.startsWith('deploy-key'))).toBe(false)
-    const inUse = optionEls.find(o => o.text().startsWith('in-use'))
-    expect(inUse.text()).toContain('also assigned to: 2 sessions, 1 template')
-    expect(inUse.attributes('disabled')).toBeUndefined()
+    expect(optionEls.map(o => o.text())).toEqual(['None selected', 'in-use', 'slack-user'])
+    expect(optionEls.every(o => o.attributes('disabled') === undefined)).toBe(true)
     expect(wrapper.find('[data-testid="relay-create-secret-link"]').attributes('href')).toContain('/settings/secrets')
-    // selecting it shows the non-blocking warning with the consumer names
     await select.setValue('in-use')
     await flush()
-    const warn = wrapper.find('[data-testid="relay-shared-warning"]')
-    expect(warn.text()).toContain('also exposed to the listed')
-    expect(warn.text()).toContain('bypassing the relay')
-    expect(warn.text()).toContain('Debug helper, Other')
-    // saving is not blocked; the relay card then keeps showing the live warning
+    // no sharing noise anywhere
+    expect(wrapper.text()).not.toMatch(/also assigned|also exposed|Dedicated secrets/i)
+    expect(apiMock.get.mock.calls.some(c => String(c[0]).includes('secret-usage'))).toBe(false)
     await wrapper.find('[data-testid="relay-secret-pickers"]').trigger('submit')
     await flush()
     expect(apiMock.put).toHaveBeenCalledWith('/api/relays/r1/secrets', { user_token_secret: 'in-use' })
-    expect(wrapper.find('[data-testid="relay-card-shared-user"]').text()).toContain('Debug helper')
-  })
-
-  it('shows no warning for a dedicated secret', async () => {
-    apiMock.get.mockImplementation((url) => {
-      if (url === '/api/relays') return Promise.resolve({ relays: [{ ...REC, has_user_token: true, user_token_secret: 'slack-user', user_secret_shared: null }] })
-      if (url === '/api/secrets') return Promise.resolve({ secrets: [{ name: 'slack-user', type: 'generic', usage: { total: 0 } }] })
-      return Promise.resolve(MANIFEST)
-    })
-    const { wrapper } = renderWithStores(LibraryRelaysSection)
-    await flush()
-    expect(wrapper.find('[data-testid="relay-shared-warning"]').exists()).toBe(false)
+    expect(wrapper.find('[data-testid="relay-chip-user"]').text()).toContain('set')
+    expect(wrapper.text()).not.toMatch(/also assigned|also exposed/i)
   })
 
   it('shows the backend validation error and keeps the form usable', async () => {

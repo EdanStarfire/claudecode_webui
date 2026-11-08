@@ -71,13 +71,3 @@ describe('relay store', () => {
     expect(apiMock.put).toHaveBeenCalledWith('/api/sessions/s1/relay/handle', { handle: 'h' })
   })
 })
-
-describe('relay store secretUsage', () => {
-  it('previews consumer names for the candidate secrets', async () => {
-    setActivePinia(createPinia())
-    apiMock.get.mockResolvedValue({ usage: { a: { sessions: ['s'], templates: [], profiles: [], mcp_servers: [] } } })
-    const usage = await useRelayStore().secretUsage('r1', ['a', 'b c'])
-    expect(apiMock.get).toHaveBeenCalledWith('/api/relays/r1/secret-usage?name=a&name=b%20c')
-    expect(usage.a.sessions).toEqual(['s'])
-  })
-})

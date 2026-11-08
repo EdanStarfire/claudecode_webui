@@ -125,7 +125,7 @@ async def test_issue_2103_secret_reference_validation_and_failure_leaves_record(
 
 
 @pytest.mark.asyncio
-async def test_issue_2103_in_use_secret_selectable_with_sharing_warning(relay_env):
+async def test_issue_2103_in_use_secret_selectable_and_counted_in_secrets_library(relay_env):
     client = relay_env["client"]
     relay = (await client.post("/api/relays", json={"name": "Rig"})).json()
     rid = relay["relay_id"]
@@ -135,38 +135,27 @@ async def test_issue_2103_in_use_secret_selectable_with_sharing_warning(relay_en
     r = await client.patch(f"/api/sessions/{session['session_id']}",
                            json={"config": {"assigned_secrets": ["shared-slack"]}})
     assert r.status_code == 200, r.text
-    tpl = await client.post("/api/templates", json={"name": "Shared tpl",
-                                                    "config": {"assigned_secrets": ["shared-slack"]}})
-    assert tpl.status_code in (200, 201), tpl.text
 
-    # preview for the picker (names only)
-    usage = (await client.get(f"/api/relays/{rid}/secret-usage", params={"name": "shared-slack"})).json()
-    assert usage["usage"]["shared-slack"]["sessions"] == ["Debug helper"]
-    assert usage["usage"]["shared-slack"]["templates"] == ["Shared tpl"]
-    assert USER_TOKEN not in json.dumps(usage)
-
-    # selecting an in-use secret succeeds; the payload carries the warning data
+    # sharing is not special: selecting an in-use secret just works, no extra payload
     r = await client.put(f"/api/relays/{rid}/secrets", json={"user_token_secret": "shared-slack"})
     assert r.status_code == 200, r.text
-    body = r.json()
-    assert body["has_user_token"] is True
-    assert body["user_secret_shared"]["sessions"] == ["Debug helper"]
-    assert body["user_secret_shared"]["templates"] == ["Shared tpl"]
-    assert body["app_token_secret"] is None and "app_secret_shared" not in body
+    assert r.json()["has_user_token"] is True
+    assert not [k for k in r.json() if k.endswith("_secret_shared")]
     assert USER_TOKEN not in r.text
 
-    # computed live: GET shows it, and it disappears when the other usage is removed
-    got = (await client.get(f"/api/relays/{rid}")).json()
-    assert got["user_secret_shared"]["sessions"] == ["Debug helper"]
-    await client.patch(f"/api/sessions/{session['session_id']}", json={"config": {"assigned_secrets": []}})
-    await client.delete(f"/api/templates/{tpl.json()['template_id']}")
-    got = (await client.get(f"/api/relays/{rid}")).json()
-    assert got["user_secret_shared"] is None
-    # and it appears again if someone assigns it later
-    await client.patch(f"/api/sessions/{session['session_id']}",
-                       json={"config": {"assigned_secrets": ["shared-slack"]}})
-    assert (await client.get(f"/api/relays/{rid}")).json()["user_secret_shared"]["sessions"] == ["Debug helper"]
-    assert (await client.get("/api/relays/missing/secret-usage")).status_code == 404
+    # the Secrets library is the one place that shows usage; the relay counts as a usage
+    secrets = {s["name"]: s for s in (await client.get("/api/secrets")).json()["secrets"]}
+    usage = secrets["shared-slack"]["usage"]
+    assert usage["sessions"] == 1 and usage["relays"] == ["Rig"] and usage["total"] == 2
+    assert USER_TOKEN not in json.dumps(secrets)
+    # an unrelated secret has no relay usage
+    await _make_secret(client, "other", "plain")
+    secrets = {s["name"]: s for s in (await client.get("/api/secrets")).json()["secrets"]}
+    assert secrets["other"]["usage"]["relays"] == [] and secrets["other"]["usage"]["total"] == 0
+    # deleting the relay releases the usage
+    await client.delete(f"/api/relays/{rid}")
+    secrets = {s["name"]: s for s in (await client.get("/api/secrets")).json()["secrets"]}
+    assert secrets["shared-slack"]["usage"]["relays"] == []
 
 
 @pytest.mark.asyncio

@@ -408,21 +408,21 @@ const PROFILE_AREAS = [
   { key: 'permissions',   label: 'Permissions' },
   { key: 'system_prompt', label: 'System Prompt' },
   { key: 'mcp',           label: 'MCP Servers' },
+  { key: 'relay',         label: 'Relay' },
   { key: 'hooks',         label: 'Hooks' },
   { key: 'isolation',     label: 'Isolation' },
   { key: 'features',      label: 'Features' },
-  { key: 'relay',         label: 'Relay' },
 ]
 
 const AREA_TO_SECTION = {
   model:         'model-tuning',
   permissions:   'tools-permissions',
   mcp:           'mcp-servers',
+  relay:         'relay',
   hooks:         'hooks',
   features:      'features',
   system_prompt: 'system-prompt',
   isolation:     'isolation',
-  relay:         'relay',
 }
 
 function templateProfileFor(areaKey) {
