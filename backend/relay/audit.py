@@ -32,6 +32,7 @@ _FIELDS = (
     "ts", "event", "session_id", "handle", "session_name", "tool", "channel_id", "channel_name",
     "thread_ts", "message_ts", "outcome", "code", "policy", "approval", "prompt_via", "text_sha256",
     "text_preview", "query_sha256", "query_preview", "kinds", "result_count",
+    "old_policy", "source", "tier", "tier_id", "tier_name",
 )
 QUERY_PREVIEW_LEN = 40
 

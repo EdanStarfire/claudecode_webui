@@ -69,11 +69,11 @@ async def test_summary_absent_without_relay(env):
 
 async def test_summary_counts_nested_policies_and_tracks_edits(env):
     info = await _create(env, relay_id="r1")
-    await env.service.set_policy("s1", "r1", CH1, "auto")
-    await env.service.set_policy("s1", "r1", CH2, "ask")
+    await env.service.set_policy("s1", "r1", CH1, "auto", source="editor")
+    await env.service.set_policy("s1", "r1", CH2, "ask", source="editor")
     s = info.relay_summary
     assert s["relay_id"] == "r1" and s["adapter_type"] == "slack" and s["policy_count"] == 2
-    await env.service.delete_policy("s1", "r1", CH1)
+    await env.service.delete_policy("s1", "r1", CH1, source="editor")
     assert info.relay_summary["policy_count"] == 1
     await env.service.set_handle("s1", "my-handle")
     assert info.relay_summary["handle"] == "my-handle"
@@ -90,7 +90,7 @@ async def test_summary_cleared_when_relay_removed(env):
 
 async def test_summary_is_runtime_only_never_persisted(env):
     info = await _create(env, relay_id="r1")
-    await env.service.set_policy("s1", "r1", CH1, "auto")
+    await env.service.set_policy("s1", "r1", CH1, "auto", source="editor")
     state = json.loads((env.sessions.sessions_dir / "s1" / "state.json").read_text())
     assert "relay_summary" not in state
     assert info.to_dict()["relay_summary"]["policy_count"] == 1
@@ -126,7 +126,7 @@ async def test_issue_2103_template_policies_inherited_live_not_copied(env):
     assert info.relay_summary["policy_count"] == 2
 
     # a session-tier override wins for that target only
-    await env.service.set_policy("s1", "r1", CH1, "blocked")
+    await env.service.set_policy("s1", "r1", CH1, "blocked", source="editor")
     eff = await env.service.effective_relay_policies(info, "r1")
     assert eff[CH1].policy == "blocked" and eff[CH1].source == "session"
     assert eff[CH2].source == "template"

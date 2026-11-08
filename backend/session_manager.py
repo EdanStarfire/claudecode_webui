@@ -23,7 +23,7 @@ from shared.logging_config import get_logger
 
 from .models.messages import CURRENT_MESSAGE_SCHEMA_VERSION, LegacyMessageFormatError
 from .models.permission_mode import PermissionMode
-from .relay.policy import normalize_policies
+from .relay.policy import diff_policies, normalize_policies
 from .relay.validation import validate_relay_config
 from .session_config import CONFIG_FIELDS, DEFAULTS, SessionConfig
 from .session_lifecycle import (  # noqa: F401 — re-exported; see module docstring below
@@ -400,6 +400,13 @@ class SessionManager:
         # as a "state_change" event (see shared/event_registry.py's
         # session_metadata_updated entry).
         self._metadata_change_callbacks: list[Callable] = []
+        # Issue #2355: sync callbacks (session_id, changes, source, extra) for every audited
+        # relay-policy write; they must only schedule work, never block or raise.
+        self._policy_change_callbacks: list[Callable] = []
+        self._policy_sole_relay_id: Callable[[], str | None] | None = None
+        # sessions created from a template: their first config replacement is the create-time
+        # override pass, audited as source=config with nothing before it
+        self._awaiting_override_pass: set[str] = set()
         # Issue #2184 (epic #1990 stage 6 residuals): is_processing-only updates fire
         # this SEPARATE callback list instead of _state_change_callbacks — the
         # SessionState itself never changes for a turn start/end, so it no longer
@@ -679,6 +686,18 @@ class SessionManager:
 
             await self._persist_session_state(session_id)
 
+            if config.template_id:  # the override pass audits (issue #2355)
+                self._awaiting_override_pass.add(session_id)
+            else:
+                sole = self._policy_sole_relay_id() if self._policy_sole_relay_id else None
+                self._notify_policy_change_callbacks(
+                    session_id,
+                    diff_policies({}, normalize_policies(
+                        config_dict.get("relay_channel_policies"), sole
+                    )),
+                    "config",
+                )
+
             session_logger.info(f"Created session {session_id}")
 
         except Exception as e:
@@ -706,6 +725,7 @@ class SessionManager:
                     logger.error(f"Session {session_id} not found")
                     return False
 
+                self._awaiting_override_pass.discard(session_id)  # past create: no override pass
                 new_state = transition(session.state, LifecycleEvent.START_REQUESTED)
                 if new_state == session.state:
                     session_logger.warning(f"Cannot start session {session_id} in state {session.state}")
@@ -1228,7 +1248,8 @@ class SessionManager:
 
     async def update_relay_policy(
         self, session_id: str, relay_id: str, target: str, policy: str | None,
-        *, sole_relay_id: str | None = None,
+        *, source: str, sole_relay_id: str | None = None,
+        audit_extra: dict[str, Any] | None = None,
     ) -> bool:
         """Set (or remove, when *policy* is None) one session-tier policy of one relay.
 
@@ -1237,14 +1258,20 @@ class SessionManager:
         *sole_relay_id*, else dropped), so the first runtime edit upgrades the session. Effective
         policy is merged live per call (backend/relay/service.py), so no restart is needed
         (issue #2103, #2346).
+
+        *source* (``editor`` | ``prompt`` here; ``update_session`` reports ``config``; required:
+        no default so no caller can skip the audit attribution) names what made the edit; the change is diffed under the session lock and
+        reported once through the policy-change callbacks (issue #2355). *audit_extra* carries
+        caller-specific audit fields.
         """
         async with self._get_session_lock(session_id):
             session = self._active_sessions.get(session_id)
             if not session:
                 return False
-            policies = normalize_policies(
+            old_policies = normalize_policies(
                 session.config.get("relay_channel_policies"), sole_relay_id
             )
+            policies = {rid: dict(entries) for rid, entries in old_policies.items()}
             entry = dict(policies.get(relay_id) or {})
             if policy is None:
                 entry.pop(target, None)
@@ -1260,6 +1287,9 @@ class SessionManager:
                 session.config.pop("relay_channel_policies", None)
             session.updated_at = datetime.now(UTC)
             await self._persist_session_state(session_id)
+            self._notify_policy_change_callbacks(
+                session_id, diff_policies(old_policies, policies), source, audit_extra
+            )
             await self._notify_metadata_change_callbacks(session_id)
             return True
 
@@ -1742,6 +1772,7 @@ class SessionManager:
 
                 # Only remove from memory after successful file deletion
                 del self._active_sessions[session_id]
+                self._awaiting_override_pass.discard(session_id)
 
                 # Remove session lock
                 if session_id in self._session_locks:
@@ -1798,6 +1829,15 @@ class SessionManager:
                     logger.error(f"Session {session_id} not found")
                     return False
 
+                touches_policies = "_replace_config" in kwargs or "relay_channel_policies" in kwargs
+                sole = self._policy_sole_relay_id() if self._policy_sole_relay_id else None
+                old_policies = (
+                    normalize_policies(session.config.get("relay_channel_policies"), sole)
+                    if touches_policies else {}
+                )
+                if "_replace_config" in kwargs and session_id in self._awaiting_override_pass:
+                    self._awaiting_override_pass.discard(session_id)
+                    old_policies = {}  # create-time overrides: nothing existed before
                 for key, value in kwargs.items():
                     if key == "_replace_config":
                         config = {k: v for k, v in value.items() if k in CONFIG_FIELDS}
@@ -1813,6 +1853,11 @@ class SessionManager:
 
                 session.updated_at = datetime.now(UTC)
                 await self._persist_session_state(session_id)
+                if touches_policies:
+                    self._notify_policy_change_callbacks(session_id, diff_policies(
+                        old_policies,
+                        normalize_policies(session.config.get("relay_channel_policies"), sole),
+                    ), "config")
                 await self._notify_metadata_change_callbacks(session_id)
                 session_logger.info(f"Updated session {session_id} fields: {list(kwargs.keys())}")
                 return True
@@ -1871,6 +1916,30 @@ class SessionManager:
                 await callback(session_id, new_state, is_processing, project_id=project_id)
             except Exception as e:
                 logger.error(f"Error in state change callback: {e}")
+
+    def add_policy_change_callback(
+        self, callback: Callable, sole_relay_id: Callable[[], str | None] | None = None
+    ):
+        """Register a sync ``callback(session_id, changes, source, extra)`` for audited relay
+        policy writes (issue #2355). *sole_relay_id* lets legacy flat policy dicts be diffed
+        under the Backend's only relay, as the read path does."""
+        self._policy_change_callbacks.append(callback)
+        if sole_relay_id is not None:
+            self._policy_sole_relay_id = sole_relay_id
+
+    def _notify_policy_change_callbacks(
+        self, session_id: str, changes: list[dict], source: str,
+        extra: dict[str, Any] | None = None,
+    ) -> None:
+        """Report one write's policy diff. Called under the session lock, so it must not
+        block: callbacks only schedule work, and a failing one never breaks the write."""
+        if not changes:
+            return
+        for callback in self._policy_change_callbacks:
+            try:
+                callback(session_id, changes, source, extra)
+            except Exception:
+                logger.exception("Error in policy change callback")
 
     def add_metadata_change_callback(self, callback: Callable):
         """Add callback for metadata-only session updates (issue #2159)."""

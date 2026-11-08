@@ -103,8 +103,14 @@ class RelayPermissionBridge:
         if new_policy is not None:
             approval = "prompt_promote"
             decision = model.decide(new_policy, action)
-            await self.service.set_policy(session_id, ctx.relay_id, channel_id, new_policy)
-            await self._audit_policy_change(session_id, channel_id, gate_result, new_policy)
+            # The audited write path records the change (source=prompt, issue #2355).
+            await self.service.set_policy(
+                session_id, ctx.relay_id, channel_id, new_policy, source="prompt",
+                audit_extra={
+                    "tool": gate_result.tool, "channel_name": gate_result.channel_label,
+                    "approval": "prompt_promote",
+                },
+            )
             if decision.kind == DENY:
                 return {
                     "behavior": "deny",
@@ -117,16 +123,3 @@ class RelayPermissionBridge:
         if mint_grant:
             self.gate.grants.add(session_id, short, args, approval)
         return {**response, "relay_approval": approval}
-
-    async def _audit_policy_change(
-        self, session_id: str, channel_id: str | None, gate_result: GateResult, policy: str
-    ) -> None:
-        ctx = await self.gate.context(session_id)
-        if ctx is None:
-            return
-        await self.audit.record(
-            ctx.relay_id, event="policy_change", session_id=session_id, handle=ctx.handle,
-            session_name=ctx.session_info.name, tool=gate_result.tool, channel_id=channel_id,
-            channel_name=gate_result.channel_label, outcome="ok", policy=policy,
-            approval="prompt_promote",
-        )

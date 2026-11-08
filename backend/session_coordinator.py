@@ -2705,7 +2705,9 @@ class SessionCoordinator:
                 if config_value != template_value:
                     overrides[field_name] = config_value
 
-            await self.session_manager.update_session(session_id, _replace_config=overrides)
+            await self.session_manager.update_session(
+                session_id, _replace_config=overrides, _audit_as_created=True
+            )
             if overrides:
                 coord_logger.debug(
                     f"Session {session_id} initial overrides computed: {list(overrides.keys())}"

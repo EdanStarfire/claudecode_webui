@@ -104,3 +104,23 @@ def normalize_policies(raw: object, sole_relay_id: str | None) -> dict[str, dict
             dropped,
         )
     return result
+
+
+def diff_policies(
+    old: Mapping[str, Mapping[str, str]], new: Mapping[str, Mapping[str, str]]
+) -> list[dict[str, str | None]]:
+    """Per-target differences between two normalised ``{relay_id: {target: policy}}`` maps.
+
+    One ``{relay_id, target, old, new}`` entry per changed target (``None`` = absent); equal
+    values produce nothing, so a no-op write is silent (issue #2355).
+    """
+    changes: list[dict[str, str | None]] = []
+    for relay_id in sorted({*old, *new}):
+        before, after = old.get(relay_id) or {}, new.get(relay_id) or {}
+        for target in sorted({*before, *after}):
+            if before.get(target) != after.get(target):
+                changes.append({
+                    "relay_id": relay_id, "target": target,
+                    "old": before.get(target), "new": after.get(target),
+                })
+    return changes

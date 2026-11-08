@@ -414,6 +414,22 @@ secret is deleted, `has_*_token` turns false and `*_secret_missing` true (tools 
 - **Audit** (`relay/audit.py`): `data/relays/{relay_id}/audit.jsonl`, 10 MB x 5 rotation, whitelisted fields only
   (text is a sha256 + 200-char preview), covers post/reply/upload/react/mark_read outcomes, denied attempts and
   policy changes; `GET /api/relays/{id}/audit`.
+  **Policy changes (issue #2355)** all go through one audited write path: `SessionManager.update_relay_policy(...,
+  *, source)` (`source` is REQUIRED, no default: `editor` | `prompt`) and `update_session` (`_replace_config`, flat
+  CONFIG_FIELDS, create-time overrides: `source=config`) diff `relay_channel_policies` (normalised) **inside the
+  per-session lock** and pass the per-target diff to sync policy-change callbacks; `RelayService` registers one that
+  only schedules the audit write (FIFO task; failures are logged and swallowed, never block or fail the edit).
+  One record per changed `(relay_id, target)`: `event=policy_change`, `channel_id`, best-effort `channel_name`,
+  `old_policy` (null = none), `policy` (new; null = removed), `source`, `tier=session`, `session_id`, `handle`,
+  `session_name`; a no-op write records nothing. Create-time overrides are `source=config` with `old_policy=null`.
+  Prompt-driven records keep their pre-#2355 fields (`tool`, `approval=prompt_promote`, `channel_name` = label) and
+  only gain `source=prompt` (no `old_policy` / `tier`; the viewer then shows `→ new`). Profile/template edits
+  (`ApplicationService.update_template/update_profile`) are audited **once per changed target per tier edit**
+  with `source=tier=template|profile`, `tier_id`, `tier_name`, `session_id=null`; there is **deliberately no
+  per-session fan-out** of "effective policy changed" records for inherited edits (it would cost a before/after
+  merge per dependent session and N near-duplicate records), so the viewer's session filter does not show tier
+  records and the relay-wide view does. The audit viewer renders `old → new` (`(none)` for null) plus a quiet
+  source/tier tag.
 
 ### Self-DM marker, identity and discovery (outbound stage 1c-ii)
 

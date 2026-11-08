@@ -289,7 +289,9 @@ def build_router(webui) -> APIRouter:
     @handle_exceptions("set relay policy", value_error_status=422)
     async def put_policy(session_id: str, relay_id: str, target: str, request: RelayPolicyRequest):
         try:
-            await service().set_policy(session_id, relay_id, target, request.policy)
+            await service().set_policy(
+                session_id, relay_id, target, request.policy, source="editor"
+            )
         except (SessionNotFoundError, RelayNotFoundError, RelayNotAttachedError) as e:
             raise _policy_errors(e) from e
         return await service().get_session_relay(session_id)
@@ -298,7 +300,7 @@ def build_router(webui) -> APIRouter:
     @handle_exceptions("delete relay policy", value_error_status=422)
     async def delete_policy(session_id: str, relay_id: str, target: str):
         try:
-            await service().delete_policy(session_id, relay_id, target)
+            await service().delete_policy(session_id, relay_id, target, source="editor")
         except (SessionNotFoundError, RelayNotFoundError, RelayNotAttachedError) as e:
             raise _policy_errors(e) from e
         return await service().get_session_relay(session_id)

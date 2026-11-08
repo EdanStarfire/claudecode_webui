@@ -527,3 +527,69 @@ async def test_issue_2103_self_dm_channel_id_persisted_and_invalidated_on_owner_
     relay_env["flags"]["open_dm_error"] = False
     await client.post(f"/api/relays/{relay['relay_id']}/test")
     assert (await client.get(f"/api/relays/{relay['relay_id']}")).json()["self_dm_channel_id"] == "D01SELFDM1"
+
+
+@pytest.mark.asyncio
+async def test_issue_2355_policy_changes_audited_for_editor_config_and_tiers(relay_env):
+    client = relay_env["client"]
+    coordinator = relay_env["coordinator"]
+    rid = (await client.post("/api/relays", json={"name": "Rig"})).json()["relay_id"]
+    profile = (await client.post("/api/profiles", json={
+        "name": "relay-base", "area": "relay", "config": {"relay_channel_policies": {rid: {OTHER: "blocked"}}},
+    })).json()
+    template = (await client.post("/api/templates", json={
+        "name": "T", "profile_ids": {"relay": profile["profile_id"]},
+        "config": {"relay_id": rid, "relay_channel_policies": {rid: {CHANNEL: "ask"}}},
+    })).json()
+    project = await relay_env["create_test_project"]()
+    session = await relay_env["create_test_session"](project["project_id"], template_id=template["template_id"])
+    sid = session["session_id"]
+    base = f"/api/sessions/{sid}/relays/{rid}/policies/{CHANNEL}"
+
+    async def records():
+        await coordinator.relay_service.drain_audit()
+        rows = (await client.get(f"/api/relays/{rid}/audit")).json()
+        rows = rows["records"] if isinstance(rows, dict) else rows
+        return list(reversed([r for r in rows if r["event"] == "policy_change"]))
+
+    # T1: editor set -> change -> remove = three records with old/new
+    for method, body in (("put", {"policy": "auto"}), ("put", {"policy": "blocked"}), ("delete", None)):
+        kw = {"json": body} if body else {}
+        assert (await getattr(client, method)(base, **kw)).status_code == 200
+    rows = await records()
+    assert [(r["old_policy"], r["policy"], r["source"]) for r in rows] == [
+        (None, "auto", "editor"), ("auto", "blocked", "editor"), ("blocked", None, "editor")
+    ]
+    assert all(r["session_id"] == sid and r["channel_id"] == CHANNEL for r in rows)
+
+    # config save (PATCH whole config) -> source=config; identical resave and omission write nothing
+    cfg = {"relay_id": rid, "relay_channel_policies": {rid: {OTHER: "read_only"}}}
+    assert (await client.patch(f"/api/sessions/{sid}", json={"config": cfg})).status_code == 200
+    assert (await client.patch(f"/api/sessions/{sid}", json={"config": cfg})).status_code == 200
+    omit = {"relay_id": rid}
+    assert (await client.patch(f"/api/sessions/{sid}", json={"config": omit})).status_code == 200
+    rows = await records()
+    assert len(rows) == 4 and rows[-1]["source"] == "config"
+    assert (rows[-1]["old_policy"], rows[-1]["policy"]) == (None, "read_only")
+
+    # template edit: one tier record, no session id, no per-session fan-out
+    await client.put(f"/api/templates/{template['template_id']}", json={
+        "config": {"relay_id": rid, "relay_channel_policies": {rid: {CHANNEL: "read_only"}}},
+    })
+    rows = await records()
+    assert len(rows) == 5
+    tier = rows[-1]
+    assert (tier["tier"], tier["tier_id"], tier["tier_name"], tier["source"]) == (
+        "template", template["template_id"], "T", "template"
+    )
+    assert tier["session_id"] is None and (tier["old_policy"], tier["policy"]) == ("ask", "read_only")
+    # unchanged tier edit writes nothing
+    await client.put(f"/api/templates/{template['template_id']}", json={"name": "T2"})
+    assert len(await records()) == 5
+
+    await client.put(f"/api/profiles/{profile['profile_id']}", json={
+        "config": {"relay_channel_policies": {rid: {OTHER: "ask"}}},
+    })
+    rows = await records()
+    assert (rows[-1]["tier"], rows[-1]["old_policy"], rows[-1]["policy"]) == ("profile", "blocked", "ask")
+    assert rows[-1]["session_id"] is None
