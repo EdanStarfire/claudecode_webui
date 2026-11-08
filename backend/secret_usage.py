@@ -22,6 +22,7 @@ def empty_usage() -> dict[str, Any]:
         "profiles": 0,
         "mcp_servers": 0,
         "oauth2_dependents": [],
+        "relays": [],
         "total": 0,
     }
 
@@ -56,6 +57,7 @@ def compute_secret_usage(
     templates: list,
     profiles: list,
     mcp_configs: list,
+    relays: list | None = None,
 ) -> dict[str, dict]:
     """Compute a per-secret-name usage breakdown.
 
@@ -104,6 +106,15 @@ def compute_secret_usage(
             if slug in usage:
                 usage[slug]["oauth2_dependents"].append(secret["name"])
 
+    # Issue #2103: relay credential references (names of the relays using the secret)
+    for relay in relays or []:
+        for secret_name in (
+            relay.user_token_secret, relay.app_token_secret, relay.oauth_client_secret_secret
+        ):
+            slug = slugify_secret(secret_name) if secret_name else None
+            if slug in usage and relay.name not in usage[slug]["relays"]:
+                usage[slug]["relays"].append(relay.name)
+
     for entry in usage.values():
         entry["total"] = (
             entry["sessions"]
@@ -111,6 +122,8 @@ def compute_secret_usage(
             + entry["profiles"]
             + entry["mcp_servers"]
             + len(entry["oauth2_dependents"])
+            + len(entry["relays"])
         )
 
     return usage
+

@@ -32,6 +32,12 @@ export const CONFIG_FIELDS_LIST = Object.freeze([
   'mcp_server_ids',
   'enable_claudeai_mcp_servers',
   'strict_mcp_config',
+  // relay area (issue #2103)
+  'relay_id',
+  'relay_footer_enabled',
+  'relay_footer_template',
+  'relay_channel_policies',
+  'relay_handle',
   // hooks area
   'hook_ids',
   // isolation area
@@ -114,6 +120,11 @@ export const FIELD_DEFAULTS = Object.freeze({
   mcp_server_ids: null,
   enable_claudeai_mcp_servers: true,
   strict_mcp_config: false,
+  relay_id: null,
+  relay_footer_enabled: null,
+  relay_footer_template: null,
+  relay_channel_policies: null,
+  relay_handle: null,
   hook_ids: null,
   bare_mode: false,
   env_scrub_enabled: false,
@@ -163,6 +174,12 @@ const _FIELD_TO_AREA = Object.freeze({
   mcp_server_ids: 'mcp',
   enable_claudeai_mcp_servers: 'mcp',
   strict_mcp_config: 'mcp',
+  // relay
+  relay_id: 'relay',
+  relay_footer_enabled: 'relay',
+  relay_footer_template: 'relay',
+  relay_channel_policies: 'relay',
+  relay_handle: 'relay',
   // hooks
   hook_ids: 'hooks',
   // isolation

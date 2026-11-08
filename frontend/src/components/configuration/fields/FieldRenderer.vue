@@ -198,6 +198,20 @@
         @update:value="$emit('update:value', $event)"
       />
 
+      <RelaySelectWidget
+        v-else-if="field.widget === 'relay-select'"
+        :value="value"
+        :disabled="isDisabled"
+        @update:value="$emit('update:value', $event)"
+      />
+
+      <RelayPoliciesSummary
+        v-else-if="field.widget === 'relay-policies-summary'"
+        :value="value"
+      />
+
+      <div v-if="error" class="field-error" role="alert" :data-testid="`field-error-${field.key}`">{{ error }}</div>
+
       <small v-if="field.description" class="field-description">
         <span v-html="field.description" />
       </small>
@@ -222,6 +236,8 @@ import RuleListWidget from './RuleListWidget.vue'
 import ProviderSelectWidget from './ProviderSelectWidget.vue'
 import ProviderModelSelectWidget from './ProviderModelSelectWidget.vue'
 import ClassifierModelWidget from './ClassifierModelWidget.vue'
+import RelaySelectWidget from './RelaySelectWidget.vue'
+import RelayPoliciesSummary from './RelayPoliciesSummary.vue'
 import SourceMarker from '../../settings/SourceMarker.vue'
 
 const props = defineProps({
@@ -234,6 +250,8 @@ const props = defineProps({
   fieldState: { type: [String, Object], default: 'normal' },
   included: { type: Boolean, default: true },
   config: { type: Object, default: () => ({}) },
+  // Server-side validation message for this field (rendered as plain text)
+  error: { type: String, default: '' },
 })
 
 defineEmits(['update:value', 'update:included', 'browse', 'reset', 'update:linked'])
@@ -288,6 +306,12 @@ const isDisabled = computed(() => {
 .field-disabled {
   opacity: 0.45;
   pointer-events: none;
+}
+
+.field-error {
+  margin-top: 5px;
+  font-size: 12px;
+  color: #f87171;
 }
 
 .field-description {

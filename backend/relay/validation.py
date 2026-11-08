@@ -21,10 +21,19 @@ RELAY_CONFIG_FIELDS = frozenset({
 RELAY_SECRET_PREFIX = "relay-"
 
 
+def is_relay_reserved_secret(name: str) -> bool:
+    """True for secrets created by the relay itself (reserved ``relay-`` prefix).
+
+    Secrets the owner created and merely REFERENCES as relay credentials are ordinary secrets: they
+    may also be assigned to sessions (the UI warns about the tradeoff).
+    """
+    return name.strip().lower().startswith(RELAY_SECRET_PREFIX)
+
+
 def validate_assigned_secrets(names: Iterable[str] | None) -> None:
-    """Reject relay-owned vault secrets in an ``assigned_secrets`` list."""
+    """Reject relay-created (``relay-`` prefixed) vault secrets in an ``assigned_secrets`` list."""
     for name in names or []:
-        if isinstance(name, str) and name.strip().lower().startswith(RELAY_SECRET_PREFIX):
+        if isinstance(name, str) and is_relay_reserved_secret(name):
             raise ValueError(
                 f"Secret '{name}' is reserved for the relay and cannot be assigned to a session"
             )

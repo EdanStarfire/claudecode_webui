@@ -15,7 +15,13 @@ from shared.logging_config import get_logger
 
 from .config_resolution import resolve_effective_config
 from .litellm_proxy_manager import make_model_alias
-from .restart_required import ROUTING_SINGLE, LaunchSnapshot, compute_restart_reasons, single_alias
+from .restart_required import (
+    RELAY_NOT_ATTACHED_REASON,
+    ROUTING_SINGLE,
+    LaunchSnapshot,
+    compute_restart_reasons,
+    single_alias,
+)
 from .session_launcher import _resolve_auto_compact_window
 from .session_lifecycle import is_deliverable
 
@@ -152,9 +158,14 @@ class ProviderModelSwitch:
         snap = self.launch_snapshots.get(session_id)
         session_info = await self._c.session_manager.get_session_info(session_id)
         proxy = self._c.litellm_proxy_manager
-        if snap is None or session_info is None or proxy is None or session_id not in self._c._active_sdks:
+        if snap is None or session_info is None or session_id not in self._c._active_sdks:
             return []
         cfg = await resolve_effective_config(session_info, self._c.template_manager, self._c.profile_manager)
+        if proxy is None:
+            # No LiteLLM proxy: only the relay attachment can need a restart (issue #2103).
+            reasons = [RELAY_NOT_ATTACHED_REASON] if cfg.relay_id and not snap.relay_wanted else []
+            await self._c.session_manager.set_restart_required(session_id, reasons)
+            return reasons
         alias = single_alias(cfg)
         new_window = None
         live = True

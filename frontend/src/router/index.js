@@ -109,6 +109,11 @@ const routes = [
     component: SettingsLayout
   },
   {
+    path: '/settings/relays',
+    name: 'settings-relays',
+    component: SettingsLayout
+  },
+  {
     path: '/settings/features',
     name: 'settings-features',
     component: SettingsLayout

@@ -11,6 +11,7 @@
         :field-state="fieldStates[field.key] || 'normal'"
         :included="included[field.key] !== false"
         :config="config"
+        :error="errors[field.key] || ''"
         @update:value="$emit('update:config', field.key, $event)"
         @update:included="$emit('update:included', field.key, $event)"
         @browse="$emit('browse', field.key)"
@@ -33,6 +34,7 @@ const props = defineProps({
   showIncludeToggle: { type: Boolean, default: false },
   fieldStates: { type: Object, default: () => ({}) },
   included: { type: Object, default: () => ({}) },
+  errors: { type: Object, default: () => ({}) },
 })
 
 defineEmits(['update:config', 'update:included', 'browse', 'reset', 'update:linked'])

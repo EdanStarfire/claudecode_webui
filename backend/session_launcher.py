@@ -1235,6 +1235,7 @@ class SessionLauncher:
             self._launch_snapshots[session_id] = build_launch_snapshot(
                 _pre_vet_config, litellm_routed=litellm_routed, live_alias=_launch_alias,
                 wants_compact_window=_wants_compact_window, compact_window=_launch_compact_window,
+                relay_wanted="relay" in mcp_servers,
             )
             self.session_manager.clear_restart_required(session_id)
             if _launch_alias:

@@ -127,29 +127,31 @@ payloads. Archived sessions keep their recorded `working_directory`.
 
 ### Relay Endpoints (issue #2103)
 
-Responses never contain token values or vault secret names; only `has_user_token` / `has_app_token` /
-`has_oauth_client_secret` booleans. One relay per Backend (second `POST` -> 409).
+Responses never contain token values. Credentials are references to existing vault secrets: records carry the
+referenced secret NAMES (`user_token_secret`, `app_token_secret`), `has_user_token` / `has_app_token` (false when the
+referenced secret no longer exists), `user_secret_missing` / `app_secret_missing` and `has_oauth_client_secret`. One relay per Backend (second `POST` -> 409).
 
 | Method | Path | Description |
 |--------|------|-------------|
 | `GET` | `/api/relays` | List relays (`{relays: [...]}`) |
 | `POST` | `/api/relays` | Create (`name`, `adapter_type="slack"`, optional `oauth_client_id`, `oauth_client_secret`); 201, 409 if one exists |
 | `GET`/`PUT`/`DELETE` | `/api/relays/{id}` | Read / rename + OAuth client fields / delete (also deletes its vault secrets) |
-| `PUT` | `/api/relays/{id}/tokens` | Paste-token path: `user_token` (`xoxp-`) and/or `app_token` (`xapp-`); the user token is verified with `auth.test` (records `owner_user_id`, workspace) before it is stored; 400 on bad prefix / rejected token |
+| `PUT` | `/api/relays/{id}/secrets` | Reference existing vault secrets: `{user_token_secret?, app_token_secret?}` (names, either alone). Each secret must exist and its value must start with `xoxp-` / `xapp-` (read in-process, never returned);  a secret also used elsewhere is allowed (relay references show in `GET /api/secrets` `usage.relays`); the user token is verified with `auth.test` (records `owner_user_id`, workspace). 400 with a message naming the secret on any failure (record untouched), 404 unknown relay. Replaces the removed paste-token route |
 | `POST` | `/api/relays/{id}/test` | `auth.test` with the stored user token -> `{ok, workspace_*, user_id}` |
 | `POST` | `/api/relays/{id}/oauth/initiate` | Best effort. Body `{redirect_uri}` (https, or http on localhost; otherwise 400) -> `{auth_url, state}` |
 | `GET` | `/api/relays/{id}/oauth/status?state=` | `pending` / `complete` / `error` / `unknown` |
 | `GET` | `/api/sessions/{id}/relay` | Effective attachment: `relay_id`, `relay_handle`, footer fields, per-field `sources`, `policies` (`{channel_id: {policy, source}}`, per-key merged live) |
 | `PUT` | `/api/sessions/{id}/relay/handle` | `{handle}`; `^[a-z0-9][a-z0-9-]{1,31}$`, not `all/here/channel/everyone/subteam`; 409 duplicate, 422 invalid |
 | `PUT`/`DELETE` | `/api/sessions/{id}/relay/policies/{channel_id}` | Set (`{policy: blocked\|read_only\|ask\|auto}`) / remove the SESSION-tier policy; takes effect immediately, no restart. `channel_id` must match `^[CGDW][A-Z0-9]{6,}$` |
+| `GET` | `/api/relays/{id}/manifest` | Slack app manifest for the setup guide (UI stage 2a), generated from `backend/relay/slack_scopes.py`: `{manifest, manifest_json, scopes: {required[], optional[], inbound[]} (each `{name, kind: scope\|event\|setting, reason}`), steps[], include_inbound}`. `?include_inbound=false` drops the inbound events/Socket Mode. No tokens, relay IDs or relay-record fields; no bot user / bot scopes. 404 unknown relay |
 | `GET` | `/api/relays/{id}/audit` | Relay write/mark-read audit (outbound-1b): `?session_id=&channel=&limit=100(max 500)&before=<ISO ts>` -> `{records: [...]}` newest first. Records: `ts, event (tool\|policy_change), session_id, handle, session_name, tool, channel_id, channel_name, thread_ts, message_ts, outcome (ok\|denied\|error), code, policy, approval (auto\|prompt_allow\|prompt_promote), text_sha256, text_preview(<=200)`; never tokens. 404 unknown relay |
 
 `POST /api/sessions/{id}/permission/{request_id}` accepts an optional `relay_choice` `{policy: blocked|read_only|ask|auto|null, promote: bool}` for relay prompts (`tool_call.permission.relay_prompt.kind` `ask_send` / `choose_policy`): `promote` sets the channel to `auto` at SESSION tier; for `choose_policy` a `policy` is required (without one the request is denied). Ignored on deny.
 
 Attachment fields (`relay_id`, `relay_footer_enabled`, `relay_footer_template`, `relay_channel_policies`,
 `relay_handle`) travel through the normal profile (area `relay`), template and session config endpoints.
-`assigned_secrets` entries starting with `relay-` are rejected (422 on session create/template update, 400 on
-profile/template config).
+`assigned_secrets` entries starting with `relay-` (secrets the relay created itself) are rejected (422 on session
+create/template update, 400 on profile/template config); a secret the relay merely references stays assignable.
 
 ### Permission Endpoints
 

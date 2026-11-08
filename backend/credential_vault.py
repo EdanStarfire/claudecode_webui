@@ -17,7 +17,7 @@ import os
 from pathlib import Path
 
 from .models.secret_record import SecretRecord, SecretType, validate_secret_name
-from .relay.validation import RELAY_SECRET_PREFIX
+from .relay.validation import is_relay_reserved_secret
 from .secrets_keyring import delete_secret_value, get_secret_value, set_secret_value
 from .slug_utils import slugify_secret
 
@@ -139,6 +139,13 @@ class SecretsVault:
         logger.info(f"Updated secret '{name}'")
         return self._strip_value(metadata)
 
+    def secret_exists(self, name: str) -> bool:
+        """Cheap synchronous existence check on the metadata file (no value read)."""
+        try:
+            return self._secret_filename(name).exists()
+        except ValueError:
+            return False
+
     async def delete_secret(self, name: str) -> bool:
         """Delete secret metadata and keyring entry. Returns True if deleted, False if not found."""
         meta_path = self._secret_filename(name)
@@ -164,8 +171,8 @@ class SecretsVault:
         results = []
         for name in names:
             # Issue #2103: relay-owned secrets are read only in-process by RelayManager.
-            if name.strip().lower().startswith(RELAY_SECRET_PREFIX):
-                logger.warning("Refusing to resolve relay-owned secret for assignment")
+            if is_relay_reserved_secret(name):
+                logger.warning("Refusing to resolve a relay credential secret for assignment")
                 continue
             meta_path = self._secret_filename(name)
             if not meta_path.exists():
