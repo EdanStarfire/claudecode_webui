@@ -44,10 +44,12 @@ from .pending_store import PendingStore
 from .project_manager import ProjectManager
 from .queue_manager import QueueManager
 from .relay.audit import RelayAuditLog
+from .relay.call_registry import RelayCallRegistry
 from .relay.gate import RelayPolicyGate
 from .relay.grants import GrantStore
 from .relay.handles import RelayHandleIndex
 from .relay.permission_bridge import RelayPermissionBridge
+from .relay.prompt_broker import RelayPromptBroker
 from .relay.service import RelayService
 from .relay.validation import register_relay_manager
 from .relay_manager import RelayManager
@@ -70,6 +72,8 @@ class RelayRuntime:
     gate: RelayPolicyGate
     bridge: RelayPermissionBridge
     mcp_tools: RelayMCPTools
+    call_registry: RelayCallRegistry
+    broker: RelayPromptBroker
 
 
 @dataclass
@@ -165,13 +169,18 @@ def build_core_managers(
     oauth_callback_listener_manager.set_relay_oauth(relay_manager)
     relay_audit = RelayAuditLog(data_dir)
     relay_gate = RelayPolicyGate(relay_service, relay_manager, session_manager, GrantStore())
+    relay_bridge = RelayPermissionBridge(relay_gate, relay_service, relay_audit)
+    relay_registry = RelayCallRegistry()
+    relay_broker = RelayPromptBroker(relay_registry, relay_bridge)
     relay = RelayRuntime(
         manager=relay_manager,
         service=relay_service,
         audit=relay_audit,
         gate=relay_gate,
-        bridge=RelayPermissionBridge(relay_gate, relay_service, relay_audit),
-        mcp_tools=RelayMCPTools(relay_gate, relay_audit),
+        bridge=relay_bridge,
+        mcp_tools=RelayMCPTools(relay_gate, relay_audit, relay_broker),
+        call_registry=relay_registry,
+        broker=relay_broker,
     )
 
     return CoreManagers(

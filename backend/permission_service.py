@@ -31,6 +31,7 @@ from .models.messages import (
     PermissionSuggestion,
 )
 from .relay.adapters import is_relay_tool
+from .session_lifecycle import is_interruptible, is_live
 from .session_manager import SessionState
 
 if TYPE_CHECKING:
@@ -55,6 +56,10 @@ class PermissionService:
         # agent's permission doesn't clear another still-open agent's PAUSED
         # state on the same session.
         self.pending_by_session: dict[str, set[str]] = {}
+        # Issue #2353: the relay tool handler raises its own prompts through this service.
+        broker = getattr(getattr(coordinator, "relay", None), "broker", None)
+        if broker is not None:
+            broker.attach(coordinator)
 
     def create_permission_callback(self, session_id: str) -> Callable:
         """Create permission callback for tool usage"""
@@ -153,6 +158,10 @@ class PermissionService:
         suggestions: list[dict] | None = None,
         relay_gate_result: Any = None,
         relay_bridge: Any = None,
+        relay_mint_grant: bool = True,
+        timeout: float | None = None,
+        allow_standalone_card: bool = False,
+        deny_card_on_cancel: bool = False,
     ) -> dict:
         """Raise one permission prompt and wait for the owner's decision (issue #2353).
 
@@ -160,6 +169,14 @@ class PermissionService:
         elsewhere (the relay tool handler). Records the request, flips the tool call to
         awaiting_permission, pauses the session, awaits the Future that the REST resolve
         route completes, persists the response and returns the SDK permission response.
+
+        Relay handler extensions (issue #2353), all off by default so the SDK callback keeps
+        its exact behavior: ``timeout`` bounds the wait (deny with ``reason="timeout"``);
+        ``allow_standalone_card`` creates a synthetic ``relay-prompt-{request_id}`` tool call
+        when the real card cannot be found (instead of auto-denying) and finalises it on every
+        outcome; ``relay_mint_grant=False`` keeps the relay answer from minting a one-shot
+        grant; ``deny_card_on_cancel`` marks the card denied when the waiting task is cancelled.
+        Deny responses carry a ``reason`` (timeout, interrupted, terminated, policy_forbids).
         """
         request_id = request_id or str(uuid.uuid4())
         request_time = time.time()
@@ -170,6 +187,7 @@ class PermissionService:
         display_name = context_fields.get("display_name")
         description = context_fields.get("description")
         suggestions = suggestions or []
+        standalone = False
 
         # Store permission request message using dataclass (Phase 0, Issue #310)
         try:
@@ -219,6 +237,20 @@ class PermissionService:
                         except TimeoutError:
                             pass
                         tool_call = self.coordinator.get_tool_call_by_id(session_id, tool_use_id)
+
+                if not tool_call and allow_standalone_card:
+                    # Issue #2353: degraded correlation (no hook entry, no tracker match) —
+                    # show the prompt on a synthetic card rather than denying the send.
+                    tool_use_id = f"relay-prompt-{request_id}"
+                    standalone = True
+                    request_dict["tool_use_id"] = tool_use_id
+                    tool_call = self.coordinator.create_tool_call(
+                        session_id, tool_use_id, tool_name, input_params, requires_permission=True
+                    )
+                    debug_logger.warning(
+                        f"[PERMISSIONS] No tool card for {tool_name} in session {session_id}; "
+                        f"showing standalone prompt card {tool_use_id}"
+                    )
 
                 if tool_call:
                     # Issue #1694: Wait for the assistant message envelope that produced
@@ -364,9 +396,20 @@ class PermissionService:
         self.pending_permissions[request_id] = permission_future
 
         try:
-            # Wait for user decision (no timeout - wait indefinitely)
+            # Wait for user decision (no timeout - wait indefinitely, unless a caller bounds it)
             debug_logger.info(f"PERMISSION CALLBACK: Waiting for user decision on request_id {request_id}")
-            response = await permission_future
+            try:
+                if timeout is None:
+                    response = await permission_future
+                else:
+                    response = await asyncio.wait_for(permission_future, timeout)
+            except TimeoutError:
+                self.pending_permissions.pop(request_id, None)
+                response = {
+                    "behavior": "deny",
+                    "message": "No answer within the time limit",
+                    "reason": "timeout",
+                }
             debug_logger.info(f"PERMISSION CALLBACK: Received user decision for request_id {request_id}: {response}")
 
             # Issue #1746: Only restore ACTIVE once no sibling request is
@@ -381,7 +424,8 @@ class PermissionService:
             # Issue #2103: relay prompt answer -> grant + optional policy promotion
             if decision == "allow" and relay_gate_result is not None:
                 response = await relay_bridge.apply_response(
-                    session_id, tool_name, input_params, relay_gate_result, response
+                    session_id, tool_name, input_params, relay_gate_result, response,
+                    mint_grant=relay_mint_grant,
                 )
                 decision = response.get("behavior")
                 reasoning = f"User {decision}ed permission"
@@ -520,6 +564,14 @@ class PermissionService:
             self._discard_pending(session_id, request_id)
             await self._maybe_resume_session(session_id)
 
+        except asyncio.CancelledError:
+            # Issue #2353: the waiting handler task was cancelled (CLI cancel, client
+            # disconnect): clear the prompt from the card so nothing stays on screen.
+            self.pending_permissions.pop(request_id, None)
+            if deny_card_on_cancel:
+                self._deny_card(session_id, tool_use_id, request_id, tool_name)
+            raise
+
         finally:
             # Issue #1746: asyncio.CancelledError is a BaseException, not caught
             # by `except Exception` above — without this, a coroutine cancelled
@@ -619,6 +671,13 @@ class PermissionService:
                             f"Appended tool_call {'running' if granted else 'denied'} "
                             f"for {tool_name} in session {session_id}"
                         )
+                        if standalone and granted:
+                            # No tool_result will ever arrive for a synthetic card.
+                            done = self.coordinator.update_tool_call_result(
+                                session_id, tool_call.tool_use_id, "Approved from the relay prompt"
+                            )
+                            if done is not None:
+                                self._emit_tool_call(session_id, done)
             except Exception:
                 logger.exception("Failed to update ToolCall for permission response")
 
@@ -630,6 +689,75 @@ class PermissionService:
 
         debug_logger.info(f"Permission {decision} for tool: {tool_name} (request_id: {request_id})")
         return response
+
+    async def abandon_request(
+        self, session_id: str, tool_use_id: str | None, request_id: str, tool_name: str
+    ) -> None:
+        """Clean up after a prompt whose waiting task was cancelled, whatever point it reached
+        (issue #2353): pending entry, open-request bookkeeping, PAUSED state and the card
+        (including a synthetic ``relay-prompt-{request_id}`` one). Idempotent."""
+        self.pending_permissions.pop(request_id, None)
+        self._discard_pending(session_id, request_id)
+        self._deny_card(session_id, tool_use_id or f"relay-prompt-{request_id}", request_id, tool_name)
+        await self._maybe_resume_session(session_id)
+
+    async def can_prompt(self, session_id: str) -> tuple[bool, str | None]:
+        """Whether anyone can answer a prompt for this session (issue #2353).
+
+        False (with a reason) for sessions that run unattended: the launched SDK was told to
+        deny prompts, the session is ephemeral, it has no permission callback (scheduler
+        launches pass none) or it is no longer running. Permission *mode* is never consulted.
+        """
+        info = await self.coordinator.session_manager.get_session_info(session_id)
+        if info is None:
+            return False, "session_unavailable"
+        if info.is_ephemeral:
+            return False, "ephemeral_session"
+        if not (is_live(info.state) or is_interruptible(info.state)):  # ACTIVE / STARTING / PAUSED
+            return False, "session_not_running"
+        sdk = self.coordinator._active_sdks.get(session_id)
+        if sdk is None:
+            return False, "session_not_running"
+        if getattr(sdk, "deny_unattended_permission_prompts", False):
+            return False, "deny_unattended_prompts"
+        if getattr(sdk, "permission_callback", None) is None:
+            return False, "no_permission_callback"
+        return True, None
+
+    def _emit_tool_call(self, session_id: str, tool_call: Any, triggering_message: dict | None = None) -> None:
+        """Emit one unified tool_call event for *tool_call* (issue #2353 helper)."""
+        data = MessageRecord.from_tool_call(tool_call, triggering_message=triggering_message).to_dict()
+        data.pop("_triggering_message", None)
+        if session_id in self.session_queues:
+            emit(
+                self.session_queues[session_id], QUEUE_SESSION, "tool_call",
+                {
+                    "session_id": session_id,
+                    "data": data,
+                    "timestamp": datetime.now(UTC).isoformat(),
+                },
+                scope=session_id, backend_id=self.coordinator.tenant_context.backend_id,
+            )
+
+    def _deny_card(
+        self, session_id: str, tool_use_id: str | None, request_id: str, tool_name: str
+    ) -> None:
+        """Best effort: mark the card of an abandoned prompt denied so no prompt stays on it."""
+        try:
+            tool_call = None
+            if tool_use_id:
+                tool_call = self.coordinator.get_tool_call_by_id(session_id, tool_use_id)
+            if tool_call is None:
+                tool_call = self.coordinator.get_tool_call_by_request_id(session_id, request_id)
+            if tool_call is None:
+                return
+            denied = self.coordinator.update_tool_call_permission_response(
+                session_id, tool_call.tool_use_id, False
+            )
+            if denied is not None:
+                self._emit_tool_call(session_id, denied)
+        except Exception:
+            logger.exception("Failed to clear abandoned prompt card for %s", tool_name)
 
     def _discard_pending(self, session_id: str, request_id: str) -> None:
         """Remove request_id from the per-session open-request set (issue #1746)."""
@@ -694,7 +822,8 @@ class PermissionService:
                     # Auto-deny the permission
                     response = {
                         "behavior": "deny",
-                        "message": f"Session {session_id} terminated - auto-denying pending permission"
+                        "message": f"Session {session_id} terminated - auto-denying pending permission",
+                        "reason": "terminated",
                     }
                     future.set_result(response)
                     debug_logger.info(f"Auto-denied pending permission {request_id} due to session {session_id} termination")
@@ -703,9 +832,21 @@ class PermissionService:
                 debug_logger.info(f"Cleaned up {len(request_ids)} pending permissions for session {session_id}")
 
             self.pending_by_session.pop(session_id, None)
+            self._clear_relay_session_state(session_id)
 
         except Exception:
             logger.exception(f"Error cleaning up pending permissions for session {session_id}")
+
+    def _clear_relay_session_state(self, session_id: str) -> None:
+        """Drop a session's one-shot relay grants and hook-correlation entries (issue #2353)."""
+        relay = getattr(self.coordinator, "relay", None)
+        if relay is None:
+            return
+        try:
+            relay.gate.grants.clear_session(session_id)
+            relay.broker.clear_session(session_id)
+        except Exception:
+            logger.exception("Failed to clear relay state for session %s", session_id)
 
     async def deny_for_session(self, session_id: str) -> None:
         """Deny this session's own pending permission request(s) due to an interrupt.
@@ -725,7 +866,8 @@ class PermissionService:
                 future.set_result({
                     "behavior": "deny",
                     "message": "Permission denied due to session interrupt",
-                    "interrupt": True
+                    "interrupt": True,
+                    "reason": "interrupted",
                 })
                 debug_logger.info(
                     f"Denied pending permission {request_id} due to interrupt of session {session_id}"

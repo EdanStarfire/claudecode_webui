@@ -5723,3 +5723,56 @@ class TestIssue2190OrdinaryResultDetection:
         )
         auto_resume_schedules = [s for s in schedules if s.schedule_type == "auto_resume"]
         assert len(auto_resume_schedules) == 1
+
+
+class TestIssue2353RelayHookWiring:
+    """Issue #2353 — the record-only PreToolUse hook is passed to the SDK only where the relay
+    MCP server is attached, with a spec-derived matcher."""
+
+    @staticmethod
+    def _factory(captured):
+        def factory(*args, **kwargs):
+            captured.update(kwargs)
+            mock_sdk = AsyncMock()
+            mock_sdk.start.return_value = True
+            mock_sdk.is_running.return_value = False
+            return mock_sdk
+        return factory
+
+    @pytest.mark.asyncio
+    async def test_hook_passed_when_relay_attached(self, temp_coordinator, sample_session_config):
+        coordinator = temp_coordinator
+        config = sample_session_config["config"].model_copy(update={"relay_id": "relay1"})
+        session_id = await coordinator.create_session(
+            session_id=sample_session_config["session_id"],
+            project_id=sample_session_config["project_id"],
+            config=config,
+        )
+        captured: dict = {}
+        coordinator.set_sdk_factory(self._factory(captured))
+        server = {"type": "sdk", "name": "relay_slack", "instance": object()}
+        with patch.object(
+            coordinator.relay_mcp_tools, "create_server_if_attached", AsyncMock(return_value=server)
+        ):
+            await coordinator.start_session(session_id)
+        [(matcher, callback)] = captured["pre_tool_hooks"]
+        assert matcher == "mcp__relay_slack__.*"
+        # the hook is record-only: returns {} and notes the tool_use_id for the handler
+        out = await callback(
+            {"tool_name": "mcp__relay_slack__post", "tool_input": {"channel": "C1", "text": "x"},
+             "tool_use_id": "tu9"}, "tu9", None,
+        )
+        assert out == {}
+        claimed = coordinator.relay.call_registry.claim(
+            session_id, "mcp__relay_slack__post", {"channel": "C1", "text": "x"}
+        )
+        assert claimed is not None and claimed.tool_use_id == "tu9"
+
+    @pytest.mark.asyncio
+    async def test_no_hook_without_relay(self, temp_coordinator, sample_session_config):
+        coordinator = temp_coordinator
+        session_id = await coordinator.create_session(**sample_session_config)
+        captured: dict = {}
+        coordinator.set_sdk_factory(self._factory(captured))
+        await coordinator.start_session(session_id)
+        assert "pre_tool_hooks" not in captured

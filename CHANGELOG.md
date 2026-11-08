@@ -7,6 +7,7 @@ Versioning: [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 ## [Unreleased]
 
 ### Fixed
+- Relay approval for `ask` and unlisted channels never prompted in auto or bypass mode (the send failed with `approval_required` / `policy_unset`). The relay tool now raises the approval prompt itself, so channel policy holds in every permission mode: only a channel's `auto` policy sends without a prompt, bypass no longer fails closed, unattended sessions (denied prompts, ephemeral/scheduled, no permission callback) refuse immediately with `approval_unavailable`, and interrupting/stopping/restarting while a prompt waits ends the call refused (`approval_cancelled`). Prompts time out after 10 minutes (`approval_timeout`); the owner's decline is `approval_denied`; the relay audit log records `prompt_via` (`callback`/`handler`). In the rare case the tool card cannot be linked, the prompt appears on a standalone card (#2353, part of #2103)
 - LiteLLM proxy failing to boot on every catalog-selected session after the #2177 litellm 1.98.0 → 1.105.1 bump — litellm 1.105 added a boot-time master-key check that our embedded proxy tripped on every start. Backend now provisions a per-boot, process-local `LITELLM_MASTER_KEY` (never exposed via config, logs, or any API response); a catalog session whose proxy failed to boot now fails clearly at session start instead of hanging or surfacing an opaque connection error (#2183)
 
 ## [1.6.0] - 2026-09-10

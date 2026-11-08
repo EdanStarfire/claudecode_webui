@@ -6,12 +6,16 @@ Exposes (server name from the relay's adapter spec, ``relay_slack`` for Slack):
   mcp__relay_slack__get_identity / find_channels (read-only; no policy, never grant send rights)
 
 There is deliberately no edit or delete tool. Every handler re-checks the channel policy
-through ``RelayPolicyGate.authorize`` (the authoritative gate); the permission callback is
-only the prompt UX in front of it.
+through ``RelayPolicyGate.authorize`` (the authoritative gate). A send that needs approval is
+allowed by a one-shot grant (the permission callback already prompted) or by the handler's own
+prompt through ``RelayPromptBroker`` (issue #2353), so channel policy holds in every permission
+mode; the permission callback is only the early prompt UX in front of it.
 """
 
 from __future__ import annotations
 
+import asyncio
+import contextlib
 import dataclasses
 import json
 import logging
@@ -26,6 +30,7 @@ except ImportError:  # pragma: no cover
     create_sdk_mcp_server = None
     ToolAnnotations = None
 
+from backend.relay import prompt_broker as pb
 from backend.relay.adapter import RelayError
 from backend.relay.adapters import SLACK_SPEC, SPECS, AdapterSpec
 from backend.relay.audit import RelayAuditLog, query_fields, text_fields
@@ -41,9 +46,10 @@ from backend.relay.gate import (
     GateError,
     RelayContext,
     RelayPolicyGate,
+    approval_refusal,
     error_result,
 )
-from backend.relay.policy import ALLOW
+from backend.relay.policy import ALLOW, CHOOSE_POLICY, PROMPT
 from backend.relay.safety import safe_error_code, with_marker, wrap_untrusted
 from backend.relay.search import SEARCH_TEXT_LIMIT, RelaySearchService, message_dict
 
@@ -88,8 +94,9 @@ _CHANNEL_DOC = (
 )
 _SEND_NOTE = (
     "Sending follows the channel policy: blocked/read_only channels refuse; `ask` channels "
-    "prompt the user (and fail with approval_required when the session's permission mode does "
-    "not prompt); channels without a policy prompt the user to choose one. A footer naming this "
+    "prompt the user for approval (in every permission mode; the call waits for the answer and "
+    "is refused if the user declines or does not answer, or if nobody is available to answer); "
+    "channels without a policy prompt the user to choose one. A footer naming this "
     "session is appended automatically. Text containing `!word` (the inbound instruction "
     "syntax) is refused; write the word without the '!'. Messages into the user's own self-DM "
     "automatically start with the marker `:robot_face: [cc-agent]`. There is no edit or delete tool."
@@ -147,9 +154,12 @@ def validate_upload_path(
 class RelayMCPTools:
     """Session-scoped relay MCP server factory (runs in the Backend process)."""
 
-    def __init__(self, gate: RelayPolicyGate, audit: RelayAuditLog) -> None:
+    def __init__(
+        self, gate: RelayPolicyGate, audit: RelayAuditLog, broker: pb.RelayPromptBroker | None = None
+    ) -> None:
         self.gate = gate
         self.audit = audit
+        self.broker = broker
         self.search_service = RelaySearchService(gate)
 
     async def create_server_if_attached(self, session_id: str):
@@ -322,6 +332,7 @@ class RelayMCPTools:
         outcome: str, *, code: str | None = None, channel_id: str | None = None,
         channel_name: str | None = None, policy: str | None = None, approval: str = "auto",
         thread_ts: str | None = None, message_ts: str | None = None, text: str | None = None,
+        prompt_via: str | None = None,
     ) -> None:
         write_tools = (
             ctx.spec.write_tools if ctx else frozenset().union(*(s.write_tools for s in SPECS.values()))
@@ -336,34 +347,120 @@ class RelayMCPTools:
             session_name=ctx.session_info.name if ctx else None, tool=tool_name,
             channel_id=channel_id, channel_name=channel_name, thread_ts=thread_ts,
             message_ts=message_ts, outcome=outcome, code=code, policy=policy, approval=approval,
-            **text_fields(text),
+            prompt_via=prompt_via, **text_fields(text),
         )
 
     async def _gated(
         self, session_id: str, tool_name: str, args: dict[str, Any]
     ) -> tuple[RelayContext, Any, str, dict[str, Any] | None]:
-        """Returns (ctx, gate_result, approval, error). *error* is set when the call is refused."""
+        """Returns (ctx, gate_result, approval, error). *error* is set when the call is refused.
+        ``gate_result.prompt_via`` says how an approval was obtained (callback | handler)."""
         ctx = await self.gate.context(session_id)
         if ctx is None:
             return None, None, "auto", error_result(  # type: ignore[return-value]
                 "relay_not_attached", "No relay with a user token is attached to this session.",
                 None, tool_name, None,
             )
+        # The PreToolUse hook noted this call's tool_use_id; claim (and so discard) it on every
+        # gated call, so an entry of a call that never prompted cannot be picked up by a later
+        # identical call that does (issue #2353).
+        claimed = (
+            self.broker.claim(session_id, ctx.spec.tool_prefix + tool_name, args)
+            if self.broker else None
+        )
         result, grant = await self.gate.authorize(ctx, tool_name, args)
-        if result.kind != ALLOW:
-            await self._audit(
-                ctx, None, session_id, tool_name, "denied", code=result.code,
-                channel_id=result.channel_id or (
-                    args["channel"][:80] if isinstance(args.get("channel"), str) else None
-                ),
-                channel_name=result.channel_name, policy=result.policy,
-                thread_ts=args.get("thread_ts"),
-                text=args.get("text") or args.get("comment"),
+        approval = grant.approval if grant else "auto"
+        prompt_via = "callback" if grant else None
+        if result.kind in (PROMPT, CHOOSE_POLICY):
+            ctx, result, approval, refusal = await self._ask_owner(
+                session_id, ctx, result, tool_name, args, claimed
             )
+            if refusal is not None:
+                return ctx, result, "auto", refusal
+            prompt_via = "handler"
+        if result.kind != ALLOW:
+            await self._audit_denied(ctx, session_id, tool_name, args, result)
             return ctx, result, "auto", result.error_result()
         # Owner-facing label for the audit record (never returned to the agent).
         result.channel_name = await self.gate.label(ctx, result.channel_id)
-        return ctx, result, grant.approval if grant else "auto", None
+        result.prompt_via = prompt_via
+        return ctx, result, approval, None
+
+    async def _audit_denied(
+        self, ctx: RelayContext, session_id: str, tool_name: str, args: dict[str, Any],
+        result: Any, *, code: str | None = None, prompt_via: str | None = None,
+    ) -> None:
+        await self._audit(
+            ctx, None, session_id, tool_name, "denied", code=code or result.code,
+            channel_id=result.channel_id or (
+                args["channel"][:80] if isinstance(args.get("channel"), str) else None
+            ),
+            channel_name=result.channel_name, policy=result.policy,
+            thread_ts=args.get("thread_ts"), text=args.get("text") or args.get("comment"),
+            prompt_via=prompt_via,
+        )
+
+    async def _ask_owner(
+        self, session_id: str, ctx: RelayContext, result: Any, tool_name: str, args: dict[str, Any],
+        claimed: Any = None,
+    ) -> tuple[RelayContext, Any, str, dict[str, Any] | None]:
+        """The send needs approval and no grant exists (the permission callback did not prompt:
+        auto / bypass / pre-approved rules). Prompt from here, then re-evaluate policy.
+
+        Returns (ctx, result, approval, refusal); *refusal* is set when the call is refused.
+        Permission mode is never consulted: only whether anyone can answer.
+        """
+        action = result.action or tool_name
+        channel_id = result.channel_id
+
+        async def refuse(code: str, *, prompt_via: str | None = None) -> tuple:
+            await self._audit_denied(ctx, session_id, tool_name, args, result, code=code,
+                                     prompt_via=prompt_via)
+            return ctx, result, "auto", approval_refusal(code, channel_id, action, result.policy)
+
+        ok, _reason = (
+            await self.broker.can_prompt(session_id) if self.broker else (False, "no_broker")
+        )
+        if not ok:
+            return await refuse("policy_unset" if result.kind == CHOOSE_POLICY else "approval_unavailable")
+        full_name = ctx.spec.tool_prefix + tool_name
+        try:
+            outcome = await self.broker.request(session_id, result, full_name, args, claimed)
+        except asyncio.CancelledError:
+            with contextlib.suppress(Exception):
+                await asyncio.shield(self._audit_denied(
+                    ctx, session_id, tool_name, args, result, code="approval_cancelled",
+                    prompt_via="handler",
+                ))
+            raise
+        if outcome.kind == pb.UNAVAILABLE:
+            return await refuse("approval_unavailable")
+        if outcome.kind == pb.DENIED:
+            return await refuse("approval_denied", prompt_via="handler")
+        if outcome.kind == pb.TIMEOUT:
+            return await refuse("approval_timeout", prompt_via="handler")
+        if outcome.kind == pb.CANCELLED:
+            return await refuse("approval_cancelled", prompt_via="handler")
+        # Allowed (or the answer saved a policy): fresh policy + attachment re-evaluation.
+        fresh_ctx, fresh = await self.gate.re_authorize(
+            session_id, tool_name, args, prompted_kind=result.kind
+        )
+        if fresh_ctx is None or fresh.kind != ALLOW:
+            await self._audit_denied(
+                fresh_ctx or ctx, session_id, tool_name, args, fresh, prompt_via="handler"
+            )
+            return fresh_ctx or ctx, fresh, "auto", fresh.error_result()
+        if outcome.kind != pb.ALLOW:  # the answer saved a policy that now allows: still no approval
+            return await refuse("approval_denied", prompt_via="handler")
+        if fresh.channel_id != channel_id:
+            await self._audit_denied(ctx, session_id, tool_name, args, fresh,
+                                     code="channel_unresolved", prompt_via="handler")
+            return fresh_ctx, fresh, "auto", error_result(
+                "channel_unresolved",
+                "The channel changed while waiting for approval; nothing was sent.",
+                fresh.channel_id, action, fresh.policy,
+            )
+        return fresh_ctx, fresh, outcome.approval or "prompt_allow", None
 
     def _footer(self, ctx: RelayContext) -> str | None:
         if not ctx.footer_enabled:
@@ -452,12 +549,14 @@ class RelayMCPTools:
             await self._audit(
                 ctx, None, session_id, tool_name, "error", code=e.code, channel_id=res.channel_id,
                 channel_name=res.channel_name, policy=res.policy, approval=approval,
+                prompt_via=res.prompt_via,
                 thread_ts=thread_ts, text=text,
             )
             return _slack_error(e)
         await self._audit(
             ctx, None, session_id, tool_name, "ok", channel_id=res.channel_id,
             channel_name=res.channel_name, policy=res.policy, approval=approval,
+                prompt_via=res.prompt_via,
             thread_ts=thread_ts, message_ts=posted.ts, text=text,
         )
         return _text(json.dumps({"ok": True, "channel": posted.channel, "ts": posted.ts}))
@@ -567,12 +666,14 @@ class RelayMCPTools:
             await self._audit(
                 ctx, None, session_id, "upload_file", "error", code=e.code,
                 channel_id=res.channel_id, channel_name=res.channel_name, policy=res.policy,
-                approval=approval, thread_ts=thread_ts, text=comment,
+                approval=approval,
+                prompt_via=res.prompt_via, thread_ts=thread_ts, text=comment,
             )
             return _slack_error(e)
         await self._audit(
             ctx, None, session_id, "upload_file", "ok", channel_id=res.channel_id,
             channel_name=res.channel_name, policy=res.policy, approval=approval,
+                prompt_via=res.prompt_via,
             thread_ts=thread_ts, message_ts=uploaded.file_id, text=f"{path.name}: {comment or ''}",
         )
         return _text(json.dumps({"ok": True, "file_id": uploaded.file_id, "channel": res.channel_id}))
@@ -594,12 +695,14 @@ class RelayMCPTools:
             await self._audit(
                 ctx, None, session_id, "react", "error", code=e.code, channel_id=res.channel_id,
                 channel_name=res.channel_name, policy=res.policy, approval=approval,
+                prompt_via=res.prompt_via,
                 message_ts=ts, text=f":{name}:",
             )
             return _slack_error(e)
         await self._audit(
             ctx, None, session_id, "react", "ok", channel_id=res.channel_id,
-            channel_name=res.channel_name, policy=res.policy, approval=approval, message_ts=ts,
+            channel_name=res.channel_name, policy=res.policy, approval=approval,
+                prompt_via=res.prompt_via, message_ts=ts,
             text=f":{name}:",
         )
         return _text(json.dumps({"ok": True}))
@@ -624,12 +727,14 @@ class RelayMCPTools:
         except RelayError as e:
             await self._audit(
                 ctx, None, session_id, "mark_read", "error", code=e.code, channel_id=res.channel_id,
-                channel_name=res.channel_name, policy=res.policy, approval=approval, message_ts=ts,
+                channel_name=res.channel_name, policy=res.policy, approval=approval,
+                prompt_via=res.prompt_via, message_ts=ts,
             )
             return _slack_error(e)
         await self._audit(
             ctx, None, session_id, "mark_read", "ok", channel_id=res.channel_id,
-            channel_name=res.channel_name, policy=res.policy, approval=approval, message_ts=ts,
+            channel_name=res.channel_name, policy=res.policy, approval=approval,
+                prompt_via=res.prompt_via, message_ts=ts,
         )
         return _text(json.dumps({"ok": True, "ts": ts}))
 

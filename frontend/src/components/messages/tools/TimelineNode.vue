@@ -15,6 +15,7 @@
     <span class="row-dot" :class="dotClasses"></span>
     <span class="row-name">{{ toolLabel }}</span>
     <code v-if="targetText" class="row-target">{{ targetText }}</code>
+    <span v-if="waitingForApproval" class="row-waiting" data-testid="relay-waiting-label">Waiting for your approval</span>
     <span
       v-if="approvalIndicator"
       class="approval-icon"
@@ -65,6 +66,11 @@ const approvalIndicator = computed(() => {
   }
   return null
 })
+
+// Issue #2353: a relay send waiting on the owner's approval prompt (raised from inside the tool call)
+const waitingForApproval = computed(
+  () => !!props.tool.relayPrompt && effectiveStatus.value === 'permission_required'
+)
 
 const rowClasses = computed(() => ({
   'row-expanded': props.isExpanded,
@@ -202,6 +208,14 @@ defineExpose({ statusColor, effectiveStatus })
   text-overflow: ellipsis;
   white-space: nowrap;
   min-width: 0;
+}
+
+.row-waiting {
+  font-size: 11px;
+  font-weight: 600;
+  color: #f97316;
+  white-space: nowrap;
+  flex-shrink: 0;
 }
 
 .approval-icon {

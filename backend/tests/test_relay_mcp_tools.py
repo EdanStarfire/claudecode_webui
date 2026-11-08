@@ -72,10 +72,12 @@ async def test_read_only_allows_reads(env, tool):
 
 
 @pytest.mark.parametrize("tool", SENDS)
-async def test_ask_without_grant_fails_closed(env, tool):
+async def test_ask_without_grant_and_nobody_to_ask_fails_closed(env, tool):
+    # make_env wires no prompt broker: nobody can answer, so the send is refused (issue #2353)
     result = await CALLS[tool](env.tools, CH_ASK)
-    assert err_code(result) == "approval_required"
-    assert "does not prompt" in result["content"][0]["text"]
+    assert err_code(result) == "approval_unavailable"
+    assert "No one is available to approve" in result["content"][0]["text"]
+    assert "permission mode" not in result["content"][0]["text"]
     assert env.adapter.network_calls() == []
 
 
@@ -103,13 +105,13 @@ async def test_ask_with_grant_is_single_use(env):
     env.gate.grants.add("s1", "post", args, "prompt_allow")
     assert not (await env.tools.handle_post("s1", "post", args)).get("is_error")
     again = await env.tools.handle_post("s1", "post", args)
-    assert err_code(again) == "approval_required"
+    assert err_code(again) == "approval_unavailable"
 
 
 async def test_grant_bound_to_exact_input(env):
     env.gate.grants.add("s1", "post", {"channel": CH_ASK, "text": "approved text"}, "prompt_allow")
     other = await env.tools.handle_post("s1", "post", {"channel": CH_ASK, "text": "different"})
-    assert err_code(other) == "approval_required"
+    assert err_code(other) == "approval_unavailable"
 
 
 async def test_grant_expires(tmp_path):
@@ -121,7 +123,7 @@ async def test_grant_expires(tmp_path):
     args = {"channel": CH_ASK, "text": "hello"}
     env.gate.grants.add("s1", "post", args, "prompt_allow")
     now[0] += GRANT_TTL_SECONDS + 1
-    assert err_code(await env.tools.handle_post("s1", "post", args)) == "approval_required"
+    assert err_code(await env.tools.handle_post("s1", "post", args)) == "approval_unavailable"
 
 
 async def test_unlisted_with_grant_proceeds(env):

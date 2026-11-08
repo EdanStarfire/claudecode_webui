@@ -64,10 +64,14 @@ def build_router(webui) -> APIRouter:
                 response = {
                     "behavior": "deny",
                     "message": request.clarification_message,
-                    "interrupt": False
+                    "interrupt": False,
+                    "reason": "user_denied",
                 }
             else:
-                response = {"behavior": "deny", "message": "User denied permission"}
+                response = {
+                    "behavior": "deny", "message": "User denied permission",
+                    "reason": "user_denied",
+                }
         resolved = webui.service.resolve_permission(request_id, response)
         if not resolved:
             raise HTTPException(status_code=409, detail="Permission already resolved")

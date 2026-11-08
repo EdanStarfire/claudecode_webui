@@ -28,6 +28,7 @@ try:
         ClaudeAgentOptions,
         ClaudeSDKClient,
         DeferredToolUse,
+        HookMatcher,
         PermissionResultAllow,
         PermissionResultDeny,
         RateLimitEvent,
@@ -48,6 +49,7 @@ except ImportError:
     ClaudeSDKClient = None
     ClaudeAgentOptions = None
     DeferredToolUse = None
+    HookMatcher = None
     PermissionResultAllow = None
     PermissionResultDeny = None
     ToolPermissionContext = None
@@ -243,6 +245,7 @@ class ClaudeSDK:
         recorder: Any | None = None,
         phase_callback: Callable[[str], Any] | None = None,
         config_file: Path | None = None,
+        pre_tool_hooks: list[tuple[str, Callable]] | None = None,
     ):
         """
         Initialize enhanced Claude Code SDK wrapper.
@@ -262,6 +265,8 @@ class ClaudeSDK:
                 session id (not the WebUI session id); the caller resolves this from
                 session_info.claude_code_session_id before constructing this wrapper
             mcp_servers: List of MCP servers to attach (for multi-agent)
+            pre_tool_hooks: (matcher regex, async callback) pairs registered as in-process
+                SDK PreToolUse hooks (issue #2353: record-only, relay tools only)
             hooks_settings: Resolved {"hooks": {...}} settings.json block from the
                 session's attached global hook configs (issue #1629), already flattened
                 by HookConfigManager.to_sdk_hooks_payload(). Purely additive against
@@ -313,6 +318,7 @@ class ClaudeSDK:
         self.phase_callback = phase_callback
         self.mcp_servers = mcp_servers if mcp_servers is not None else []
         self.hooks_settings = hooks_settings
+        self.pre_tool_hooks = pre_tool_hooks or []
         self.sandbox_enabled = config.sandbox_enabled
         self.sandbox_config = config.sandbox_config
         self.setting_sources = config.setting_sources
@@ -1241,6 +1247,16 @@ class ClaudeSDK:
         perm_logger.debug(f"- permission_callback exists: {self.permission_callback is not None}")
         perm_logger.debug(f"- PermissionResultAllow available: {PermissionResultAllow is not None}")
         perm_logger.debug(f"- PermissionResultDeny available: {PermissionResultDeny is not None}")
+
+        if self.pre_tool_hooks:
+            # Issue #2353: in-process SDK hooks (distinct from the settings-file hooks above).
+            # Record-only callbacks; a failing hook must never block a tool call.
+            options_kwargs["hooks"] = {
+                "PreToolUse": [
+                    HookMatcher(matcher=matcher, hooks=[callback])
+                    for matcher, callback in self.pre_tool_hooks
+                ]
+            }
 
         if self.permission_callback and PermissionResultAllow and PermissionResultDeny:
             options_kwargs["can_use_tool"] = can_use_tool_wrapper
