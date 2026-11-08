@@ -163,7 +163,10 @@ export const useRelayStore = defineStore('relay', () => {
       try {
         const { labels } = await api.get(`/api/relays/${encodeURIComponent(relayId)}/conversations`,
           { params: { ids: chunk.join(',') } })
-        for (const id of chunk) rememberLabel(relayId, id, labels?.[id] || id)
+        // an unresolved ID (label === id) is not cached, so a later call retries the lookup
+        for (const id of chunk) {
+          if (labels?.[id] && labels[id] !== id) rememberLabel(relayId, id, labels[id])
+        }
       } catch {
         // best effort: the ID stays visible and editable; not cached so a later call retries
       }

@@ -106,6 +106,8 @@ const KIND_ORDER = Object.keys(KIND_TITLES)
 let timer = null
 let controller = null
 let seq = 0
+// The query a cursor belongs to: "Load more" must continue THAT search, not the box's current text.
+let searched = { q: '', kinds: null }
 
 const placeholder = computed(() =>
   props.policyModel?.target_label ? `Search, or paste a ${props.policyModel.target_label}` : 'Search')
@@ -145,11 +147,12 @@ async function search(reset) {
   controller = new AbortController()
   const mine = ++seq
   const cursor = reset ? null : nextCursor.value
+  if (reset) searched = { q: query.value.trim(), kinds: kindsParam() }
   loading.value = true
   error.value = ''
   try {
     const page = await store.searchConversations(props.relayId, {
-      q: query.value.trim(), kinds: kindsParam(), cursor, signal: controller.signal,
+      q: searched.q, kinds: searched.kinds, cursor, signal: controller.signal,
     })
     if (mine !== seq) return
     rows.value = reset ? page.entries : [...rows.value, ...page.entries]

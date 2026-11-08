@@ -124,14 +124,18 @@ const rows = computed(() => {
 const labelOf = (target) => labels.value[target] || target
 const statusFor = (target) => rows.value.find(r => r.target === target)?.policy || null
 
+let loadSeq = 0
+
 async function loadLive() {
+  const mine = ++loadSeq
   loadError.value = ''
   payload.value = null
   if (!props.sessionId) return
   try {
-    payload.value = await store.getSessionRelay(props.sessionId)
+    const result = await store.getSessionRelay(props.sessionId)
+    if (mine === loadSeq) payload.value = result
   } catch (e) {
-    loadError.value = e.message
+    if (mine === loadSeq) loadError.value = e.message
   }
 }
 
@@ -170,22 +174,34 @@ function emitOwn(entries) {
   emit('update:modelValue', next)
 }
 
-async function liveWrite(target, optimistic, request) {
-  const snapshot = payload.value
-  error.value = ''
-  busy.add(target)
-  const policies = { ...(snapshot?.policies || {}) }
-  if (optimistic) policies[target] = optimistic
-  else delete policies[target]
-  payload.value = { ...snapshot, policies }
-  try {
-    payload.value = await request()
-  } catch (e) {
-    payload.value = snapshot
-    error.value = e.message
-  } finally {
-    busy.delete(target)
+// Live writes run one at a time: a response always reflects every earlier edit, and a failed
+// edit rolls back only its own target.
+let writeQueue = Promise.resolve()
+
+function liveWrite(target, optimistic, request) {
+  const run = async () => {
+    error.value = ''
+    busy.add(target)
+    const previous = payload.value?.policies?.[target]
+    const policies = { ...(payload.value?.policies || {}) }
+    if (optimistic) policies[target] = optimistic
+    else delete policies[target]
+    payload.value = { ...payload.value, policies }
+    try {
+      payload.value = await request()
+    } catch (e) {
+      const rolled = { ...(payload.value?.policies || {}) }
+      if (previous) rolled[target] = previous
+      else delete rolled[target]
+      payload.value = { ...payload.value, policies: rolled }
+      error.value = e.message
+    } finally {
+      busy.delete(target)
+    }
   }
+  const next = writeQueue.then(run)
+  writeQueue = next.catch(() => {})
+  return next
 }
 
 async function write(target, policy) {

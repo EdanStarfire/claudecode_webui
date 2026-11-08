@@ -123,6 +123,22 @@ describe('RelayChannelPicker', () => {
     w.unmount()
   })
 
+  it('Load more continues the search that produced the cursor, not the box text', async () => {
+    apiMock.get.mockResolvedValueOnce({ entries: [rows[0]], next_cursor: 'o:1' })
+    const w = mk()
+    await w.find('[data-testid="relay-picker-input"]').setValue('eng')
+    await vi.advanceTimersByTimeAsync(250)
+    await flushPromises()
+    apiMock.get.mockResolvedValueOnce({ entries: [rows[1]], next_cursor: null })
+    await w.find('[data-testid="relay-picker-input"]').setValue('ops') // not searched yet
+    await w.find('[data-testid="relay-picker-more"]').trigger('click')
+    await flushPromises()
+    const params = apiMock.get.mock.calls.at(-1)[1].params
+    expect(params.q).toBe('eng')
+    expect(params.cursor).toBe('o:1')
+    w.unmount()
+  })
+
   it('renders names as text and selects with the keyboard', async () => {
     apiMock.get.mockResolvedValue({ entries: [{ id: 'C0EVIL0001', kind: 'public', name: 'x', label: '#<b>bold</b>' }] })
     const w = mk()

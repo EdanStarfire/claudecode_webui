@@ -102,6 +102,39 @@ describe('RelayPolicyEditor (live)', () => {
     expect(w.find('[data-testid="relay-policy-select"]').element.value).toBe('v1')
   })
 
+  it('serialises concurrent edits and a failed edit rolls back only its own target', async () => {
+    const w = await mountLive({ [A]: { policy: 'v1', source: 'session' }, [B]: { policy: 'v1', source: 'session' } })
+    let releaseA
+    apiMock.put.mockImplementationOnce(() => new Promise((resolve) => { releaseA = () => resolve(payload({ [A]: { policy: 'v2', source: 'session' }, [B]: { policy: 'v1', source: 'session' } })) }))
+    apiMock.put.mockRejectedValueOnce(new Error('rejected'))
+    const selects = w.findAll('[data-testid="relay-policy-select"]')
+    await selects[0].setValue('v2')
+    await selects[1].setValue('v3')
+    expect(apiMock.put).toHaveBeenCalledTimes(1) // B waits for A
+    releaseA()
+    await flushPromises()
+    expect(apiMock.put).toHaveBeenCalledTimes(2)
+    const rows = w.findAll('[data-testid="relay-policy-select"]').map(x => x.element.value)
+    expect(rows).toEqual(['v2', 'v1']) // A kept its new value; B rolled back alone
+    expect(w.find('[data-testid="relay-policy-error"]').text()).toContain('rejected')
+  })
+
+  it('ignores a stale session-relay response after the session changed', async () => {
+    let releaseOld
+    apiMock.get.mockImplementation((url, opts) => {
+      if (url === '/api/sessions/old/relay') return new Promise((resolve) => { releaseOld = () => resolve(payload({ [A]: { policy: 'v1', source: 'session' } })) })
+      if (url === '/api/sessions/new/relay') return Promise.resolve(payload({ [B]: { policy: 'v2', source: 'session' } }))
+      return Promise.resolve({ labels: {} })
+    })
+    const w = mount(RelayPolicyEditor, { props: { mode: 'live', sessionId: 'old' } })
+    await w.setProps({ sessionId: 'new' })
+    await flushPromises()
+    releaseOld()
+    await flushPromises()
+    expect(w.find(`[data-testid="relay-policy-row-${B}"]`).exists()).toBe(true)
+    expect(w.find(`[data-testid="relay-policy-row-${A}"]`).exists()).toBe(false)
+  })
+
   it('adding from the picker PUTs the chosen value for the picked target', async () => {
     const w = await mountLive({})
     apiMock.put.mockResolvedValue(payload({ [B]: { policy: 'v2', source: 'session' } }))

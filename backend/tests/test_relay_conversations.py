@@ -138,7 +138,9 @@ def test_labels_fall_back_to_id_and_validate(tmp_path):
     env.adapter.fail_lookups = True
     r = client.get("/api/relays/relay1/conversations?ids=C0UNKNOWN01")
     assert r.json()["labels"] == {"C0UNKNOWN01": "C0UNKNOWN01"}
-    assert client.get("/api/relays/relay1/conversations?ids=bad").status_code == 400
+    # a malformed id keeps itself as label and does not fail the others
+    r = client.get(f"/api/relays/relay1/conversations?ids=bad,{CH_BLOCKED}")
+    assert r.status_code == 200 and r.json()["labels"]["bad"] == "bad"
     many = ",".join(f"C0AAAAA{i:03d}" for i in range(51))
     assert client.get(f"/api/relays/relay1/conversations?ids={many}").status_code == 400
 

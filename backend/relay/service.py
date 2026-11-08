@@ -184,19 +184,41 @@ class RelayService:
             logger.exception("Relay summary refresh failed for session %s", session_id)
 
     async def refresh_all_summaries(self) -> None:
-        for info in await self._sessions.list_sessions():
+        try:
+            infos = await self._sessions.list_sessions()
+        except Exception:
+            logger.exception("Relay summary refresh failed")
+            return
+        for info in infos:
             await self.refresh_summary(info.session_id)
 
     async def refresh_for_template(self, template_id: str) -> None:
-        for info in await self._sessions.list_sessions():
-            if info.template_id == template_id:
-                await self.refresh_summary(info.session_id)
+        await self._refresh_for_templates({template_id})
 
     async def refresh_for_profile(self, profile_id: str) -> None:
         """Sessions whose template references the profile."""
-        for template in await self._templates.list_templates():
-            if profile_id in (template.profile_ids or {}).values():
-                await self.refresh_for_template(template.template_id)
+        try:
+            ids = {
+                t.template_id for t in await self._templates.list_templates()
+                if profile_id in (t.profile_ids or {}).values()
+            }
+        except Exception:
+            logger.exception("Relay summary refresh failed for profile %s", profile_id)
+            return
+        await self._refresh_for_templates(ids)
+
+    async def _refresh_for_templates(self, template_ids: set[str]) -> None:
+        """One session scan for any number of templates; never fails the triggering save."""
+        if not template_ids:
+            return
+        try:
+            infos = await self._sessions.list_sessions()
+        except Exception:
+            logger.exception("Relay summary refresh failed for templates")
+            return
+        for info in infos:
+            if info.template_id in template_ids:
+                await self.refresh_summary(info.session_id)
 
     # -------------------------------------------------------------- policies
 

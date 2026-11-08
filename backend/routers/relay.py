@@ -192,17 +192,20 @@ def build_router(webui) -> APIRouter:
         gate = webui.service.relay_gate
         ctx = gate.relay_context(relay_id)
         if ctx is None:
-            raise HTTPException(status_code=409, detail="Relay has no user token")
+            raise HTTPException(
+                status_code=409, detail="Relay is not usable (no user token or unsupported adapter)"
+            )
 
         if ids is not None:
             wanted = list(dict.fromkeys(i.strip() for i in ids.split(",") if i.strip()))
             if len(wanted) > MAX_LABEL_IDS:
                 raise HTTPException(status_code=400, detail=f"At most {MAX_LABEL_IDS} ids")
-            try:
-                for target in wanted:
-                    ctx.spec.policy_model.validate_target(target)
-            except ValueError as e:
-                raise HTTPException(status_code=400, detail=str(e)) from e
+            valid = []
+            for target in wanted:
+                try:
+                    valid.append(ctx.spec.policy_model.validate_target(target))
+                except ValueError:
+                    pass  # a malformed stored target keeps its ID as label; it must not fail the rest
             sem = asyncio.Semaphore(5)
 
             async def one(target: str) -> tuple[str, str]:
@@ -211,7 +214,9 @@ def build_router(webui) -> APIRouter:
                         ctx.adapter, relay_id, target, ctx.owner_user_id
                     )
 
-            return {"labels": dict(await asyncio.gather(*(one(t) for t in wanted)))}
+            labels = {t: t for t in wanted}
+            labels.update(dict(await asyncio.gather(*(one(t) for t in valid))))
+            return {"labels": labels}
 
         kind_list = tuple(k.strip() for k in kinds.split(",") if k.strip()) if kinds else None
         try:

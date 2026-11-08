@@ -100,6 +100,14 @@ describe('relay store: policy editor / picker / audit helpers', () => {
     expect(await store.resolveLabels('r1', ['C0BBBBBBB2'])).toEqual({ C0BBBBBBB2: '#b' })
   })
 
+  it('does not cache an unresolved (id-as-label) answer', async () => {
+    const store = useRelayStore()
+    apiMock.get.mockResolvedValueOnce({ labels: { C0AAAAAAA1: 'C0AAAAAAA1' } })
+    await store.resolveLabels('r1', ['C0AAAAAAA1'])
+    apiMock.get.mockResolvedValueOnce({ labels: { C0AAAAAAA1: '#now-known' } })
+    expect(await store.resolveLabels('r1', ['C0AAAAAAA1'])).toEqual({ C0AAAAAAA1: '#now-known' })
+  })
+
   it('resolveLabels asks in chunks of 50', async () => {
     const store = useRelayStore()
     apiMock.get.mockResolvedValue({ labels: {} })
