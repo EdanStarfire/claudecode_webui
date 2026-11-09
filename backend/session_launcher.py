@@ -527,6 +527,7 @@ class SessionLauncher:
                 session_info, self.template_manager, self.profile_manager
             )
             await self._coordinator.relay_service.sync_session(session_id)  # issue #2103: first-attach handle
+            await self._coordinator.relay.inbound.on_session_started(session_id)  # restore disposed threads
 
             # Issue #1998: create/reuse the SessionRecorder for this session. Gated on the
             # persisted per-session opt-in AND the Backend-wide --enable-session-recording

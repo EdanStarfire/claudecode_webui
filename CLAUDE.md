@@ -549,7 +549,7 @@ digests / unread (3c) and the inbound UI / audit view (3d) are later stages. Cod
   reserved words ignored, the handle removed from the delivered text; 0 handles ignored, an unknown handle / two distinct
   handles / empty instruction get ONE fixed marked reply (nothing from Slack is echoed). Thread replies route by an owned thread
   record (`!other` inside is plain text, D5). Files are not delivered (noted in the block).
-- **Delivery**: `SessionCoordinator.enqueue_external_comm` -> `DeliveryGate.deliver` as an `EXTERNAL`, `WHEN_IDLE`, `auto_start`
+- **Delivery**: `relay/inbound/sink.py::enqueue_external_comm` (bound by `InboundManager.bind(coordinator)`) -> `DeliveryGate.deliver` as an `EXTERNAL`, `WHEN_IDLE`, `auto_start`
   comm (`from_user=True`, `CommType.SYSTEM`: busy sessions wait, stopped ones start, a paused queue keeps it pending; an
   external instruction never implicitly resumes a queue). The comm id is deterministic (`uuid5` of relay:channel:ts) and an item
   the in-memory pending store already holds is not enqueued twice. The text is an `OWNER INSTRUCTION` nonce block

@@ -19,6 +19,7 @@ from backend.relay.adapter import AuthInfo
 from backend.relay.inbound import constants as const
 from backend.relay.inbound.manager import InboundManager
 from backend.relay.inbound.service import comm_id_for
+from backend.relay.inbound.sink import enqueue_external_comm
 from backend.relay_manager import RelayManager
 from backend.session_coordinator import SessionCoordinator
 from backend.session_manager import SessionInfo, SessionState
@@ -187,7 +188,7 @@ def fake_coordinator(tmp_path, *, processing=True, paused=False):
 
 
 def enqueue(coord, comm_id=None, text="do it"):
-    return SessionCoordinator.enqueue_external_comm(
+    return enqueue_external_comm(
         coord, "s1", comm_id=comm_id or str(uuid.uuid4()), summary="Slack instruction: do it",
         content=text, dispatch_content=f"DISPATCH {text}",
         metadata={"relay_inbound": {"thread_ts": "1.1"}}, relay_id="relay1",

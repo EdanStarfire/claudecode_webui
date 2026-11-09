@@ -23,6 +23,8 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
+from backend.session_lifecycle import is_errored
+
 from ..adapter import RelayError
 from ..audit import text_fields
 from ..events import RelayEvent
@@ -384,14 +386,12 @@ class InboundService:
         )
 
     async def _check_session(self, session_id: str) -> str | None:
-        from backend.session_manager import SessionState
-
         info = await self._sessions.get_session_info(session_id)
         if info is None:
             return "session_gone"
         if getattr(info, "is_ephemeral", False):
             return "ephemeral"
-        if info.state == SessionState.ERROR:
+        if is_errored(info.state):
             return "session_error"
         attachment = await self._relay_service.effective_attachment(info)
         if attachment["relay_id"] != self.relay_id:

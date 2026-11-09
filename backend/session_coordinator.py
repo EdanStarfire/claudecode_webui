@@ -281,6 +281,7 @@ class SessionCoordinator:
         self.queue_manager = core.queue_manager
         self.pending_store = core.pending_store
         self.relay = core.relay  # issue #2103: RelayRuntime (manager/service/audit/gate/bridge/tools)
+        self.relay.inbound.bind(self)  # issue #2103 stage 3a: the delivery sink
 
         # Active SDK instances
         self._active_sdks: dict[str, ClaudeSDK] = {}
@@ -674,7 +675,6 @@ class SessionCoordinator:
             coord_logger.info("Loaded configuration profiles")
             await self._migrate_stale_mcp_snapshots()  # issue #1660
             await self.relay.service.initialize()  # issue #2103
-            self.relay.inbound.sink = self.enqueue_external_comm
 
             # Load global MCP server configs (issue #676)
             await self.mcp_config_manager.load_configs()
@@ -721,13 +721,7 @@ class SessionCoordinator:
                 await self.legion_system.scheduler_service.start()
                 await self.legion_system.history_rotator.start()
 
-            # Issue #2103 stage 3a: Socket Mode inbound, last (the delivery gate, pending store
-            # and scheduler it feeds all exist by now). A failure never blocks Backend start.
-            try:
-                await self.relay.inbound.start()
-            except Exception:
-                logger.exception("Relay inbound failed to start")
-
+            await self.relay.inbound.start()  # issue #2103 stage 3a: last, once delivery exists
             coord_logger.info("Session coordinator initialized successfully")
         except Exception:
             logger.exception("Failed to initialize session coordinator")
@@ -824,49 +818,6 @@ class SessionCoordinator:
         if item is None:
             raise ValueError(result.error or "Failed to enqueue message")
         return item.to_legacy_queue_dict()
-
-    async def enqueue_external_comm(
-        self,
-        session_id: str,
-        *,
-        comm_id: str,
-        summary: str,
-        content: str,
-        dispatch_content: str,
-        metadata: dict | None = None,
-        relay_id: str | None = None,
-    ):
-        """Deliver an external (Slack self-DM) instruction through the unified gate (issue #2103
-        stage 3a). ``comm_id`` is deterministic per Slack message; a comm the in-memory pending
-        store already holds is not enqueued twice. The pending ledger is NOT loaded here (the queue
-        is not recovered across a Backend restart, issue #2362). Returns a DeliveryOutcome."""
-        from .relay.inbound.service import DeliveryOutcome
-
-        if self.pending_store.get_item(session_id, comm_id) is not None:
-            return DeliveryOutcome("already_delivered")
-        comm = Comm(
-            comm_id=comm_id,
-            from_user=True,  # the owner's own instruction; sender_type below says how it arrived
-            sender_type=SenderType.EXTERNAL,
-            sender_id=relay_id,
-            to_minion_id=session_id,
-            summary=summary,
-            content=content,
-            # SYSTEM like enqueue_message(): never an implicit resume trigger, so a paused queue
-            # keeps the instruction pending (issue #2193 AC6)
-            comm_type=CommType.SYSTEM,
-            delivery=DeliveryPolicy.WHEN_IDLE,
-            reset_first=False,
-            auto_start=True,
-            metadata=metadata or {},
-        )
-        result = await self.delivery_gate.deliver(
-            comm, dispatch_content=dispatch_content, dispatch_metadata=metadata or {},
-            inject_timestamp=False,
-        )
-        if self.pending_store.get_item(session_id, comm_id) is None:
-            return DeliveryOutcome("failed", result.error or "not enqueued")
-        return DeliveryOutcome("delivered")
 
     async def cancel_queue_item(self, session_id: str, queue_id: str) -> dict | None:
         """Cancel a pending queue item. Returns the item dict or None."""
@@ -1125,13 +1076,9 @@ class SessionCoordinator:
         permission_callback: Callable[[str, dict[str, Any]], bool | dict[str, Any]] | None = None,
         _lifecycle_action: str = "start",
     ) -> bool:
-        started = await self._session_launcher.start_session(
+        return await self._session_launcher.start_session(
             session_id, permission_callback, _lifecycle_action
         )
-        if started:
-            # issue #2103: restore instruction threads suspended by a dispose
-            await self.relay.inbound.on_session_started(session_id)
-        return started
 
     # Issue #2189 (coordinator-split PR 1): moved to SessionLauncher —
     # one-line delegates. flush_unflushed_subagent_usage renamed public
@@ -2706,12 +2653,7 @@ class SessionCoordinator:
     async def cleanup(self):
         """Cleanup all resources"""
         try:
-            # Issue #2103 stage 3a: no new inbound deliveries during teardown; flushes state.
-            try:
-                await self.relay.inbound.stop()
-            except Exception:
-                logger.exception("Error stopping relay inbound")
-
+            await self.relay.inbound.stop()  # issue #2103: no new inbound deliveries; flushes state
             # Stop scheduler service and history rotator (issue #495, #1372)
             if hasattr(self, 'legion_system') and self.legion_system is not None:
                 await self.legion_system.history_rotator.stop()

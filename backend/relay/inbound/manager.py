@@ -9,11 +9,13 @@ from __future__ import annotations
 
 import asyncio
 import logging
+from functools import partial
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 from . import constants as const
 from .service import InboundService, InstructionSink, TransportFactory
+from .sink import enqueue_external_comm
 from .slack_socket import SlackSocketTransport
 
 if TYPE_CHECKING:
@@ -69,13 +71,20 @@ class InboundManager:
             **self._service_kwargs,
         )
 
+    def bind(self, coordinator) -> None:
+        """Wire the delivery sink to the coordinator (called once from its constructor)."""
+        self.sink = partial(enqueue_external_comm, coordinator)
+
     # ------------------------------------------------------------- lifecycle
 
     async def start(self) -> None:
         async with self._lock:
             self._started = True
-            for relay_id in list(self._manager.relays):
-                await self._start_one(relay_id)
+            try:
+                for relay_id in list(self._manager.relays):
+                    await self._start_one(relay_id)
+            except Exception:  # inbound never blocks Backend start
+                logger.exception("Relay inbound failed to start")
 
     async def _start_one(self, relay_id: str) -> None:
         service = self._build(relay_id)
