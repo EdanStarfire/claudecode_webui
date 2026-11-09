@@ -34,7 +34,7 @@ from .dispatch import format_instruction, instruction_summary
 from .normalize import Drop, event_from_message, normalize_event
 from .ratelimit import KeyedBuckets, TokenBucket
 from .responder import InboundResponder
-from .router import KIND_IGNORE, KIND_REPLY, classify
+from .router import KIND_IGNORE, KIND_INSTRUCTION, KIND_REPLY, classify
 from .state import InboundState, ts_key
 from .store import ACTIVE, SUSPENDED, JsonSubscriptionStore
 from .transport import (
@@ -125,6 +125,11 @@ class InboundService:
         if not self.state.existed:
             self.state.initialize_first_start(self._now())
         record = self.record
+        if self.state.was_disabled and record is not None and record.inbound_enabled:
+            # messages typed while the owner had inbound off are never replayed on re-enable
+            if record.self_dm_channel_id:
+                self.state.cursors[record.self_dm_channel_id] = f"{self._now():.6f}"
+            self.state.was_disabled = False
         if record is not None and record.self_dm_channel_id:
             # first start: nothing before enablement is ever backfilled
             self.state.cursors.setdefault(record.self_dm_channel_id, f"{self._now():.6f}")
@@ -218,6 +223,9 @@ class InboundService:
     async def _supervise(self) -> None:
         reason = await self._eligibility()
         if reason:
+            if reason == "disabled_by_owner":
+                self.state.was_disabled = True  # the next enabled start skips what was typed meanwhile
+                await self.state.flush()
             self._set_status(const.STATUS_DISABLED, reason)
             await self._stop.wait()
             return
@@ -317,26 +325,45 @@ class InboundService:
             self._drop("deduped")
             return False
         self.state.mark_seen(event.channel, event.ts)
-        record = self.record
-        self_dm = record.self_dm_channel_id if record else None
-        if self_dm and event.channel == self_dm:
-            self.state.advance_cursor(self_dm, event.ts)
-        decision = classify(
-            event, self_dm=self_dm, owner=record.owner_user_id if record else None,
-            find_thread=self.store.find_thread, resolve_handle=self._relay_service.handles.get_session,
-        )
-        if decision.kind == KIND_IGNORE:
-            self._drop(decision.reason or "ignored")
-            self.state.schedule_flush()
-            return False
         key = ts_key(event.channel, event.ts)
-        self.state.inflight[key] = {
-            "key": key, "event": event.to_dict(), "decision": decision.to_dict(),
-            "reply_done": False, "accepted_at": self._now(),
-        }
-        await self.state.flush()  # durable before the ack
+        try:
+            record = self.record
+            self_dm = record.self_dm_channel_id if record else None
+            if self_dm and event.channel == self_dm:
+                self.state.advance_cursor(self_dm, event.ts)
+            decision = classify(
+                event, self_dm=self_dm, owner=record.owner_user_id if record else None,
+                find_thread=self._find_thread,
+                resolve_handle=self._relay_service.handles.get_session,
+            )
+            if decision.kind == KIND_IGNORE:
+                self._drop(decision.reason or "ignored")
+                self.state.schedule_flush()
+                return False
+            self.state.inflight[key] = {
+                "key": key, "event": event.to_dict(), "decision": decision.to_dict(),
+                "reply_done": False, "accepted_at": self._now(),
+            }
+            await self.state.flush(strict=True)  # durable before the ack, or no ack at all
+        except BaseException:
+            # not persisted / not classified: Slack redelivers (no ack) and must not hit the dedupe
+            self.state.inflight.pop(key, None)
+            self.state.unmark_seen(event.channel, event.ts)
+            raise
         self._queue.put_nowait(key)
         return True
+
+    def _find_thread(self, channel: str, thread_ts: str) -> dict[str, Any] | None:
+        """The owned thread record, or a pending one: a top-level instruction that is accepted but
+        not yet processed owns its thread, so a quick follow-up is not lost to the worker lag."""
+        record = self.store.find_thread(channel, thread_ts)
+        if record is not None:
+            return record
+        pending = self.state.inflight.get(ts_key(channel, thread_ts))
+        d = (pending or {}).get("decision") or {}
+        if d.get("kind") == KIND_INSTRUCTION and d.get("top_level") and d.get("session_id"):
+            return {"id": None, "session_id": d["session_id"], "status": "active"}
+        return None
 
     # ------------------------------------------------------------------ worker
 
@@ -401,6 +428,8 @@ class InboundService:
         return None
 
     async def _handle(self, entry: dict[str, Any]) -> None:
+        if entry.get("delivered"):  # re-run after a stop/crash that came after the enqueue
+            return
         event = RelayEvent.from_dict(entry["event"])
         d = entry["decision"]
         thread_ts = d.get("thread_ts") or event.ts
@@ -438,7 +467,9 @@ class InboundService:
             await self._audit_instruction(event, d, "refused", code)
             await self._reply_once(entry, event, thread_ts, code)
             return
+        created = False
         if d.get("top_level"):
+            created = self.store.find_thread(event.channel, event.ts) is None
             record = await self.store.create_thread(session_id, event.channel, event.ts, event.ts)
             await self._enforce_cap()
         relay_record = self.record
@@ -463,10 +494,14 @@ class InboundService:
             logger.exception("Inbound delivery failed")
             outcome = DeliveryOutcome("failed", "exception")
         if outcome.status == "failed":
+            if created and record is not None:  # no thread (and no reply exemption) without delivery
+                await self.store.remove(self.relay_id, record["id"])
             await self._audit_instruction(event, d, "refused", "delivery_failed")
             await self._reply_once(entry, event, thread_ts, "delivery_failed")
             return
-        if record is not None:
+        entry["delivered"] = True  # persisted: a re-run never enqueues this instruction again
+        await self.state.flush()
+        if record is not None and record.get("id"):
             await self.store.touch_thread(
                 record["id"], last_seen_ts=event.ts if event.ts != thread_ts else None
             )

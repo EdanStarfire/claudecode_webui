@@ -86,6 +86,15 @@ class TestRelayManagerHooks:
         await m.delete_relay(record.relay_id)
         assert len(seen) == 4
 
+    async def test_rejected_update_changes_nothing(self, tmp_path, monkeypatch):
+        m = relay_manager(tmp_path, monkeypatch)
+        seen: list[str] = []
+        m.change_listeners.append(seen.append)
+        record = await m.create_relay("Slack")
+        with pytest.raises(ValueError):
+            await m.update_relay(record.relay_id, name="  ", inbound_enabled=False)
+        assert record.inbound_enabled is True and seen == []
+
     async def test_failing_listener_never_breaks_the_change(self, tmp_path, monkeypatch):
         m = relay_manager(tmp_path, monkeypatch)
         m.change_listeners.append(lambda rid: 1 / 0)

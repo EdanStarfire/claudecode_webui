@@ -1454,7 +1454,6 @@ class SessionCoordinator:
             session_info = await self._detach_session_from_parent(session_id, session_info)
 
             await self._delete_legion_schedules_for_session(session_id)
-            await self.relay.inbound.on_session_deleted(session_id)  # issue #2103: drop thread records
             self._unregister_capability_registry(session_id, session_info, project)
             await self._teardown_sdk_before_archive(session_id, session_info)
             await self._archive_session_before_delete(
@@ -1463,7 +1462,7 @@ class SessionCoordinator:
             self._cleanup_legion_directory(session_id, session_info, project)
             await self._cleanup_storage_manager(session_id)
             self._cleanup_in_memory_callback_state(session_id)
-
+            await self.relay.inbound.on_session_deleted(session_id)  # issue #2103: drop thread records
             success = await self._finalize_session_manager_delete(session_id)
             if success:
                 deleted_ids.append(session_id)

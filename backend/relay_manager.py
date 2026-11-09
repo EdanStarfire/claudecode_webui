@@ -188,8 +188,6 @@ class RelayManager:
         record = self._require(relay_id)
         old_path = self._path(record)
         inbound_changed = inbound_enabled is not None and inbound_enabled != record.inbound_enabled
-        if inbound_enabled is not None:
-            record.inbound_enabled = inbound_enabled
         if name is not None:
             if not name.strip():
                 raise ValueError("Relay name cannot be empty")
@@ -200,6 +198,8 @@ class RelayManager:
             record.oauth_client_secret_secret = await self._store_secret(
                 relay_id, "oauth-client-secret", oauth_client_secret
             )
+        if inbound_enabled is not None:  # after the validation above: a rejected call changes nothing
+            record.inbound_enabled = inbound_enabled
         new_path = self._path(record)
         if old_path != new_path:
             old_path.unlink(missing_ok=True)

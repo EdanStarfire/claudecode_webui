@@ -30,6 +30,7 @@ class InboundState:
         self._path = relay_dir / STATE_FILE
         self._ring_size = ring_size
         self.started_at: float | None = None
+        self.was_disabled = False  # the owner switched inbound off since the last enabled run
         self.cursors: dict[str, str] = {}
         self._dedupe: OrderedDict[str, None] = OrderedDict()
         self.inflight: dict[str, dict[str, Any]] = {}
@@ -47,6 +48,7 @@ class InboundState:
         if not isinstance(data, dict) or data.get("version") != 1:
             return
         self.started_at = data.get("started_at")
+        self.was_disabled = bool(data.get("was_disabled"))
         self.cursors = {str(k): str(v) for k, v in (data.get("cursors") or {}).items()}
         for pair in data.get("dedupe") or []:
             if isinstance(pair, list) and len(pair) == 2:
@@ -70,6 +72,9 @@ class InboundState:
         while len(self._dedupe) > self._ring_size:
             self._dedupe.popitem(last=False)
 
+    def unmark_seen(self, channel: str, ts: str) -> None:
+        self._dedupe.pop(ts_key(channel, ts), None)
+
     @property
     def dedupe_size(self) -> int:
         return len(self._dedupe)
@@ -87,19 +92,23 @@ class InboundState:
         return {
             "version": 1,
             "started_at": self.started_at,
+            "was_disabled": self.was_disabled,
             "cursors": dict(self.cursors),
             "dedupe": [k.split(":", 1) for k in self._dedupe],
             "inflight": list(self.inflight.values()),
         }
 
-    async def flush(self) -> None:
-        """Write now (fsync). Never raises: a write failure is logged and retried on the next flush."""
+    async def flush(self, *, strict: bool = False) -> None:
+        """Write now (fsync). A failure is logged and retried on the next flush, except with
+        ``strict`` (the persist-before-ack path), where it is raised."""
         async with self._lock:
             snapshot = self._snapshot()
             try:
                 await asyncio.to_thread(atomic_write_json, self._path, snapshot)
             except OSError:
                 logger.exception("Could not write inbound state")
+                if strict:
+                    raise
 
     def schedule_flush(self) -> None:
         """Debounced write for state whose loss is harmless (drops, cursor moves)."""

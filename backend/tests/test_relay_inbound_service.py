@@ -543,3 +543,91 @@ class TestAuditAndDropSummary:
         await env.service.stop()
         text = (env.root / "audit.jsonl").read_text()
         assert "xapp-" not in text and "xoxp-" not in text
+
+
+class TestReviewFixes:
+    """Findings of the final builder-review (issue #2103 stage 3a)."""
+
+    async def test_quick_follow_up_before_the_worker_created_the_thread(self, env):
+        gate = asyncio.Event()
+        real_sink = env.sink
+
+        async def slow_sink(session_id, **kw):
+            await gate.wait()
+            return await real_sink(session_id, **kw)
+
+        env.service._sink = slow_sink
+        t = await started(env)
+        ts = env.clock.ts(seq=1)
+        await t.emit(envelope(message_payload("!my-agent start", ts), "E1"))
+        await t.emit(envelope(message_payload("follow up", env.clock.ts(seq=2), thread_ts=ts), "E2"))
+        gate.set()
+        await settle(env)
+        assert [c["content"] for c in env.sink.calls] == ["start", "follow up"]
+
+    async def test_rerun_after_delivery_does_not_enqueue_again(self, tmp_path):
+        a = make_inbound(tmp_path)
+        t = await started(a)
+        ts = await send(a, t, "!my-agent hi")
+        entry = {
+            "key": f"{SELF_DM}:{ts}", "reply_done": False, "accepted_at": 0, "delivered": True,
+            "event": {"relay_id": RELAY_ID, "channel": SELF_DM, "ts": ts, "user": OWNER,
+                      "text": "!my-agent hi", "channel_type": "im"},
+            "decision": {"kind": "instruction", "session_id": SESSION, "handle": "my-agent",
+                         "text": "hi", "thread_ts": ts, "top_level": True},
+        }
+        a.service.state.inflight[entry["key"]] = entry
+        await a.service.state.flush()
+        await a.service.stop()
+        b = make_inbound(tmp_path, clock=a.clock)
+        b.sink.seen_comm_ids.clear()  # the in-memory queue lost it (restart): the flag still guards
+        await started(b)
+        await settle(b)
+        assert not b.sink.calls
+        await b.service.stop()
+
+    async def test_unpersistable_instruction_is_not_acked_and_redelivery_works(self, env, monkeypatch):
+        t = await started(env)
+        real = env.service.state.flush
+        fail = {"on": True}
+
+        async def flaky(*, strict=False):
+            if fail["on"] and strict:
+                raise OSError("disk full")
+            await real(strict=strict)
+
+        monkeypatch.setattr(env.service.state, "flush", flaky)
+        ts = env.clock.ts()
+        payload = message_payload("!my-agent hi", ts)
+        with pytest.raises(OSError):
+            await t.emit(envelope(payload, "E1"))
+        assert t.unacked == ["E1"] and not t.acked
+        assert not env.service.state.seen(SELF_DM, ts)  # a redelivery is not eaten by the dedupe
+        fail["on"] = False
+        await t.emit(envelope(payload, "E1", retry=1))
+        await settle(env)
+        assert len(env.sink.calls) == 1 and t.acked == ["E1"]
+
+    async def test_reenabling_does_not_replay_messages_typed_while_off(self, tmp_path):
+        a = make_inbound(tmp_path)
+        a.manager.relays[RELAY_ID].inbound_enabled = False
+        await a.service.start()
+        await settle(a, until=lambda: a.service.status == const.STATUS_DISABLED)
+        a.clock.advance(60)
+        typed_while_off = RelayMessage(ts=a.clock.ts(offset=-30), text="!my-agent while off", user=OWNER)
+        await a.service.stop()
+        a.clock.advance(30)  # re-enabled later
+        b = make_inbound(tmp_path, clock=a.clock)
+        b.adapter.history = [typed_while_off]
+        t = await started(b)
+        await t.hello()
+        await settle(b, rounds=60)
+        assert not b.sink.calls
+        await b.service.stop()
+
+    async def test_failed_delivery_leaves_no_thread_exemption(self, env):
+        env.sink.outcome = DeliveryOutcome("failed", "x")
+        t = await started(env)
+        ts = await send(env, t, "!my-agent go")
+        assert env.service.store.find_thread(SELF_DM, ts) is None
+        assert not env.service.has_thread_grant(SESSION, SELF_DM, ts)

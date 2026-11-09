@@ -114,7 +114,10 @@ class InboundManager:
                 return
             old = self.services.pop(relay_id, None)
             if old is not None:
-                await old.stop()
+                try:
+                    await old.stop()
+                except Exception:
+                    logger.exception("Inbound service stop failed")
             if relay_id in self._manager.relays:
                 await self._start_one(relay_id)
             else:  # relay deleted: its inbound state goes with it (the audit log stays)
@@ -134,6 +137,10 @@ class InboundManager:
 
     def status_for(self, relay_id: str) -> dict[str, Any]:
         service = self.services.get(relay_id)
+        record = self._manager.relays.get(relay_id)
+        if service is None and record is not None and not record.inbound_enabled:
+            return {"status": const.STATUS_DISABLED, "detail": "disabled_by_owner",
+                    "connected_at": None, "inflight": 0}
         if service is None:
             return {"status": const.STATUS_STOPPED, "detail": None, "connected_at": None, "inflight": 0}
         return service.status_dict()
