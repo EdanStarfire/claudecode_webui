@@ -35,6 +35,12 @@
       </small>
     </div>
 
+    <label class="inbound-toggle" data-testid="relay-inbound-toggle">
+      <input v-model="inbound" type="checkbox" data-testid="relay-inbound-checkbox" />
+      <span>Receive instructions from Slack</span>
+      <small class="text-muted">(<code>!handle</code> in your self-DM)</small>
+    </label>
+
     <div v-if="error" class="picker-error" role="alert" data-testid="relay-secret-error">{{ error }}</div>
     <div class="picker-actions">
       <button type="submit" class="btn btn-sm btn-primary" :disabled="!canSubmit || saving" data-testid="relay-secrets-save">
@@ -46,7 +52,7 @@
 </template>
 
 <script setup>
-import { computed, onMounted, reactive, watch } from 'vue'
+import { computed, onMounted, reactive, ref, watch } from 'vue'
 import { useSecretsStore } from '@/stores/secrets'
 
 const props = defineProps({
@@ -55,7 +61,7 @@ const props = defineProps({
   saving: { type: Boolean, default: false },
   error: { type: String, default: '' },
 })
-const emit = defineEmits(['submit'])
+const emit = defineEmits(['submit', 'dirty'])
 
 const FIELDS = [
   { key: 'user', label: 'User OAuth token secret' },
@@ -83,17 +89,31 @@ const options = () => secretsStore.secrets
   .slice()
   .sort((a, b) => a.name.localeCompare(b.name))
 
+const inbound = ref(props.relay.inbound_enabled !== false)
+watch(() => props.relay.inbound_enabled, (v) => { inbound.value = v !== false })
+const inboundChanged = computed(() => inbound.value !== (props.relay.inbound_enabled !== false))
+
 const canSubmit = computed(() =>
   (selection.user && selection.user !== current.value.user) ||
-  (selection.app && selection.app !== current.value.app))
+  (selection.app && selection.app !== current.value.app) || inboundChanged.value)
 
-function submit() {
-  if (!canSubmit.value) return
+watch(canSubmit, (dirty) => emit('dirty', Boolean(dirty)), { immediate: true })
+
+function payload() {
+  if (!canSubmit.value) return null
   const payload = {}
+  if (inboundChanged.value) payload.inboundEnabled = inbound.value
   if (selection.user && selection.user !== current.value.user) payload.userSecret = selection.user
   if (selection.app && selection.app !== current.value.app) payload.appSecret = selection.app
-  emit('submit', payload)
+  return payload
 }
+
+function submit() {
+  const p = payload()
+  if (p) emit('submit', p)
+}
+
+defineExpose({ submit, payload, canSubmit })
 
 onMounted(() => secretsStore.fetchSecrets())
 </script>
@@ -110,5 +130,6 @@ onMounted(() => secretsStore.fetchSecrets())
   color: #f87171; font-size: 12px; padding: 6px 10px; border-radius: 6px;
   background: rgba(248, 113, 113, 0.08); border: 1px solid rgba(248, 113, 113, 0.25);
 }
+.inbound-toggle { display: flex; align-items: center; gap: 8px; font-size: 13px; margin: 0; white-space: nowrap; flex-wrap: wrap; }
 .picker-actions { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
 </style>

@@ -61,6 +61,14 @@ export const useRelayStore = defineStore('relay', () => {
     relays.value = relays.value.filter(r => r.relay_id !== relayId)
   }
 
+  /** Live inbound connection status (stage 3a); merged into the relay record. */
+  async function refreshInboundStatus(relayId) {
+    const st = await api.get(`/api/relays/${encodeURIComponent(relayId)}/inbound/status`)
+    const rec = relays.value.find(r => r.relay_id === relayId)
+    if (rec) _upsert({ ...rec, inbound_status: st.status, inbound_detail: st.detail, inbound_enabled: st.enabled })
+    return st
+  }
+
   /** Reference existing vault secrets by NAME; the Backend validates and verifies them. */
   async function saveSecrets(relayId, { userSecret, appSecret }) {
     const body = {}
@@ -206,6 +214,7 @@ export const useRelayStore = defineStore('relay', () => {
     loadAudit, errorMessage, rememberLabel,
     relays, relay, loaded, loading, error,
     loadRelays, fetchIfEmpty, createRelay, updateRelay, deleteRelay, saveSecrets, testRelay,
+    refreshInboundStatus,
     loadManifest, oauthInitiate, oauthStatus, setSessionHandle, getSessionRelay,
   }
 })
