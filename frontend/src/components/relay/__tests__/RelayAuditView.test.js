@@ -78,6 +78,7 @@ describe('RelayAuditView', () => {
     expect(details[7]).toBe('auth_failed')
     expect(details[8]).toBe('not_owner 2 · deduped 1')
     expect(details[9]).toBe('4')
+    expect(rows[7].find('.outcome').text()).toBe('token_revoked') // no leading separator without an outcome
   })
 
   it('policy changes show old → new with (none) and a quiet source/tier marker (#2355)', async () => {

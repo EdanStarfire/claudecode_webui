@@ -37,7 +37,7 @@
           <td data-label="Session">{{ r.session_name || r.handle || r.session_id || '' }}</td>
           <td data-label="Action" data-testid="audit-action">{{ actionLabel(r) }}</td>
           <td data-label="Channel" :title="r.channel_id || ''">{{ r.channel_name || r.channel_id || '' }}</td>
-          <td data-label="Outcome" class="outcome">{{ r.outcome || '' }}<template v-if="r.code"> · {{ r.code }}</template></td>
+          <td data-label="Outcome" class="outcome">{{ [r.outcome, r.code].filter(Boolean).join(' · ') }}</td>
           <td data-label="Detail" class="detail">
             <span data-testid="audit-detail">{{ detail(r) }}</span>
             <span v-if="policySource(r)" class="audit-tag" data-testid="audit-source">{{ policySource(r) }}</span>
