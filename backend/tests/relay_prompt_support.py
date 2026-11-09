@@ -46,12 +46,16 @@ class FakeSessionManager:
 
 
 class StrictInfo:
-    """Session info that fails if anything reads the permission mode (mode must never matter)."""
+    """Session info that fails if anything reads a permission-mode attribute other than
+    ``current_permission_mode`` (the one live mode, consulted only for don't-ask, issue #2360).
+    Tests inject the mode by setting ``current_permission_mode`` (default ``acceptEdits``)."""
 
     def __init__(self, inner) -> None:
         object.__setattr__(self, "_inner", inner)
 
     def __getattr__(self, name):
+        if name == "current_permission_mode":
+            return getattr(self._inner, name, "acceptEdits")
         if "permission_mode" in name:
             raise AssertionError(f"permission mode was consulted: {name}")
         return getattr(self._inner, name)

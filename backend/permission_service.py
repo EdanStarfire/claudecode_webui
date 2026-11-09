@@ -30,6 +30,7 @@ from .models.messages import (
     PermissionResponseMessage,
     PermissionSuggestion,
 )
+from .models.permission_mode import PermissionMode
 from .relay.adapters import is_relay_tool
 from .session_lifecycle import is_interruptible, is_live
 from .session_manager import SessionState
@@ -717,7 +718,11 @@ class PermissionService:
 
         False (with a reason) for sessions that run unattended: the launched SDK was told to
         deny prompts, the session is ephemeral, it has no permission callback (scheduler
-        launches pass none) or it is no longer running. Permission *mode* is never consulted.
+        launches pass none) or it is no longer running. Those unattended reasons come first.
+        After them, ``(False, "dont_ask_mode")`` when the session's *current* permission mode is
+        don't-ask (issue #2360): the owner said not to wait for them, so a relay call that would
+        prompt is refused instead. This is the only mode consulted; bypass, default, manual,
+        acceptEdits, plan and auto all keep prompting.
         """
         info = await self.coordinator.session_manager.get_session_info(session_id)
         if info is None:
@@ -733,6 +738,8 @@ class PermissionService:
             return False, "deny_unattended_prompts"
         if getattr(sdk, "permission_callback", None) is None:
             return False, "no_permission_callback"
+        if info.current_permission_mode == PermissionMode.DONT_ASK:
+            return False, "dont_ask_mode"
         return True, None
 
     def _emit_tool_call(self, session_id: str, tool_call: Any, triggering_message: dict | None = None) -> None:
