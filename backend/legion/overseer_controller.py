@@ -347,6 +347,14 @@ class OverseerController:
         # 6. Terminate SDK session
         await self.system.session_port.terminate_session(child_minion_id)
 
+        # 6b. Relay inbound (issue #2103): a disposed (not deleted) minion suspends its Slack
+        # instruction threads; a delete drops them via delete_session.
+        if not delete_after_archive:
+            try:
+                await self.system.session_port.relay.inbound.on_session_disposed(child_minion_id)
+            except Exception as e:
+                legion_logger.warning(f"Relay inbound dispose hook failed for {child_minion_id}: {e}")
+
         # 7. Conditional cleanup based on delete_after_archive
         # Note: Archival is handled by delete_session for hard deletes (Issue #236)
         # For soft dispose, session files persist so no archive is needed

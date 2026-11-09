@@ -40,6 +40,15 @@
             <dd data-testid="relay-workspace">{{ relay.workspace_name || 'Unknown until tested' }}</dd>
             <dt>Owner user</dt>
             <dd data-testid="relay-owner">{{ relay.owner_user_id || 'Unknown until tested' }}</dd>
+            <dt>Inbound</dt>
+            <dd>
+              <span
+                class="chip"
+                :class="inboundChip.cls"
+                :title="inboundChip.title"
+                data-testid="relay-inbound-chip"
+              >{{ inboundChip.label }}</span>
+            </dd>
             <dt>Tokens</dt>
             <dd>
               <span class="chip" :class="relay.has_user_token ? 'chip--ok' : 'chip--missing'" data-testid="relay-chip-user">
@@ -79,7 +88,7 @@
         <!-- Credentials: references to existing vault secrets -->
         <div class="relay-card">
           <h3>Credentials</h3>
-          <RelaySecretPickers :relay="relay" :saving="savingSecrets" :error="secretError" @submit="saveSecrets" />
+          <RelaySecretPickers ref="pickers" :relay="relay" :saving="savingSecrets" :error="secretError" @submit="saveSecrets" @dirty="onDirty" />
         </div>
 
         <!-- Setup guide -->
@@ -120,12 +129,15 @@
 <script setup>
 import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
 import { useRelayStore } from '@/stores/relay'
+import { useSettingsStore } from '@/stores/settings'
 import SettingsToolbar from '../SettingsToolbar.vue'
 import RelaySecretPickers from '../../relay/RelaySecretPickers.vue'
 import RelaySetupGuide from '../../relay/RelaySetupGuide.vue'
 import RelayAuditView from '../../relay/RelayAuditView.vue'
 
 const store = useRelayStore()
+const settingsStore = useSettingsStore()
+const pickers = ref(null)
 const relay = computed(() => store.relay)
 
 const newName = ref('Slack')
@@ -138,6 +150,44 @@ const confirmDelete = ref(false)
 const deleting = ref(false)
 const savingSecrets = ref(false)
 const secretError = ref('')
+
+const INBOUND_CHIPS = {
+  connected: ['connected', 'chip--ok'],
+  connecting: ['connecting', ''],
+  backoff: ['reconnecting', ''],
+  transport_unavailable: ['unavailable', 'chip--missing'],
+  auth_failed: ['auth failed', 'chip--bad'],
+  disabled: ['off', 'chip--muted'],
+  stopped: ['off', 'chip--muted'],
+}
+const ONE_BACKEND = 'Use one Backend per Slack app-level token.'
+const inboundChip = computed(() => {
+  const r = relay.value || {}
+  const status = r.inbound_enabled === false ? 'disabled' : (r.inbound_status || 'stopped')
+  const [label, cls] = INBOUND_CHIPS[status] || [status, '']
+  const detail = r.inbound_detail ? ` (${r.inbound_detail})` : ''
+  return { label, cls, title: `Inbound: ${label}${detail}. ${ONE_BACKEND}` }
+})
+
+const areaKey = computed(() => `relay:${relay.value?.relay_id}:inbound`)
+function onDirty(dirty) {
+  if (!relay.value) return
+  if (dirty) settingsStore.setField(areaKey.value, 'dirty', true)
+  else settingsStore.markClean(areaKey.value)
+}
+// Used by the settings dirty guard ("Apply"): the one Save for credentials + inbound toggle.
+async function save() {
+  const payload = pickers.value?.payload()
+  if (payload) await saveSecrets(payload)
+}
+defineExpose({ save })
+
+let statusTimer = null
+function pollStatus() {
+  statusTimer = setInterval(() => {
+    if (relay.value && !document.hidden) store.refreshInboundStatus(relay.value.relay_id).catch(() => {})
+  }, 10000)
+}
 
 const chipState = (has, missing) => (has ? 'set' : missing ? 'secret missing' : 'missing')
 
@@ -196,7 +246,15 @@ async function saveSecrets(selection) {
   savingSecrets.value = true
   secretError.value = ''
   try {
-    await store.saveSecrets(relay.value.relay_id, selection)
+    const { inboundEnabled, ...secretRefs } = selection
+    if (secretRefs.userSecret || secretRefs.appSecret) {
+      await store.saveSecrets(relay.value.relay_id, secretRefs)
+    }
+    if (inboundEnabled !== undefined) {
+      await store.updateRelay(relay.value.relay_id, { inbound_enabled: inboundEnabled })
+    }
+    settingsStore.markClean(areaKey.value)
+    store.refreshInboundStatus(relay.value.relay_id).catch(() => {})
   } catch (e) {
     secretError.value = e.message
   } finally {
@@ -239,8 +297,11 @@ function pollOAuth(relayId, state, attempt) {
   }, 1500)
 }
 
-onMounted(() => store.loadRelays())
-onBeforeUnmount(() => clearTimeout(oauthTimer))
+onMounted(() => { store.loadRelays(); pollStatus() })
+onBeforeUnmount(() => {
+  clearTimeout(oauthTimer)
+  clearInterval(statusTimer)
+})
 </script>
 
 <style scoped>
@@ -261,6 +322,8 @@ onBeforeUnmount(() => clearTimeout(oauthTimer))
 .chip { font-size: 11px; padding: 2px 8px; border-radius: 10px; border: 1px solid var(--bs-border-color); margin-right: 6px; display: inline-block; }
 .chip--ok { color: #3fb950; border-color: #3fb95066; }
 .chip--missing { color: #d29922; border-color: #d2992266; }
+.chip--bad { color: #f87171; border-color: #f8717166; }
+.chip--muted { color: var(--bs-secondary-color); }
 .card-actions { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
 .test-result { margin-top: 10px; padding: 8px 12px; border-radius: 6px; font-size: 13px; }
 .test-result--ok { background: rgba(63, 185, 80, 0.1); border: 1px solid rgba(63, 185, 80, 0.3); }

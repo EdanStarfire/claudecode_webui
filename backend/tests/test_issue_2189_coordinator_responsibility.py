@@ -57,11 +57,14 @@ ALLOWLIST: dict[str, int] = {
     # Issue #2333: 346->347 — one line constructing ProviderModelSwitch(self).
     # Issue #2103: 347->348 — one `self.relay = core.relay` line (RelayRuntime from
     # build_core_managers(); relay_manager/service/audit/gate/bridge/mcp_tools are properties).
-    "__init__": 348,
+    # Issue #2103 stage 3a: 348->349 — one `self.relay.inbound.bind(self)` line (delivery sink).
+    "__init__": 349,
     # --- Orchestration ---
     # Issue #2103: 69->70 — one `await self.relay_service.initialize()` line.
-    "initialize": 70,
-    "cleanup": 23,
+    # Issue #2103 stage 3a: 70->71 — one `await self.relay.inbound.start()` line.
+    "initialize": 71,
+    # Issue #2103 stage 3a: 23->24 — one `await self.relay.inbound.stop()` line.
+    "cleanup": 24,
     # --- Acknowledged "real logic" residual kept on the coordinator by
     # design: session lifecycle operations, the state-change notify/relay
     # cluster, callback-factory setters, tool-call tracking entry points. ---
@@ -69,7 +72,8 @@ ALLOWLIST: dict[str, int] = {
     "create_ephemeral_session": 66,
     # Issue #2267 AC1: delete_session shrank 208->37 — now an orchestrator
     # calling the 11 step-split helpers below, in order, inside one try/except.
-    "delete_session": 37,
+    # Issue #2103 stage 3a: 37->38 — one `await self.relay.inbound.on_session_deleted(...)` line.
+    "delete_session": 38,
     "send_message": 64,
     "interrupt_session": 63,
     "set_permission_mode": 55,

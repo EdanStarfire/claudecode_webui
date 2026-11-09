@@ -48,6 +48,7 @@ from .relay.call_registry import RelayCallRegistry
 from .relay.gate import RelayPolicyGate
 from .relay.grants import GrantStore
 from .relay.handles import RelayHandleIndex
+from .relay.inbound.manager import InboundManager
 from .relay.permission_bridge import RelayPermissionBridge
 from .relay.prompt_broker import RelayPromptBroker
 from .relay.service import RelayService
@@ -74,6 +75,7 @@ class RelayRuntime:
     mcp_tools: RelayMCPTools
     call_registry: RelayCallRegistry
     broker: RelayPromptBroker
+    inbound: InboundManager  # issue #2103 stage 3a: Socket Mode self-DM instructions
 
 
 @dataclass
@@ -185,7 +187,15 @@ def build_core_managers(
     relay_bridge = RelayPermissionBridge(relay_gate, relay_service, relay_audit)
     relay_registry = RelayCallRegistry()
     relay_broker = RelayPromptBroker(relay_registry, relay_bridge)
+    relay_inbound = InboundManager(
+        relay_manager=relay_manager, relay_service=relay_service, session_manager=session_manager,
+        audit=relay_audit, relays_root=data_dir / "relays",
+    )
+    relay_manager.change_listeners.append(relay_inbound.schedule_refresh)
+    relay_manager.inbound_status_provider = relay_inbound.status_for
+    relay_gate.thread_grants = relay_inbound.has_thread_grant
     relay = RelayRuntime(
+        inbound=relay_inbound,
         manager=relay_manager,
         service=relay_service,
         audit=relay_audit,

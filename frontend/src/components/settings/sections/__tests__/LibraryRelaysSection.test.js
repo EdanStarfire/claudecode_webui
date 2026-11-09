@@ -90,7 +90,7 @@ describe('LibraryRelaysSection', () => {
     apiMock.put.mockResolvedValue({ ...REC, has_user_token: true, user_token_secret: 'in-use' })
     const { wrapper } = renderWithStores(LibraryRelaysSection)
     await flush()
-    expect(wrapper.find('[data-testid="relay-secret-pickers"] input').exists()).toBe(false)
+    expect(wrapper.find('[data-testid="relay-secret-pickers"] input:not([type="checkbox"])').exists()).toBe(false)
     expect(wrapper.find('[data-testid="relay-user-token"]').exists()).toBe(false)
     const select = wrapper.find('[data-testid="relay-pick-user"]')
     const optionEls = select.findAll('option')

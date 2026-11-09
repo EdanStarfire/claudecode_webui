@@ -281,6 +281,7 @@ class SessionCoordinator:
         self.queue_manager = core.queue_manager
         self.pending_store = core.pending_store
         self.relay = core.relay  # issue #2103: RelayRuntime (manager/service/audit/gate/bridge/tools)
+        self.relay.inbound.bind(self)  # issue #2103 stage 3a: the delivery sink
 
         # Active SDK instances
         self._active_sdks: dict[str, ClaudeSDK] = {}
@@ -720,6 +721,7 @@ class SessionCoordinator:
                 await self.legion_system.scheduler_service.start()
                 await self.legion_system.history_rotator.start()
 
+            await self.relay.inbound.start()  # issue #2103 stage 3a: last, once delivery exists
             coord_logger.info("Session coordinator initialized successfully")
         except Exception:
             logger.exception("Failed to initialize session coordinator")
@@ -1460,7 +1462,7 @@ class SessionCoordinator:
             self._cleanup_legion_directory(session_id, session_info, project)
             await self._cleanup_storage_manager(session_id)
             self._cleanup_in_memory_callback_state(session_id)
-
+            await self.relay.inbound.on_session_deleted(session_id)  # issue #2103: drop thread records
             success = await self._finalize_session_manager_delete(session_id)
             if success:
                 deleted_ids.append(session_id)
@@ -2650,6 +2652,7 @@ class SessionCoordinator:
     async def cleanup(self):
         """Cleanup all resources"""
         try:
+            await self.relay.inbound.stop()  # issue #2103: no new inbound deliveries; flushes state
             # Stop scheduler service and history rotator (issue #495, #1372)
             if hasattr(self, 'legion_system') and self.legion_system is not None:
                 await self.legion_system.history_rotator.stop()

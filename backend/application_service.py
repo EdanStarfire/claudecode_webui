@@ -56,6 +56,10 @@ class ApplicationService:
         return self.coordinator.relay_service
 
     @property
+    def relay_inbound(self):
+        return self.coordinator.relay.inbound
+
+    @property
     def relay_gate(self):
         return self.coordinator.relay_gate
 

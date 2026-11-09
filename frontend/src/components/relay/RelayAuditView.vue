@@ -17,6 +17,10 @@
         <option value="ok">ok</option>
         <option value="denied">denied</option>
         <option value="error">error</option>
+        <option value="delivered">delivered</option>
+        <option value="refused">refused</option>
+        <option value="late">late</option>
+        <option value="rate_limited">rate_limited</option>
       </select>
     </div>
 
@@ -33,7 +37,7 @@
           <td data-label="Session">{{ r.session_name || r.handle || r.session_id || '' }}</td>
           <td data-label="Action" data-testid="audit-action">{{ actionLabel(r) }}</td>
           <td data-label="Channel" :title="r.channel_id || ''">{{ r.channel_name || r.channel_id || '' }}</td>
-          <td data-label="Outcome" class="outcome">{{ r.outcome || '' }}<template v-if="r.code"> · {{ r.code }}</template></td>
+          <td data-label="Outcome" class="outcome">{{ [r.outcome, r.code].filter(Boolean).join(' · ') }}</td>
           <td data-label="Detail" class="detail">
             <span data-testid="audit-detail">{{ detail(r) }}</span>
             <span v-if="policySource(r)" class="audit-tag" data-testid="audit-source">{{ policySource(r) }}</span>
@@ -70,6 +74,16 @@ const ACTIONS = {
   get_identity: 'Get identity', find_channels: 'Find channels', read_thread: 'Read thread', search: 'Search',
 }
 
+// Inbound (stage 3a) events: humanized like the tool actions above.
+const EVENTS = {
+  inbound_instruction: 'Slack instruction',
+  inbound_reply: 'Slack reply',
+  inbound_reply_failed: 'Slack reply',
+  inbound_connection: 'Inbound connection',
+  inbound_drop_summary: 'Inbound drops',
+  inbound_housekeeping: 'Inbound housekeeping',
+}
+
 const store = useRelayStore()
 const sessionStore = useSessionStore()
 const route = useRoute()
@@ -101,6 +115,7 @@ const canLoadOlder = computed(() => records.value.length > 0 && !exhausted.value
 
 function actionLabel(r) {
   if (r.event === 'policy_change') return 'Policy change'
+  if (EVENTS[r.event]) return EVENTS[r.event]
   const tool = (r.tool || '').replace(TOOL_PREFIX, '')
   return ACTIONS[tool] || tool || r.event || ''
 }
@@ -112,6 +127,11 @@ function detail(r) {
     if (!r.source || r.source === 'prompt') return r.policy ? `→ ${r.policy}` : `→ ${NONE}`
     return `${r.old_policy || NONE} → ${next}`
   }
+  if (r.event === 'inbound_connection') return r.inbound_status || ''
+  if (r.event === 'inbound_drop_summary') {
+    return Object.entries(r.reason_counts || {}).map(([k, n]) => `${k} ${n}`).join(' · ')
+  }
+  if (r.event === 'inbound_housekeeping') return r.count != null ? `${r.count}` : ''
   const parts = []
   if (r.tool === 'find_channels' || r.tool === 'get_identity') {
     if (r.query_preview) parts.push(`“${r.query_preview}”`)
@@ -187,7 +207,7 @@ defineExpose({ reload: () => load(true) })
   color: var(--bs-tertiary-color, #6b7280); border: 1px solid var(--bs-border-color, rgba(0,0,0,0.12));
   vertical-align: baseline; white-space: nowrap; user-select: none;
 }
-.outcome-denied .outcome { color: #d29922; }
+.outcome-denied .outcome, .outcome-refused .outcome, .outcome-late .outcome, .outcome-rate_limited .outcome { color: #d29922; }
 .outcome-error .outcome { color: #f87171; }
 .older { align-self: flex-start; }
 @media (max-width: 600px) {

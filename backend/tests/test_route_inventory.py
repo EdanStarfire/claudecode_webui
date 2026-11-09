@@ -27,7 +27,8 @@ GET .../proxy-logs, GET .../proxy-logs/{log_name}, GET .../queue, GET .../attach
 GET .../attachments/{filename}, GET .../history, GET .../history/{filename}, GET
 .../schedules (all under the existing /api/projects/{project_id}/archives/{session_id}/
 {archive_id}/ prefix). Issue #2235 removed 1 route: GET /api/legions/{legion_id}/timeline
-(the dead timeline.jsonl reader, retired along with its only writer).
+(the dead timeline.jsonl reader, retired along with its only writer). Issue #2103 stage 3a
+added 1 route: GET /api/relays/{relay_id}/inbound/status (live Socket Mode status).
 """
 
 
@@ -55,7 +56,7 @@ def test_route_count_unchanged():
     from backend.web_server import create_app
     app = create_app()
     api_routes_count = _count_api_routes(app)
-    assert api_routes_count == 198, (
+    assert api_routes_count == 199, (
         f"Expected 164 Backend routes post-#498 split (core.py's 3 browser routes "
         f"stayed Frontend-side only; config.py now has its own 2 backend-owned routes "
         f"here PLUS 2 more on the Frontend side doing merged-read/split-write; poll.py's "

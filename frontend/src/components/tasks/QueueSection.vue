@@ -200,6 +200,8 @@ function truncate(text, maxLen) {
 
 function displayLabel(item) {
   if (item.metadata?.schedule_name) return item.metadata.schedule_name
+  // Slack self-DM instruction (relay inbound, issue #2103): quiet source prefix, short preview
+  if (item.metadata?.relay_inbound) return `Slack: ${truncate(item.content, 52)}`
   return truncate(item.content, 60)
 }
 

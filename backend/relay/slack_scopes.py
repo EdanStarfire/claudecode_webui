@@ -103,8 +103,10 @@ SETUP_STEPS: list[dict[str, str]] = [
     {
         "title": "Generate an app-level token",
         "detail": "Under Basic Information, App-Level Tokens, generate a token with the "
-        "connections:write scope (starts with xapp-). Only needed for the inbound stage, "
-        "harmless to store now.",
+        "connections:write scope (starts with xapp-). It receives your self-DM instructions "
+        "(type !handle followed by the instruction in your own Slack self-DM). Use one Backend "
+        "per app-level token: Slack splits events between connections, so two Backends sharing "
+        "a token would each miss some.",
     },
     {
         "title": "Store the tokens as secrets",

@@ -1,0 +1,287 @@
+"""Fakes for relay inbound tests (issue #2103 stage 3a). No network, no vault, no Slack."""
+
+from __future__ import annotations
+
+import asyncio
+from pathlib import Path
+from types import SimpleNamespace
+from typing import Any
+
+from backend.relay.adapter import PostResult, RelayMessage, ThreadPage
+from backend.relay.audit import RelayAuditLog
+from backend.relay.handles import RelayHandleIndex
+from backend.relay.inbound.service import DeliveryOutcome, InboundService
+from backend.relay.inbound.transport import RawEnvelope
+from backend.session_manager import SessionState
+
+RELAY_ID = "relay1"
+TEAM = "T0TEAM001"
+OWNER = "U0OWNER001"
+SELF_DM = "D0SELF0001"
+OTHER_DM = "D0OTHER0001"
+OTHER_USER = "U0OTHER001"
+CHANNEL = "C0CHAN0001"
+SESSION = "s1"
+BASE_TIME = 1_800_000_000.0
+
+
+class FakeClock:
+    def __init__(self, start: float = BASE_TIME) -> None:
+        self.t = start
+        self.mono_t = 1000.0
+
+    def now(self) -> float:
+        return self.t
+
+    def mono(self) -> float:
+        return self.mono_t
+
+    def advance(self, seconds: float) -> None:
+        self.t += seconds
+        self.mono_t += seconds
+
+    def ts(self, offset: float = 0.0, seq: int = 0) -> str:
+        """A Slack-style ts at now+offset (``seq`` keeps same-second messages distinct)."""
+        micros = int(round((self.t + offset) * 1_000_000)) + seq
+        return f"{micros // 1_000_000}.{micros % 1_000_000:06d}"
+
+
+class FakeSocketTransport:
+    """Stands in for slack_sdk: ``emit`` delivers an envelope and acks after the handler returns."""
+
+    def __init__(self, *, connect_error: Exception | None = None) -> None:
+        self.connect_error = connect_error
+        self.on_envelope = None
+        self.on_state = None
+        self.connected = False
+        self.connect_count = 0
+        self.disconnect_count = 0
+        self.acked: list[str] = []
+        self.unacked: list[str] = []
+
+    def set_handlers(self, on_envelope, on_state) -> None:
+        self.on_envelope, self.on_state = on_envelope, on_state
+
+    async def connect(self) -> None:
+        self.connect_count += 1
+        if self.connect_error is not None:
+            raise self.connect_error
+        self.connected = True
+
+    async def disconnect(self) -> None:
+        self.disconnect_count += 1
+        self.connected = False
+
+    async def emit(self, env: RawEnvelope) -> bool:
+        try:
+            await self.on_envelope(env)
+        except Exception:
+            self.unacked.append(env.envelope_id)
+            raise
+        if env.envelope_id:
+            self.acked.append(env.envelope_id)
+        return True
+
+    async def hello(self) -> None:
+        self.on_state("connected")
+        await self.emit(RawEnvelope("", "hello", {}))
+
+    def drop(self) -> None:
+        self.on_state("dropped")
+
+    def auth_failed(self) -> None:
+        self.on_state("auth_failed")
+
+
+def message_payload(
+    text: str, ts: str, *, channel: str = SELF_DM, user: str | None = OWNER,
+    thread_ts: str | None = None, channel_type: str = "im", team: str = TEAM, subtype=None,
+    app_id=None, bot_id=None, metadata=None, event_type: str = "message", files=None, **extra,
+) -> dict[str, Any]:
+    event: dict[str, Any] = {
+        "type": event_type, "channel": channel, "channel_type": channel_type, "ts": ts,
+        "text": text,
+    }
+    for key, value in (("user", user), ("thread_ts", thread_ts), ("subtype", subtype),
+                       ("app_id", app_id), ("bot_id", bot_id), ("metadata", metadata),
+                       ("files", files)):
+        if value is not None:
+            event[key] = value
+    event.update(extra)
+    return {"type": "event_callback", "team_id": team, "event": event}
+
+
+def envelope(payload: dict, eid: str = "E1", retry: int = 0) -> RawEnvelope:
+    return RawEnvelope(eid, "events_api", payload, retry)
+
+
+class FakeAdapter:
+    def __init__(self) -> None:
+        self.posts: list[dict[str, Any]] = []
+        self.history: list[RelayMessage] = []
+        self.history_calls: list[dict[str, Any]] = []
+        self.threads: dict[str, list[RelayMessage]] = {}
+        self.fail_post = False
+        self.history_next: dict[str | None, str | None] = {}
+
+    async def post(self, channel, text, blocks=None, thread_ts=None, metadata=None):
+        if self.fail_post:
+            from backend.relay.adapter import RelayError
+
+            raise RelayError("internal_error", "chat.postMessage")
+        self.posts.append({
+            "channel": channel, "text": text, "blocks": blocks, "thread_ts": thread_ts,
+            "metadata": metadata,
+        })
+        return PostResult(channel, f"{BASE_TIME + len(self.posts):.6f}")
+
+    async def read_history(self, channel, limit=100, oldest=None, cursor=None):
+        self.history_calls.append({"channel": channel, "oldest": oldest, "cursor": cursor})
+        msgs = [m for m in self.history if oldest is None or float(m.ts) > float(oldest)]
+        return ThreadPage(msgs if cursor is None else [], self.history_next.get(cursor))
+
+    async def read_thread(self, channel, thread_ts, limit=100, cursor=None):
+        return ThreadPage(list(self.threads.get(thread_ts, [])), None)
+
+    async def open_dm(self, user_id):
+        return SELF_DM
+
+
+class FakeRelayManager:
+    def __init__(self, adapter: FakeAdapter) -> None:
+        self.adapter = adapter
+        self.relays = {RELAY_ID: SimpleNamespace(
+            relay_id=RELAY_ID, name="Slack", owner_user_id=OWNER, self_dm_channel_id=SELF_DM,
+            workspace_id=TEAM, inbound_enabled=True, app_token_secret="app-secret",
+            user_token_secret="user-secret",
+        )}
+        self.tokens = {"user": True, "app": True}
+
+    def has_token(self, relay_id, kind="user"):
+        return self.tokens.get(kind, False)
+
+    def adapter_for(self, relay_id):
+        return self.adapter
+
+    def record_self_dm(self, relay_id, owner, dm):
+        self.relays[relay_id].self_dm_channel_id = dm
+
+
+class FakeSessions:
+    def __init__(self) -> None:
+        self.infos: dict[str, Any] = {}
+
+    def add(self, session_id=SESSION, *, state=SessionState.ACTIVE, ephemeral=False,
+            relay_id=RELAY_ID):
+        self.infos[session_id] = SimpleNamespace(
+            session_id=session_id, state=state, is_ephemeral=ephemeral,
+            config={"relay_id": relay_id},
+        )
+
+    async def get_session_info(self, session_id):
+        return self.infos.get(session_id)
+
+    def has_session(self, session_id):
+        return session_id in self.infos
+
+
+class FakeRelayService:
+    def __init__(self, sessions: FakeSessions, handles: RelayHandleIndex) -> None:
+        self.handles = handles
+        self._sessions = sessions
+
+    async def effective_attachment(self, info):
+        return {"relay_id": info.config.get("relay_id")}
+
+
+class RecordingSink:
+    def __init__(self) -> None:
+        self.calls: list[dict[str, Any]] = []
+        self.outcome = DeliveryOutcome("delivered")
+        self.seen_comm_ids: set[str] = set()
+        self.raise_error = False
+
+    async def __call__(self, session_id, **kwargs):
+        if self.raise_error:
+            raise RuntimeError("boom")
+        self.calls.append({"session_id": session_id, **kwargs})
+        if kwargs["comm_id"] in self.seen_comm_ids:
+            return DeliveryOutcome("already_delivered")
+        self.seen_comm_ids.add(kwargs["comm_id"])
+        return self.outcome
+
+
+def make_inbound(tmp_path: Path, *, handles: dict[str, str] | None = None, factory=None,
+                 clock: FakeClock | None = None):
+    clock = clock or FakeClock()
+    adapter = FakeAdapter()
+    manager = FakeRelayManager(adapter)
+    sessions = FakeSessions()
+    sessions.add()
+    index = RelayHandleIndex(sessions.has_session)
+    for handle, sid in (handles if handles is not None else {"my-agent": SESSION}).items():
+        index.rebind(sid, handle)
+    sink = RecordingSink()
+    audit = RelayAuditLog(tmp_path)
+    transports: list[FakeSocketTransport] = []
+    delays: list[float] = []
+
+    def default_factory(relay_id):
+        t = FakeSocketTransport()
+        transports.append(t)
+        return t
+
+    async def fake_sleep(seconds: float) -> None:
+        delays.append(seconds)
+        clock.advance(seconds)
+        await asyncio.sleep(0)
+
+    service = InboundService(
+        RELAY_ID, relay_manager=manager, relay_service=FakeRelayService(sessions, index),
+        session_manager=sessions, audit=audit, sink=sink, relays_root=tmp_path / "relays",
+        transport_factory=factory or default_factory, now=clock.now, mono=clock.mono,
+        sleep=fake_sleep, rng=lambda: 1.0,
+    )
+    return SimpleNamespace(
+        service=service, adapter=adapter, manager=manager, sessions=sessions, index=index,
+        sink=sink, audit=audit, clock=clock, transports=transports, delays=delays,
+        root=tmp_path / "relays" / RELAY_ID,
+    )
+
+
+async def settle(env, *, until=None, rounds: int = 200) -> None:
+    """Let the worker/supervisor tasks run until idle (or ``until()``). Real time passes between
+    rounds because state/audit writes go through ``asyncio.to_thread``."""
+    deadline = asyncio.get_running_loop().time() + 5.0
+    quiet = 0
+    for _ in range(rounds * 50):
+        await asyncio.sleep(0.002)
+        if until is not None:
+            if until():
+                return
+            continue
+        if not env.service.state.inflight and env.service._queue.empty():
+            quiet += 1
+            if quiet >= 5:
+                return
+        else:
+            quiet = 0
+        if asyncio.get_running_loop().time() > deadline:
+            return
+
+
+async def started(env):
+    """Start the service and wait until the fake transport is connected."""
+    await env.service.start()
+    await settle(env, until=lambda: bool(env.transports) and env.transports[-1].connected)
+    return env.transports[-1]
+
+
+def audit_events(env, event: str | None = None) -> list[dict]:
+    path = env.root / "audit.jsonl"
+    if not path.exists():
+        return []
+    import json
+
+    rows = [json.loads(line) for line in path.read_text().splitlines()]
+    return [r for r in rows if event is None or r["event"] == event]
