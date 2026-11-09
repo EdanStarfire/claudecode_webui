@@ -20,7 +20,8 @@ from backend.relay.audit import RelayAuditLog
 from backend.relay.gate import RelayPolicyGate
 from backend.relay.grants import GrantStore
 from backend.relay.permission_bridge import RelayPermissionBridge
-from backend.relay.policy import EffectivePolicy, normalize_policies
+from backend.relay.policy import EffectivePolicy, diff_policies, normalize_policies
+from backend.relay.service import RelayService
 
 SELF_DM = "D0SELF0001"
 OWNER = "U0OWNER001"
@@ -151,23 +152,38 @@ class FakeSessions:
     async def get_session_directory(self, session_id):
         return self.session_dir
 
-    async def update_relay_policy(self, session_id, relay_id, target, policy, *, sole_relay_id=None):
+    async def update_relay_policy(
+        self, session_id, relay_id, target, policy, *, source, sole_relay_id=None, audit_extra=None
+    ):
+        self.policy_writes = getattr(self, "policy_writes", [])
+        self.policy_writes.append((relay_id, target, policy, source, audit_extra))
         policies = normalize_policies(self.info.config.get("relay_channel_policies"), sole_relay_id)
+        policies = {r: dict(e) for r, e in policies.items()}
         entry = dict(policies.get(relay_id) or {})
         if policy is None:
             entry.pop(target, None)
         else:
             entry[target] = policy
         policies[relay_id] = entry
+        old = normalize_policies(self.info.config.get("relay_channel_policies"), sole_relay_id)
         self.info.config["relay_channel_policies"] = policies
+        for cb in getattr(self, "policy_callbacks", []):
+            cb(session_id, diff_policies(old, policies), source, audit_extra)
         return True
+
+    def add_policy_change_callback(self, callback, sole_relay_id=None):
+        self.policy_callbacks = getattr(self, "policy_callbacks", [])
+        self.policy_callbacks.append(callback)
 
 
 class FakeService:
     """Live policy view over the fake session config (same semantics as RelayService)."""
 
-    def __init__(self, sessions: FakeSessions) -> None:
+    def __init__(self, sessions: FakeSessions, audit: RelayAuditLog | None = None) -> None:
         self.sessions = sessions
+        # the real audit path (RelayService.attach_policy_audit) over the fake session store
+        self._real = RelayService(None, None, sessions, None, None, audit=audit)
+        self._real.attach_policy_audit(sessions)
 
     async def effective_relay_policies(self, info, relay_id):
         return {
@@ -186,8 +202,11 @@ class FakeService:
     async def ensure_handle(self, session_id):
         return self.sessions.info.config.get("relay_handle")
 
-    async def set_policy(self, session_id, relay_id, channel_id, policy):
-        await self.sessions.update_relay_policy(session_id, relay_id, channel_id, policy)
+    async def set_policy(self, session_id, relay_id, channel_id, policy, *, source, audit_extra=None):
+        await self.sessions.update_relay_policy(
+            session_id, relay_id, channel_id, policy, source=source, audit_extra=audit_extra
+        )
+        await self._real.drain_audit()
 
 
 class FakeRelayManager:
@@ -229,10 +248,10 @@ def make_env(tmp_path: Path, policies: dict | None = None, **config):
         session_id="s1", name="My Session", working_directory=str(workdir), config=cfg
     )
     sessions = FakeSessions(info, tmp_path / "sessiondata")
-    service = FakeService(sessions)
+    audit = RelayAuditLog(tmp_path)
+    service = FakeService(sessions, audit)
     manager = FakeRelayManager(adapter)
     gate = RelayPolicyGate(service, manager, sessions, GrantStore())
-    audit = RelayAuditLog(tmp_path)
     tools = RelayMCPTools(gate, audit)
     bridge = RelayPermissionBridge(gate, service, audit)
     return SimpleNamespace(

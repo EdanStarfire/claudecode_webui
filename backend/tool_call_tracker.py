@@ -418,16 +418,27 @@ class ToolCallTracker:
         session_id: str,
         tool_use_id: str,
         input_params: dict[str, Any],
+        *,
+        store: bool = True,
     ) -> ToolCall | None:
         """
         Fill in the real input on a ToolCall created early, at content_block_start
         (Issue #2109, AC2). Returns the updated ToolCall, or None if no pending
         record exists yet for this tool_use_id (the non-streaming/fallback caller
         should create one fresh instead).
+
+        Issue #2355: an update that changes nothing on a call that is no longer PENDING
+        (typically the tool_use assistant message arriving after the permission request
+        already carried the same input) is a no-op: no store, so no second record for the
+        same status. A different input still stores. ``store=False`` sets the input without
+        writing a record (the caller writes its own right after).
         """
         tool_call = self._get_active_tool_call(session_id, tool_use_id)
         if not tool_call:
             return None
+
+        if tool_call.status != ToolState.PENDING and tool_call.input == input_params:
+            return tool_call
 
         tool_call.input = input_params
 
@@ -442,7 +453,8 @@ class ToolCallTracker:
             f"Filled in input for ToolCall {tool_use_id} in session {session_id}"
         )
 
-        self._schedule_tool_call_update_storage(session_id, tool_call)
+        if store:
+            self._schedule_tool_call_update_storage(session_id, tool_call)
 
         return tool_call
 

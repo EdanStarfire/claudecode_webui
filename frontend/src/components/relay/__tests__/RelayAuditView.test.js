@@ -48,6 +48,27 @@ describe('RelayAuditView', () => {
     expect(denied.classes()).toContain('outcome-denied')
   })
 
+  it('policy changes show old → new with (none) and a quiet source/tier marker (#2355)', async () => {
+    const P = (over) => REC({ event: 'policy_change', tool: undefined, ...over })
+    apiMock.get.mockResolvedValue({ records: [
+      P({ source: 'editor', tier: 'session', old_policy: null, policy: 'auto' }),
+      P({ source: 'config', tier: 'session', old_policy: 'auto', policy: 'blocked' }),
+      P({ source: 'editor', tier: 'session', old_policy: 'blocked', policy: null }),
+      P({ source: 'prompt', old_policy: null, policy: 'auto' }),
+      P({ source: 'template', tier: 'template', tier_name: 'Planner tmpl', session_id: null, old_policy: 'ask', policy: 'read_only' }),
+      P({ source: 'profile', tier: 'profile', tier_name: 'Base', session_id: null, old_policy: 'ask', policy: 'blocked' }),
+      P({ policy: 'auto' }),
+    ] })
+    const { wrapper } = await mountView()
+    const details = wrapper.findAll('[data-testid="audit-detail"]').map(d => d.text())
+    expect(details).toEqual([
+      '(none) → auto', 'auto → blocked', 'blocked → (none)', '→ auto',
+      'ask → read_only', 'ask → blocked', '→ auto',
+    ])
+    const tags = wrapper.findAll('[data-testid="audit-record"]').map(r => r.find('[data-testid="audit-source"]').exists() ? r.find('[data-testid="audit-source"]').text() : null)
+    expect(tags).toEqual(['editor', 'config', 'editor', 'prompt', 'template: Planner tmpl', 'profile: Base', null])
+  })
+
   it('escapes Slack-controlled previews and caps them', async () => {
     apiMock.get.mockResolvedValue({ records: [REC({ text_preview: '<img src=x onerror=1>' + 'a'.repeat(400) })] })
     const { wrapper } = await mountView()

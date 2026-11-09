@@ -105,7 +105,8 @@ class PermissionService:
                 if relay_gate_result.kind == "allow":
                     return {"behavior": "allow"}
                 if relay_gate_result.kind == "deny":
-                    return {"behavior": "deny", "message": relay_gate_result.message}
+                    # Same message + structured JSON as the handler's refusal (issue #2355)
+                    return {"behavior": "deny", "message": relay_gate_result.refusal_text()}
 
             # Issue #403: Auto-approve Read tool for user-uploaded files
             if tool_name == 'Read':
@@ -313,6 +314,16 @@ class PermissionService:
                             relay_gate_result.prompt if relay_gate_result else None
                         ),                               # Issue #2103
                     )
+
+                    # Issue #2355: the SDK callback always has the real input, while the tracked
+                    # call may still hold the content_block_start placeholder ({}) when the turn
+                    # barrier above passed early. Set it first (no separate record) so the one
+                    # awaiting_permission record carries it and the tool_use message that
+                    # arrives later is a no-op for the tracker.
+                    if input_params and tool_call.input != input_params:
+                        self.coordinator.update_tool_call_input(
+                            session_id, tool_call.tool_use_id, dict(input_params), store=False
+                        )
 
                     # Update tool call status
                     updated_tool_call = self.coordinator.update_tool_call_permission_request(

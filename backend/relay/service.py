@@ -13,8 +13,9 @@ from typing import TYPE_CHECKING, Any
 from backend.relay_manager import RelayNotFoundError
 
 from .adapters import get_spec
+from .audit import RelayAuditLog
 from .handles import HandleConflictError, RelayHandleIndex
-from .policy import EffectivePolicy, merge_policies, normalize_policies
+from .policy import EffectivePolicy, diff_policies, merge_policies, normalize_policies
 from .safety import validate_handle
 from .validation import validate_relay_config
 
@@ -47,6 +48,7 @@ class RelayService:
         session_manager: SessionManager,
         template_manager: TemplateManager,
         profile_manager: ProfileManager,
+        audit: RelayAuditLog | None = None,
     ) -> None:
         self.relay_manager = relay_manager
         self.handles = handle_index
@@ -54,6 +56,11 @@ class RelayService:
         self._templates = template_manager
         self._profiles = profile_manager
         self._handle_lock = asyncio.Lock()  # index change + persistence stay atomic
+        self._audit = audit
+        # async (relay_id, channel_id) -> plain label or None; set by the builder (issue #2355)
+        self.channel_namer = None
+        self._audit_tasks: set[asyncio.Task] = set()
+        self._audit_order = asyncio.Lock()  # FIFO: records land in the order edits happened
 
     # ---------------------------------------------------------------- tiers
 
@@ -235,21 +242,121 @@ class RelayService:
             raise ValueError(f"Unsupported adapter_type '{record.adapter_type}'")
         return spec
 
-    async def set_policy(self, session_id: str, relay_id: str, target: str, policy: str) -> None:
+    # ---------------------------------------------------------- policy audit
+
+    def attach_policy_audit(self, session_manager: SessionManager) -> None:
+        """Route every audited session-tier policy write into the relay audit log (#2355)."""
+        session_manager.add_policy_change_callback(self._on_policy_change, self._sole_relay_id)
+
+    def _on_policy_change(
+        self, session_id: str, changes: list[dict], source: str, extra: dict | None
+    ) -> None:
+        """SessionManager callback (runs under the session lock): schedule only, never raise."""
+        self._schedule_audit(self._audit_session_changes(session_id, changes, source, extra))
+
+    def audit_tier_policy_change(
+        self, tier: str, tier_id: str, tier_name: str | None, old_cfg: dict | None,
+        new_cfg: dict | None,
+    ) -> None:
+        """Template/profile edit: one record per changed target with ``session_id`` null.
+        Dependent sessions get no per-session record (deliberate: inherited, merged live)."""
+        sole = self._sole_relay_id()
+        changes = diff_policies(
+            normalize_policies((old_cfg or {}).get("relay_channel_policies"), sole),
+            normalize_policies((new_cfg or {}).get("relay_channel_policies"), sole),
+        )
+        if changes:
+            self._schedule_audit(self._audit_changes(
+                changes, source=tier,
+                fields={"tier": tier, "tier_id": tier_id, "tier_name": tier_name},
+            ))
+
+    def _schedule_audit(self, coro) -> None:
+        if self._audit is None:
+            coro.close()
+            return
+        async def ordered() -> None:
+            async with self._audit_order:
+                await coro
+
+        try:
+            task = asyncio.get_running_loop().create_task(ordered())
+        except RuntimeError:  # no running loop: nothing can be written without blocking
+            coro.close()
+            logger.warning("Relay policy audit skipped: no running event loop")
+            return
+        self._audit_tasks.add(task)
+        task.add_done_callback(self._audit_tasks.discard)
+
+    async def drain_audit(self) -> None:
+        """Wait for scheduled audit writes (tests, shutdown)."""
+        while self._audit_tasks:
+            await asyncio.gather(*list(self._audit_tasks), return_exceptions=True)
+
+    async def _audit_session_changes(
+        self, session_id: str, changes: list[dict], source: str, extra: dict | None
+    ) -> None:
+        info = await self._sessions.get_session_info(session_id)
+        fields: dict[str, Any] = {"session_id": session_id}
+        if info is not None:
+            fields["handle"] = info.config.get("relay_handle")
+            fields["session_name"] = info.name
+        if source != "prompt":  # prompt records keep their pre-#2355 shape plus ``source``
+            fields["tier"] = "session"
+        await self._audit_changes(
+            changes, source=source, fields=fields, extra=extra, with_old=source != "prompt"
+        )
+
+    async def _audit_changes(
+        self, changes: list[dict], *, source: str, fields: dict[str, Any],
+        extra: dict | None = None, with_old: bool = True,
+    ) -> None:
+        try:
+            for change in changes:
+                record = {
+                    **fields, **(extra or {}), "event": "policy_change", "outcome": "ok",
+                    "channel_id": change["target"], "policy": change["new"], "source": source,
+                }
+                if with_old:
+                    record["old_policy"] = change["old"]
+                if "channel_name" not in record:
+                    record["channel_name"] = await self._channel_name(
+                        change["relay_id"], change["target"]
+                    )
+                await self._audit.record(change["relay_id"], **record)
+        except Exception:  # an audit failure never affects the edit
+            logger.exception("Relay policy audit failed")
+
+    async def _channel_name(self, relay_id: str, channel_id: str) -> str | None:
+        if self.channel_namer is None:
+            return None
+        try:
+            return await self.channel_namer(relay_id, channel_id)
+        except Exception:
+            return None
+
+    async def set_policy(
+        self, session_id: str, relay_id: str, target: str, policy: str, *, source: str,
+        audit_extra: dict[str, Any] | None = None,
+    ) -> None:
         """Session-tier policy edit, validated by the relay's adapter model (ValueError -> 422)."""
         spec = await self._require_attached_relay(session_id, relay_id)
         spec.policy_model.validate_target(target)
         spec.policy_model.validate_value(policy)
         await self._sessions.update_relay_policy(
-            session_id, relay_id, target, policy, sole_relay_id=self._sole_relay_id()
+            session_id, relay_id, target, policy, source=source,
+            sole_relay_id=self._sole_relay_id(), audit_extra=audit_extra,
         )
         await self.refresh_summary(session_id)
 
-    async def delete_policy(self, session_id: str, relay_id: str, target: str) -> None:
+    async def delete_policy(
+        self, session_id: str, relay_id: str, target: str, *, source: str
+    ) -> None:
         spec = await self._require_attached_relay(session_id, relay_id)
         spec.policy_model.validate_target(target)
         await self._sessions.update_relay_policy(
-            session_id, relay_id, target, None, sole_relay_id=self._sole_relay_id()
+            session_id, relay_id, target, None, source=source,
+            sole_relay_id=self._sole_relay_id(),
         )
         await self.refresh_summary(session_id)
 

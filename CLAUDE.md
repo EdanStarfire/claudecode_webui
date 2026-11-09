@@ -378,10 +378,21 @@ secret is deleted, `has_*_token` turns false and `*_secret_missing` true (tools 
   card -> a standalone `relay-prompt-{request_id}` card carries the prompt. In case 3 the owner still sees and answers the
   prompt, but the original tool card only shows "running" and is not linked to it (degraded AC8; the synthetic card is
   finalised on every outcome). Hook failures never block a tool call.
+- **One awaiting record per tool call (issue #2355)**: the #1694 ordering barrier is keyed by TURN id and a turn is several SDK
+  assistant messages, so after a text-only message of the turn the permission request can reach the tracker before the
+  tool_use message that carries the input. `request_decision` therefore sets the callback's real input on the tracked call first
+  (`update_tool_call_input(..., store=False)`, no separate record) so the single awaiting_permission record has it, and
+  `update_tool_call_input` is a no-op (no store; `_emit_tool_call_updates` skips the re-emit) when the call is no longer PENDING
+  and the input is unchanged. A different input still stores; the #2109 `{}` -> real input fill of a PENDING placeholder is intact.
+  Applies to every permission-gated tool, not only relay.
 - **Prompt answers** (`relay_choice` on the permission REST call): `Allow and set channel to auto` persists
   `auto` at SESSION tier live (no restart); `choose_policy` persists the chosen policy, and a policy that forbids
   the action (e.g. `read_only` for a send) denies it. Deny persists nothing. Relay prompts never offer
   permission-rule suggestions.
+- **Refusal parity (issue #2355)**: the permission pre-hook deny (default / acceptEdits, where the callback runs first) carries the
+  same content as the handler's refusal (auto): human message + `\n` + the structured JSON block, built by one shared
+  formatter (`relay/gate.py::refusal_text` / `refusal_detail`, also used by `error_result`). `blocked` stays "not accessible to
+  this session" with no name or label. Pre-hook audit rows are unchanged.
 - **Refusals** are `is_error` results with a human block plus a JSON block
   `{"error":"relay_policy","code":...,"channel","action","policy"}`; codes: `channel_blocked`,
   `send_not_permitted`, `approval_denied`, `approval_timeout`, `approval_unavailable`, `approval_cancelled`,
@@ -406,6 +417,11 @@ secret is deleted, `has_*_token` turns false and `*_secret_missing` true (tools 
   characters stripped, 80 chars). They appear in the permission prompt (`channel_label`: `#name`, `DM with <name>`,
   `your self-DM` from the relay's `owner_user_id`; plain text), in audit records (`channel_name`) and inside the
   wrapper.
+- **Search flags self-DM agent posts (issue #2355)**: Slack search results carry no app/bot identity or metadata, so
+  `search` sets `is_agent_message` (in addition to `is_agent_message()` from `events.py`) only when the result's channel is
+  the owner's self-DM, its `user` is the relay's `owner_user_id` AND `has_agent_marker(text)` (the send path's matcher, on the
+  untruncated text). Unknown self-DM or owner -> never flagged (fail closed); the marker elsewhere or from anyone else never
+  flags. `read_thread` is unchanged. Edge case: the owner hand-typing the marker flags their own message.
 - **Outbound tagging**: every `post` / `reply` carries Slack metadata `event_type=cc_webui_agent_message` with
   `session_id`, `handle`, `relay_id`; a footer (default on, `relay_footer_enabled`) is a `context` block after the
   body `section` blocks (`{session_link}` renders empty: the Backend does not know a public URL). Footers show the
@@ -414,6 +430,22 @@ secret is deleted, `has_*_token` turns false and `*_secret_missing` true (tools 
 - **Audit** (`relay/audit.py`): `data/relays/{relay_id}/audit.jsonl`, 10 MB x 5 rotation, whitelisted fields only
   (text is a sha256 + 200-char preview), covers post/reply/upload/react/mark_read outcomes, denied attempts and
   policy changes; `GET /api/relays/{id}/audit`.
+  **Policy changes (issue #2355)** all go through one audited write path: `SessionManager.update_relay_policy(...,
+  *, source)` (`source` is REQUIRED, no default: `editor` | `prompt`) and `update_session` (`_replace_config`, flat
+  CONFIG_FIELDS, create-time overrides: `source=config`) diff `relay_channel_policies` (normalised) **inside the
+  per-session lock** and pass the per-target diff to sync policy-change callbacks; `RelayService` registers one that
+  only schedules the audit write (FIFO task; failures are logged and swallowed, never block or fail the edit).
+  One record per changed `(relay_id, target)`: `event=policy_change`, `channel_id`, best-effort `channel_name`,
+  `old_policy` (null = none), `policy` (new; null = removed), `source`, `tier=session`, `session_id`, `handle`,
+  `session_name`; a no-op write records nothing. Create-time overrides are `source=config` with `old_policy=null`.
+  Prompt-driven records keep their pre-#2355 fields (`tool`, `approval=prompt_promote`, `channel_name` = label) and
+  only gain `source=prompt` (no `old_policy` / `tier`; the viewer then shows `→ new`). Profile/template edits
+  (`ApplicationService.update_template/update_profile`) are audited **once per changed target per tier edit**
+  with `source=tier=template|profile`, `tier_id`, `tier_name`, `session_id=null`; there is **deliberately no
+  per-session fan-out** of "effective policy changed" records for inherited edits (it would cost a before/after
+  merge per dependent session and N near-duplicate records), so the viewer's session filter does not show tier
+  records and the relay-wide view does. The audit viewer renders `old → new` (`(none)` for null) plus a quiet
+  source/tier tag.
 
 ### Self-DM marker, identity and discovery (outbound stage 1c-ii)
 

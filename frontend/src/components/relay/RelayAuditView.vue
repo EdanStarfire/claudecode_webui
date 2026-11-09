@@ -34,7 +34,10 @@
           <td data-label="Action" data-testid="audit-action">{{ actionLabel(r) }}</td>
           <td data-label="Channel" :title="r.channel_id || ''">{{ r.channel_name || r.channel_id || '' }}</td>
           <td data-label="Outcome" class="outcome">{{ r.outcome || '' }}<template v-if="r.code"> · {{ r.code }}</template></td>
-          <td data-label="Detail" class="detail" data-testid="audit-detail">{{ detail(r) }}</td>
+          <td data-label="Detail" class="detail">
+            <span data-testid="audit-detail">{{ detail(r) }}</span>
+            <span v-if="policySource(r)" class="audit-tag" data-testid="audit-source">{{ policySource(r) }}</span>
+          </td>
         </tr>
       </tbody>
     </table>
@@ -60,6 +63,7 @@ const props = defineProps({ relayId: { type: String, required: true } })
 
 const PAGE = 100
 const PREVIEW_CAP = 200
+const NONE = '(none)'
 const TOOL_PREFIX = 'mcp__relay_slack__'
 const ACTIONS = {
   post: 'Post', reply: 'Reply', upload_file: 'Upload', react: 'React', mark_read: 'Mark read',
@@ -101,8 +105,13 @@ function actionLabel(r) {
   return ACTIONS[tool] || tool || r.event || ''
 }
 
+// Records written before #2355, and prompt answers, carry no usable old value: show the new one only.
 function detail(r) {
-  if (r.event === 'policy_change') return r.policy ? `→ ${r.policy}` : ''
+  if (r.event === 'policy_change') {
+    const next = r.policy || NONE
+    if (!r.source || r.source === 'prompt') return r.policy ? `→ ${r.policy}` : `→ ${NONE}`
+    return `${r.old_policy || NONE} → ${next}`
+  }
   const parts = []
   if (r.tool === 'find_channels' || r.tool === 'get_identity') {
     if (r.query_preview) parts.push(`“${r.query_preview}”`)
@@ -113,6 +122,14 @@ function detail(r) {
   if (r.text_preview) return r.text_preview.slice(0, PREVIEW_CAP)
   if (r.policy) return `policy ${r.policy}`
   return ''
+}
+
+function policySource(r) {
+  if (r.event !== 'policy_change' || !r.source) return ''
+  if (r.source === 'template' || r.source === 'profile') {
+    return r.tier_name ? `${r.source}: ${r.tier_name}` : r.source
+  }
+  return r.source
 }
 
 function formatTime(ts) {
@@ -165,6 +182,11 @@ defineExpose({ reload: () => load(true) })
 .audit-table th { text-align: left; color: var(--bs-secondary-color); font-weight: 500; padding: 4px 8px; border-bottom: 1px solid var(--bs-border-color); }
 .audit-table td { padding: 5px 8px; vertical-align: top; border-bottom: 1px solid var(--bs-border-color); }
 .detail { white-space: pre-wrap; word-break: break-word; max-width: 360px; }
+.audit-tag {
+  display: inline-block; margin-left: 6px; padding: 0 5px; border-radius: 3px; font-size: 10px; line-height: 16px;
+  color: var(--bs-tertiary-color, #6b7280); border: 1px solid var(--bs-border-color, rgba(0,0,0,0.12));
+  vertical-align: baseline; white-space: nowrap; user-select: none;
+}
 .outcome-denied .outcome { color: #d29922; }
 .outcome-error .outcome { color: #f87171; }
 .older { align-self: flex-start; }
@@ -175,6 +197,7 @@ defineExpose({ reload: () => load(true) })
   .audit-table tr { border: 1px solid var(--bs-border-color); border-radius: 6px; padding: 6px 8px; margin-bottom: 8px; }
   .audit-table td { border: 0; padding: 2px 0; display: flex; gap: 8px; }
   .audit-table td::before { content: attr(data-label); flex: 0 0 64px; color: var(--bs-secondary-color); }
-  .detail { max-width: none; }
+  .detail { max-width: none; flex-wrap: wrap; align-items: baseline; }
+  .audit-tag { align-self: flex-start; margin-left: 0; }
 }
 </style>

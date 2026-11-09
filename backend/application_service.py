@@ -6,6 +6,7 @@ coordinator attributes directly.
 """
 from __future__ import annotations
 
+import copy
 import time
 from typing import TYPE_CHECKING, Any
 
@@ -1232,10 +1233,15 @@ class ApplicationService:
         return template.to_dict()
 
     async def update_template(self, template_id: str, **kwargs) -> dict | None:
+        old = await self.coordinator.template_manager.get_template(template_id)
+        old_cfg = copy.deepcopy(old.config) if old else None  # read before the update (#2355)
         template = await self.coordinator.template_manager.update_template(
             template_id=template_id, **kwargs
         )
         if template:
+            self.relay_service.audit_tier_policy_change(
+                "template", template_id, template.name, old_cfg, template.config
+            )
             await self.relay_service.refresh_for_template(template_id)  # issue #2103
         return template.to_dict() if template else None
 
@@ -1273,8 +1279,13 @@ class ApplicationService:
         name: str | None = None,
         config: dict | None = None,
     ) -> dict:
+        old = await self.coordinator.profile_manager.get_profile(profile_id)
+        old_cfg = copy.deepcopy(old.config) if old else None  # read before the update (#2355)
         profile = await self.coordinator.profile_manager.update_profile(
             profile_id=profile_id, name=name, config=config
+        )
+        self.relay_service.audit_tier_policy_change(
+            "profile", profile_id, profile.name, old_cfg, profile.config
         )
         await self.relay_service.refresh_for_profile(profile_id)  # issue #2103
         return profile.to_dict()

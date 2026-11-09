@@ -2229,12 +2229,11 @@ class SessionCoordinator:
         )
 
     def update_tool_call_input(
-        self,
-        session_id: str,
-        tool_use_id: str,
-        input_params: dict[str, Any],
+        self, session_id: str, tool_use_id: str, input_params: dict[str, Any], *, store: bool = True,
     ) -> ToolCall | None:
-        return self._tool_call_tracker.update_tool_call_input(session_id, tool_use_id, input_params)
+        return self._tool_call_tracker.update_tool_call_input(
+            session_id, tool_use_id, input_params, store=store
+        )
 
     def _parse_send_comm_sender_attachments(
         self,

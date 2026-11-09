@@ -162,13 +162,26 @@ def build_core_managers(
     relay_manager = RelayManager(data_dir, credential_vault)
     register_relay_manager(relay_manager)  # write-path policy validation resolves adapters
     secrets_service.relay_manager = relay_manager  # relay credentials count as secret usage
+    relay_audit = RelayAuditLog(data_dir)
     relay_service = RelayService(
         relay_manager, RelayHandleIndex(session_manager.has_session),
-        session_manager, template_manager, profile_manager,
+        session_manager, template_manager, profile_manager, audit=relay_audit,
     )
+    relay_service.attach_policy_audit(session_manager)  # issue #2355
     oauth_callback_listener_manager.set_relay_oauth(relay_manager)
-    relay_audit = RelayAuditLog(data_dir)
     relay_gate = RelayPolicyGate(relay_service, relay_manager, session_manager, GrantStore())
+
+    async def _audit_channel_name(relay_id: str, channel_id: str) -> str | None:
+        """Best-effort label for a policy-audit record (background task; bounded lookup)."""
+        if relay_id not in relay_manager.relays or not relay_manager.has_token(relay_id, "user"):
+            return None
+        label = await relay_gate.names.channel_label(
+            relay_manager.adapter_for(relay_id), relay_id, channel_id,
+            getattr(relay_manager.relays[relay_id], "owner_user_id", None),
+        )
+        return None if label == channel_id else label
+
+    relay_service.channel_namer = _audit_channel_name
     relay_bridge = RelayPermissionBridge(relay_gate, relay_service, relay_audit)
     relay_registry = RelayCallRegistry()
     relay_broker = RelayPromptBroker(relay_registry, relay_bridge)
