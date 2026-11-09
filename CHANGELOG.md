@@ -6,6 +6,9 @@ Versioning: [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Added
+- Relay inbound (stage 3a): the owner can instruct a session from their own Slack self-DM. A top-level message containing `!handle` is delivered through Socket Mode (app-level token) to that session, which starts if stopped and waits for idle if busy; replies in the thread need no handle and the session's replies there need no approval. Only the owner's own self-DM messages (no app/bot id, no agent marker) are ever instructions; edits, other users and channels are ignored. Library -> Relays shows the connection status and a "Receive instructions from Slack" switch. Known limitation: an instruction queued for a busy or stopped session is lost if the Backend restarts before it is drained (pre-existing queue behavior, #2362), and a later delivery failure is not reported back to Slack (#2103 stage 3a, part of #2103)
+
 ### Changed
 - Relay don't-ask mode now fails closed: a send (post, reply, upload_file, react) to an `ask` channel or a channel with no policy is refused immediately (`approval_unavailable_dont_ask` / `policy_unset_dont_ask`, audited as denied) instead of prompting; a read_thread / mark_read on a channel with no policy is refused the same way (it would have raised a choose-policy prompt). `auto`, `blocked`, `read_only`, other reads and all other modes are unchanged; bypass still prompts (deliberate). The mode is read per call, so switching needs no restart, and a prompt already waiting stays answerable. The send tools' descriptions (and read_thread / mark_read) now state the don't-ask and unattended behavior; existing sessions need a restart to see the new descriptions (#2360, part of #2103)
 
