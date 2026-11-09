@@ -2,7 +2,8 @@
 
 One decision path serves both gates: the permission-callback pre-hook (``evaluate``) and the
 authoritative tool-handler check (``authorize``). The handler's check is the one that
-cannot be bypassed: it reads live policy (never the permission mode), ``ask`` sends need a
+cannot be bypassed: it reads live policy (the permission mode only decides, in the handler's
+prompt step, whether a needed prompt is refused in don't-ask mode), ``ask`` sends need a
 one-shot grant from the callback's prompt or an answer to the handler's own prompt, unlisted
 channels need a chosen policy, and text containing ``!handle`` trigger syntax is refused
 before any network call.
@@ -356,7 +357,7 @@ class RelayPolicyGate:
     async def authorize(
         self, ctx: RelayContext, tool: str, args: dict[str, Any]
     ) -> tuple[GateResult, Grant | None]:
-        """Authoritative handler-side check, from live policy (never the permission mode).
+        """Authoritative handler-side check, from live policy (the permission mode is not read here; see ``_ask_owner``).
 
         ``allow`` / ``deny`` are final. A send that needs approval (``prompt`` / ``choose_policy``)
         is allowed when a one-shot grant exists (the permission callback already prompted:
@@ -413,6 +414,16 @@ def approval_refusal(code: str, channel_id: str | None, action: str, policy: str
         "approval_unavailable": (
             "No one is available to approve this send (unattended session). Nothing was sent; "
             "ask the user to set the channel to `auto` or run an attended session."
+        ),
+        "approval_unavailable_dont_ask": (
+            "This session is in don't-ask mode, so a send to an `ask` channel is refused instead "
+            "of prompting. Nothing was sent. Ask the owner to set the channel to `auto` or to "
+            "change the permission mode."
+        ),
+        "policy_unset_dont_ask": (
+            f"Channel {channel_id or ''} has no policy and this session is in don't-ask mode, so "
+            "none can be chosen and nothing was sent. Ask the owner to set a policy for the "
+            "channel (for example `auto`) or to change the permission mode."
         ),
         "approval_cancelled": (
             "The session was interrupted or stopped before the owner answered; nothing was sent."

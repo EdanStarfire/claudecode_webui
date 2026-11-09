@@ -143,10 +143,11 @@ async def test_unlisted_deny_refuses(h):
     assert CH_UNLISTED not in h.env.info.config["relay_channel_policies"]["relay1"]
 
 
-# ------------------------------------------------------------------ AC3: permission mode is never read
+# ------------------------------------------------------------------ AC3: bypass keeps prompting
 
-async def test_permission_mode_is_never_consulted(tmp_path):
-    # StrictInfo raises if anything reads a permission-mode attribute: every mode behaves alike
+async def test_only_the_live_mode_is_read_and_bypass_prompts(tmp_path):
+    # StrictInfo raises on any permission-mode attribute but current_permission_mode (issue #2360:
+    # the mode is consulted only to refuse in don't-ask); bypass behaves like every other mode
     h = Harness(tmp_path, permission_mode="bypassPermissions")
     h.env.info.current_permission_mode = "bypassPermissions"
     result, _ = await run_post(h, args_for(), ALLOW)
@@ -249,6 +250,13 @@ async def test_can_prompt_false_when_session_not_running(h, state):
 async def test_can_prompt_false_without_active_sdk(h):
     h.coord._active_sdks.clear()
     assert await can_prompt(h) == (False, "session_not_running")
+
+
+async def test_can_prompt_false_in_dont_ask_mode_after_unattended_reasons(h):
+    h.env.info.current_permission_mode = "dontAsk"
+    assert await can_prompt(h) == (False, "dont_ask_mode")
+    h.env.info.is_ephemeral = True
+    assert await can_prompt(h) == (False, "ephemeral_session")
 
 
 async def test_can_prompt_true_for_permanent_minion_scheduled_session(h):

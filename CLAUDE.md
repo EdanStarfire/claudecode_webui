@@ -348,8 +348,8 @@ secret is deleted, `has_*_token` turns false and `*_secret_missing` true (tools 
   (`relay/permission_bridge.py`, top of `permission_callback` for `mcp__relay_slack__*`) allows reads and `auto` sends
   without UI, denies `blocked` / `read_only`-send and `!handle` text, and prompts for `ask` / unlisted channels
   (`tool_call.permission.relay_prompt`, kinds `ask_send` / `choose_policy`, UI `RelayPermissionPrompt.vue`).
-  The **handler re-checks live policy and is authoritative** and never consults the permission mode. `auto` sends and
-  reads need no prompt in any mode; `blocked` / `read_only` refuse in any mode. A send that needs approval
+  The **handler re-checks live policy and is authoritative** and consults the permission mode only to refuse in don't-ask
+  (below). `auto` sends and reads on listed channels need no prompt in any mode; `blocked` / `read_only` refuse in any mode. A send that needs approval
   (`ask` / unlisted) proceeds on a one-shot grant (`relay/grants.py`; bound to session + tool + canonical input hash,
   60 s, single use) that the callback's approved prompt left (default / acceptEdits: audit `prompt_via=callback`, one
   prompt in total), otherwise the **handler prompts the owner itself** (issue #2353; `relay/prompt_broker.py`,
@@ -365,6 +365,22 @@ secret is deleted, `has_*_token` turns false and `*_secret_missing` true (tools 
   unattended prompts (`deny_unattended_permission_prompts`), the session `is_ephemeral`, it has no permission callback
   (scheduler launches pass none) or it is not running. A permanent-minion schedule only enqueues into an ordinary attended
   session, so it prompts. Unattended `ask` -> `approval_unavailable`; unattended unlisted -> `policy_unset`; nothing waits.
+- **Don't-ask mode fails closed (issue #2360).** In `dontAsk` (`PermissionMode.DONT_ASK`; "do not wait for me") the
+  handler refuses instead of prompting. `can_prompt` returns `(False, "dont_ask_mode")` for the session's live
+  `current_permission_mode == dontAsk`, checked only AFTER the unattended reasons (an unattended don't-ask session keeps
+  `approval_unavailable` / `policy_unset`). `_ask_owner` maps it to `approval_unavailable_dont_ask` (`ask` channel) /
+  `policy_unset_dont_ask` (no policy) through the normal refusal path: audited as denied, same message + JSON block
+  formatter, the broker is never called, nothing waits, no policy is saved, nothing is sent. Message: the session is in
+  don't-ask mode; the owner can set the channel to `auto` or change the mode. This applies to post, reply, upload_file,
+  react (ask and unlisted) and, **owner-visible interpretation of "reads work as today"**, to read_thread / mark_read on
+  an UNLISTED channel (they would raise a choose-policy prompt, so they are refused with `policy_unset_dont_ask`);
+  reads of listed channels, search, get_identity and find_channels are unchanged. **Bypass keeps prompting** for `ask`
+  and unlisted channels (deliberate: failing open on external writes is too dangerous); default, manual, acceptEdits,
+  plan and auto also prompt. The mode is read per call (no restart; switching out resumes prompting). A prompt already
+  waiting when the session switches into don't-ask stays answerable (`re_authorize` does not re-check the mode); a valid
+  one-shot grant is honoured; only calls that START in don't-ask refuse. Subagents share the session mode. The CLI itself
+  denies non-allowed tools in don't-ask before the relay runs (no change). Tool descriptions are static per launch:
+  sessions started before this change must be restarted to show the new text.
 - **Interrupt / stop / restart / reset / task cancellation** while a handler prompt waits: the prompt is cleared
   (`deny_for_session`, `cleanup_pending_for_session`, a new SDK epoch, or `CancelledError`), the call ends refused
   (`approval_cancelled`), the card is marked denied and nothing is sent.
@@ -396,6 +412,7 @@ secret is deleted, `has_*_token` turns false and `*_secret_missing` true (tools 
 - **Refusals** are `is_error` results with a human block plus a JSON block
   `{"error":"relay_policy","code":...,"channel","action","policy"}`; codes: `channel_blocked`,
   `send_not_permitted`, `approval_denied`, `approval_timeout`, `approval_unavailable`, `approval_cancelled`,
+  `approval_unavailable_dont_ask` / `policy_unset_dont_ask` (don't-ask; `ask` / unlisted),
   `policy_unset` (unattended + unlisted only), `trigger_syntax_refused`, `channel_unresolved`, `no_readable_channels`.
   (`approval_required` is retired: the handler prompts instead.) Blocked channels only say "not accessible to this session".
 - **Search** (`relay/search.py`) is scoped with `in:` filters to read_only/ask/auto channels (chunks of 10;

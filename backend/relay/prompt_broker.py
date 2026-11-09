@@ -4,7 +4,9 @@ The permission callback only runs when the CLI's own mode decides to ask, so in 
 mode (and for pre-approved rules) a send that needs approval reaches the tool handler with no
 grant. The handler's gate is authoritative, so it asks the owner itself through this broker,
 over the same prompt machinery (``PermissionService.request_decision``), then re-evaluates
-policy before sending. Permission mode is never consulted.
+policy before sending. The broker itself never reads the permission mode: the handler refuses
+before calling it in don't-ask mode (issue #2360), and a prompt already waiting stays
+answerable if the session switches into don't-ask meanwhile.
 
 The prompt is shown on the call's own tool card: its ``tool_use_id`` comes from the
 record-only ``PreToolUse`` hook registry; failing that from a scan of the session's tracked
