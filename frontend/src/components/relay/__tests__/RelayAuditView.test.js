@@ -48,6 +48,38 @@ describe('RelayAuditView', () => {
     expect(denied.classes()).toContain('outcome-denied')
   })
 
+  it('humanizes the inbound events and keeps their outcome styling (stage 3a)', async () => {
+    const E = (over) => REC({ tool: undefined, ...over })
+    apiMock.get.mockResolvedValue({ records: [
+      E({ event: 'inbound_instruction', outcome: 'delivered', text_preview: 'run the checks' }),
+      E({ event: 'inbound_instruction', outcome: 'refused', code: 'unknown_handle' }),
+      E({ event: 'inbound_instruction', outcome: 'late', code: 'received_late' }),
+      E({ event: 'inbound_instruction', outcome: 'rate_limited', code: 'rate_limited' }),
+      E({ event: 'inbound_instruction', outcome: 'deduped' }),
+      E({ event: 'inbound_reply', outcome: 'ok', code: 'unknown_handle' }),
+      E({ event: 'inbound_reply_failed', outcome: 'error', code: 'unknown_handle' }),
+      E({ event: 'inbound_connection', outcome: null, inbound_status: 'auth_failed', code: 'token_revoked' }),
+      E({ event: 'inbound_drop_summary', outcome: 'ok', count: 3, reason_counts: { not_owner: 2, deduped: 1 } }),
+      E({ event: 'inbound_housekeeping', outcome: 'ok', code: 'expired', count: 4 }),
+    ] })
+    const { wrapper } = await mountView()
+    const actions = wrapper.findAll('[data-testid="audit-action"]').map(a => a.text())
+    expect(actions).toEqual(['Slack instruction', 'Slack instruction', 'Slack instruction', 'Slack instruction',
+      'Slack instruction', 'Slack reply', 'Slack reply', 'Inbound connection', 'Inbound drops', 'Inbound housekeeping'])
+    expect(actions.join(' ')).not.toMatch(/inbound_/)
+    const rows = wrapper.findAll('[data-testid="audit-record"]')
+    expect(rows[1].text()).toContain('refused · unknown_handle')
+    expect(rows[1].classes()).toContain('outcome-refused')
+    expect(rows[2].classes()).toContain('outcome-late')
+    expect(rows[3].classes()).toContain('outcome-rate_limited')
+    expect(rows[6].classes()).toContain('outcome-error')
+    const details = wrapper.findAll('[data-testid="audit-detail"]').map(d => d.text())
+    expect(details[0]).toBe('run the checks')
+    expect(details[7]).toBe('auth_failed')
+    expect(details[8]).toBe('not_owner 2 · deduped 1')
+    expect(details[9]).toBe('4')
+  })
+
   it('policy changes show old → new with (none) and a quiet source/tier marker (#2355)', async () => {
     const P = (over) => REC({ event: 'policy_change', tool: undefined, ...over })
     apiMock.get.mockResolvedValue({ records: [
