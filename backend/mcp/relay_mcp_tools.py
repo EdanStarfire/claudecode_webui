@@ -374,7 +374,7 @@ class RelayMCPTools:
             if self.broker else None
         )
         result, grant = await self.gate.authorize(ctx, tool_name, args)
-        approval = grant.approval if grant else "auto"
+        approval = grant.approval if grant else (result.approval or "auto")
         prompt_via = "callback" if grant else None
         if result.kind in (PROMPT, CHOOSE_POLICY):
             ctx, result, approval, refusal = await self._ask_owner(

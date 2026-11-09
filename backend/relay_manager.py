@@ -91,6 +91,17 @@ class RelayManager:
         # state -> {relay_id, redirect_uri, created_at}; in-memory like OAuthFlowManager._pending
         self._oauth_pending: dict[str, dict] = {}
         self._oauth_results: dict[str, dict] = {}
+        # Inbound (issue #2103 stage 3a): sync listeners called with (relay_id) after a credential /
+        # relay change, and a provider of the live inbound status for the public record.
+        self.change_listeners: list[Callable[[str], None]] = []
+        self.inbound_status_provider: Callable[[str], dict[str, Any]] | None = None
+
+    def _notify_changed(self, relay_id: str) -> None:
+        for listener in self.change_listeners:
+            try:
+                listener(relay_id)
+            except Exception:
+                logger.exception("Relay change listener failed")
 
     # --------------------------------------------------------------- storage
 
@@ -112,6 +123,10 @@ class RelayManager:
             data[field] = name
             data[f"{kind}_secret_missing"] = bool(name) and not self._vault.secret_exists(name)
             data[f"has_{kind}_token"] = self.has_token(record.relay_id, kind)
+        if self.inbound_status_provider is not None:
+            status = self.inbound_status_provider(record.relay_id)
+            data["inbound_status"] = status.get("status")
+            data["inbound_detail"] = status.get("detail")
         return data
 
     def _path(self, record: RelayRecord) -> Path:
@@ -168,9 +183,13 @@ class RelayManager:
         name: str | None = None,
         oauth_client_id: str | None = None,
         oauth_client_secret: str | None = None,
+        inbound_enabled: bool | None = None,
     ) -> RelayRecord:
         record = self._require(relay_id)
         old_path = self._path(record)
+        inbound_changed = inbound_enabled is not None and inbound_enabled != record.inbound_enabled
+        if inbound_enabled is not None:
+            record.inbound_enabled = inbound_enabled
         if name is not None:
             if not name.strip():
                 raise ValueError("Relay name cannot be empty")
@@ -185,6 +204,8 @@ class RelayManager:
         if old_path != new_path:
             old_path.unlink(missing_ok=True)
         self._save(record)
+        if inbound_changed:
+            self._notify_changed(relay_id)
         return record
 
     async def delete_relay(self, relay_id: str) -> bool:
@@ -199,6 +220,7 @@ class RelayManager:
                 await self._vault.delete_secret(name)
         self._path(record).unlink(missing_ok=True)
         del self.relays[relay_id]
+        self._notify_changed(relay_id)
         return True
 
     # --------------------------------------------------------------- secrets
@@ -288,6 +310,7 @@ class RelayManager:
         if "app_token_secret" in values:
             record.app_token_secret = app_token_secret.strip()
         self._save(record)
+        self._notify_changed(relay_id)
         return record
 
     async def _refresh_self_dm(
@@ -346,6 +369,7 @@ class RelayManager:
         record.workspace_name = info.team or record.workspace_name
         await self._refresh_self_dm(record, previous_owner, self.adapter_for(relay_id), previous_ws)
         self._save(record)
+        self._notify_changed(relay_id)  # also restarts inbound (e.g. after fixing a revoked app token)
         return {
             "ok": True,
             "workspace_id": info.team_id,
@@ -431,6 +455,7 @@ class RelayManager:
             record.workspace_name = info.team
             await self._refresh_self_dm(record, previous_owner, self._adapter_for_token(token), previous_ws)
             self._save(record)
+            self._notify_changed(record.relay_id)
         except Exception as e:
             self._oauth_results[state] = {"status": "error", "error": str(e)}
             raise

@@ -723,6 +723,7 @@ class RelayUpdateRequest(BaseModel):
     name: str | None = None
     oauth_client_id: str | None = None
     oauth_client_secret: str | None = None
+    inbound_enabled: bool | None = None
 
 
 class RelaySecretsRequest(BaseModel):

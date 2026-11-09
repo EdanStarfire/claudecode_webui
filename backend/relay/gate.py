@@ -95,6 +95,7 @@ class GateResult:
     prompt: dict[str, Any] | None = field(default=None)
     candidates: list[dict[str, Any]] | None = None
     prompt_via: str | None = None  # callback | handler: how an approval was obtained (audit)
+    approval: str | None = None  # "thread_grant": allowed by an owned instruction thread (3a)
 
     def error_result(self) -> dict[str, Any]:
         return error_result(
@@ -160,6 +161,9 @@ class RelayPolicyGate:
         self.names = NameResolver()
         self.directory = RelayDirectory(self.names, clock=clock)
         self.selfdm = SelfDmResolver(relay_manager)
+        # (session_id, relay_id, channel_id, thread_ts) -> bool: the inbound stage's owned
+        # instruction threads (issue #2103 stage 3a, D3). None = feature off.
+        self.thread_grants = None
 
     # --------------------------------------------------------------- context
 
@@ -320,6 +324,12 @@ class RelayPolicyGate:
         policies = await self.service.effective_relay_policies(ctx.session_info, ctx.relay_id)
         eff = policies.get(channel_id)
         policy = eff.policy if eff else None
+        thread_grant = False
+        if policy in (None, "ask") and self._owned_thread(ctx, tool, args, channel_id):
+            # D3: the owner started this self-DM thread with a valid !handle instruction (or
+            # followed up in it): replies there need no prompt. Only an unset / ask policy is
+            # upgraded; an explicit blocked / read_only on the self-DM always wins.
+            policy, thread_grant = "auto", True
         decision = ctx.spec.policy_model.decide(policy, action)
 
         # Messages to the agent carry IDs only: channel names are Slack-user-controlled text.
@@ -334,7 +344,8 @@ class RelayPolicyGate:
             return GateResult(DENY, tool, action, decision.code, msg, channel_id, policy=policy)
         if decision.kind == ALLOW or not with_prompt:
             return GateResult(
-                decision.kind, tool, action, channel_id=channel_id, policy=policy
+                decision.kind, tool, action, channel_id=channel_id, policy=policy,
+                approval="thread_grant" if thread_grant and decision.kind == ALLOW else None,
             )
 
         name = await self.names.channel_name(ctx.adapter, ctx.relay_id, channel_id)
@@ -353,6 +364,24 @@ class RelayPolicyGate:
             decision.kind, tool, action, channel_id=channel_id, channel_name=name,
             channel_label=label, policy=policy, prompt=prompt,
         )
+
+    def _owned_thread(
+        self, ctx: RelayContext, tool: str, args: dict[str, Any], channel_id: str
+    ) -> bool:
+        """True for reply / post / upload_file with a ``thread_ts``, or read_thread, targeting an
+        instruction thread of the CALLING session in the owner's self-DM."""
+        lookup = self.thread_grants
+        if lookup is None or tool not in ("reply", "post", "upload_file", "read_thread"):
+            return False
+        thread_ts = args.get("thread_ts")
+        if not isinstance(thread_ts, str) or not thread_ts:
+            return False
+        record = self.relay_manager.relays.get(ctx.relay_id)
+        if record is None or not record.self_dm_channel_id or channel_id != record.self_dm_channel_id:
+            return False
+        if record.owner_user_id != ctx.owner_user_id:
+            return False
+        return bool(lookup(ctx.session_id, ctx.relay_id, channel_id, thread_ts))
 
     async def authorize(
         self, ctx: RelayContext, tool: str, args: dict[str, Any]

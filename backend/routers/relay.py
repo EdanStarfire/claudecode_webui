@@ -95,10 +95,25 @@ def build_router(webui) -> APIRouter:
                 name=request.name,
                 oauth_client_id=request.oauth_client_id,
                 oauth_client_secret=request.oauth_client_secret,
+                inbound_enabled=request.inbound_enabled,
             )
         except RelayNotFoundError as e:
             raise HTTPException(status_code=404, detail="Relay not found") from e
         return manager().public_dict(record)
+
+    @router.get("/api/relays/{relay_id}/inbound/status")
+    @handle_exceptions("relay inbound status")
+    async def inbound_status(relay_id: str):
+        """Live inbound connection status (in memory; sanitised detail code only)."""
+        record = await manager().get_relay(relay_id)
+        if record is None:
+            raise HTTPException(status_code=404, detail="Relay not found")
+        status = webui.service.relay_inbound.status_for(relay_id)
+        return {
+            "relay_id": relay_id, "enabled": record.inbound_enabled,
+            "status": status["status"], "detail": status["detail"],
+            "connected_at": status.get("connected_at"),
+        }
 
     @router.delete("/api/relays/{relay_id}")
     @handle_exceptions("delete relay")
