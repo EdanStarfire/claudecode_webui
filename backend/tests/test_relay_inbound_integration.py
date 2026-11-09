@@ -8,6 +8,8 @@ import uuid
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock
 
+import pytest
+
 import backend.relay_manager as relay_manager_module
 from backend.delivery_gate import DeliveryGate
 from backend.models.legion_models import DeliveryPolicy, SenderType
@@ -278,3 +280,138 @@ class TestStatusRoute:
         assert body == {"relay_id": "relay1", "enabled": True, "status": "auth_failed",
                         "detail": "token_revoked", "connected_at": None}
         assert client.get("/api/relays/nope/inbound/status").status_code == 404
+
+
+# --- What from_user=True / CommType.SYSTEM mean for an external instruction comm -------------
+# Comm.validate() demands exactly one source (a minion or the user), so the plan's
+# from_user=False was not constructible; the owner's own Slack instruction is "from the user",
+# tagged sender_type=EXTERNAL. These tests pin the consequences (see CLAUDE.md, "Relay inbound").
+
+from unittest.mock import patch  # noqa: E402
+
+from backend.models.legion_models import Comm, CommType  # noqa: E402
+
+_real_sleep = asyncio.sleep
+
+
+async def _fast_sleep(_seconds):
+    await _real_sleep(0)
+
+
+def live_coordinator(tmp_path, *, state=SessionState.ACTIVE, processing=False, paused=False):
+    coord = fake_coordinator(tmp_path, processing=processing, paused=paused)
+    info = coord.session_manager.get_session_info.return_value
+    info.state = state
+    coord.delivery_gate = DeliveryGate(coord)  # the real when-idle drain loop
+    sent: list[tuple] = []
+
+    async def send_message(session_id, message, metadata=None, inject_timestamp=True):
+        sent.append((message, metadata, inject_timestamp))
+        return True
+
+    async def start_session(session_id, permission_callback=None):
+        info.state = SessionState.ACTIVE
+        return True
+
+    coord.send_message = AsyncMock(side_effect=send_message)
+    coord.start_session = AsyncMock(side_effect=start_session)
+    coord.wait_for_session_ready = AsyncMock(return_value=True)
+    coord._permission_callback_factory = None
+    coord._message_callback_registrar = None
+    return coord, info, sent
+
+
+async def _wait_for(predicate, rounds=100):
+    for _ in range(rounds):
+        await asyncio.sleep(0)
+        if predicate():
+            return True
+    return False
+
+
+class TestExternalCommDeliverySemantics:
+    async def test_busy_session_waits_for_idle_then_delivers_dispatch_text(self, tmp_path, monkeypatch):
+        monkeypatch.setattr("backend.delivery_gate.READINESS_SETTLE_SECONDS", 0.01)
+        coord, info, sent = live_coordinator(tmp_path, processing=True)
+        with patch("backend.delivery_gate.asyncio.sleep", new=AsyncMock(side_effect=_fast_sleep)):
+            assert (await enqueue(coord, "c1")).status == "delivered"
+            for _ in range(10):
+                await asyncio.sleep(0)
+            assert sent == []  # busy: held
+            info.is_processing = False
+            assert await _wait_for(lambda: bool(sent))
+        message, metadata, inject = sent[0]
+        assert message == "DISPATCH do it"
+        assert metadata == {"relay_inbound": {"thread_ts": "1.1"}}  # no "comm" key: not a CommCard
+        assert inject is False
+        assert coord.pending_store.get_item("s1", "c1").status == "delivered"
+        coord.delivery_gate.stop_when_idle("s1")
+
+    async def test_stopped_session_is_auto_started(self, tmp_path, monkeypatch):
+        monkeypatch.setattr("backend.delivery_gate.READINESS_SETTLE_SECONDS", 0.01)
+        coord, info, sent = live_coordinator(tmp_path, state=SessionState.TERMINATED)
+        with patch("backend.delivery_gate.asyncio.sleep", new=AsyncMock(side_effect=_fast_sleep)):
+            await enqueue(coord, "c1")
+            assert await _wait_for(lambda: bool(sent))
+        coord.start_session.assert_awaited_once()
+        assert sent[0][0] == "DISPATCH do it"
+        coord.delivery_gate.stop_when_idle("s1")
+
+    async def test_paused_queue_stays_paused_and_nothing_is_sent(self, tmp_path):
+        coord, info, sent = live_coordinator(tmp_path, paused=True)
+        with patch("backend.delivery_gate.asyncio.sleep", new=AsyncMock(side_effect=_fast_sleep)):
+            await enqueue(coord, "c1")
+            for _ in range(20):
+                await asyncio.sleep(0)
+        assert sent == []
+        assert coord.pending_store.get_item("s1", "c1").status == "pending"
+        coord.session_manager.update_session.assert_not_called()  # queue_paused untouched
+        coord.delivery_gate.stop_when_idle("s1")
+
+    async def test_no_session_state_written_on_the_normal_path(self, tmp_path):
+        """from_user=True adds no user-input bookkeeping: the gate never writes session fields
+        (last-input timestamps, queue_paused, ...) for this comm; only send_message runs."""
+        coord, info, sent = live_coordinator(tmp_path)
+        with patch("backend.delivery_gate.asyncio.sleep", new=AsyncMock(side_effect=_fast_sleep)):
+            await enqueue(coord, "c1")
+            assert await _wait_for(lambda: bool(sent))
+        coord.session_manager.update_session.assert_not_called()
+        coord.delivery_gate.stop_when_idle("s1")
+
+    async def test_comm_shape(self, tmp_path):
+        coord, _, _ = live_coordinator(tmp_path, processing=True)
+        await enqueue(coord, "c1")
+        comm = coord.pending_store.get_item("s1", "c1").comm
+        assert comm.from_user is True and comm.from_minion_id is None
+        assert comm.sender_type == SenderType.EXTERNAL and comm.comm_type == CommType.SYSTEM
+        comm.validate()
+        coord.delivery_gate.stop_when_idle("s1")
+
+    def test_a_non_user_non_minion_source_is_not_constructible(self):
+        # why the plan's from_user=False could not be used without changing Comm.validate()
+        comm = Comm(comm_id="x", from_user=False, to_minion_id="s1", sender_type=SenderType.EXTERNAL)
+        with pytest.raises(ValueError, match="exactly one source"):
+            comm.validate()
+
+    async def test_user_authority_consequence_pivot_flush_treats_it_as_the_user(self, tmp_path):
+        """Pinned consequence of from_user=True: sender-scoped flush (_same_sender) groups it with
+        other user-originated items, so a USER pivot cancels a still-pending Slack instruction
+        (like a queued manual message); a minion's pivot does not."""
+        coord, _, _ = live_coordinator(tmp_path, processing=True)
+        await enqueue(coord, "c1")
+        gate = coord.delivery_gate
+        external = coord.pending_store.get_item("s1", "c1").comm
+        user_pivot = Comm(comm_id="p", from_user=True, to_minion_id="s1")
+        minion_pivot = Comm(comm_id="m", from_minion_id="boss", to_minion_id="s1")
+        assert gate._same_sender(external, user_pivot) is True
+        assert gate._same_sender(external, minion_pivot) is False
+        assert gate._sender_label(external) == "the user"
+        gate.stop_when_idle("s1")
+
+    async def test_external_comm_never_implicitly_resumes_a_paused_queue(self, tmp_path):
+        coord, info, sent = live_coordinator(tmp_path, paused=True)
+        # SYSTEM is not a resume trigger even though the user is "authorized"
+        await enqueue(coord, "c1")
+        item = coord.pending_store.get_item("s1", "c1")
+        assert item.comm.comm_type not in (CommType.TASK, CommType.QUESTION, CommType.PIVOT)
+        coord.delivery_gate.stop_when_idle("s1")

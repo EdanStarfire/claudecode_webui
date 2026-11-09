@@ -301,8 +301,8 @@ secret is deleted, `has_*_token` turns false and `*_secret_missing` true (tools 
 
 - **Adapter seam** (`backend/relay/`): `RelayAdapter` protocol (`adapter.py`), `SlackAdapter` on httpx
   (`slack_adapter.py`; bounded retry on rate limits, tokens fetched per call), `RelayEvent` / `is_agent_message`
-  (`events.py`), `SubscriptionStore` protocol, `RelayHandleIndex` (`handles.py`). `start_events()` is reserved
-  for the inbound stage.
+  (`events.py`), `SubscriptionStore` protocol, `RelayHandleIndex` (`handles.py`). `start_events()` stays unused:
+  inbound runs through `relay/inbound/` (see below).
 - **Attachment cascade**: `relay_id`, `relay_footer_enabled`, `relay_footer_template`, `relay_channel_policies`,
   `relay_handle` (new profile area `relay`; `relay_handle` is session-tier only).
 - **Adapter registry** (`relay/adapters.py`, issues #2103/#2346): one `AdapterSpec` per adapter type
@@ -523,6 +523,76 @@ secret is deleted, `has_*_token` turns false and `*_secret_missing` true (tools 
 - **Picker route** `GET /api/relays/{id}/conversations` (`backend/routers/relay.py`): wraps `RelayDirectory.search` through a session-less `RelayPolicyGate.relay_context()` (`DirectoryContext` protocol) with **no policies applied** (blocked and unlisted entries both appear; the agent's `find_channels` still hides blocked); `?ids=` returns `{labels}` through `NameResolver.channel_label`. Slack is called only on snapshot refresh, never per keystroke. There is no route to open a DM: a person without a known DM is shown disabled, the first agent message opens it and prompts for a policy.
 - **`SessionInfo.relay_summary`** (runtime-only, never persisted, like `restart_required`): `{relay_id, adapter_type, handle, policy_count}` or null, computed in memory by `RelayService.refresh_summary` (no Slack calls) after policy/handle edits, session create/config write/start, template/profile saves (iterating dependent sessions), relay delete and at startup; broadcast only on change.
 - **Audit viewer** on Library -> Relays reads `GET /api/relays/{id}/audit`; deep link `/settings/relays?session=<id>`.
+
+### Relay inbound: Socket Mode self-DM instructions (inbound stage 3a)
+
+Stage 3a lets the owner instruct a session from Slack: a top-level message in the owner's own self-DM that
+contains `!handle` is delivered to that session; replies in the resulting thread need no handle. Monitors (3b),
+digests / unread (3c) and the inbound UI / audit view (3d) are later stages. Code: `backend/relay/inbound/`.
+
+- **Transport**: `SocketTransport` protocol (`transport.py`); the real one (`slack_socket.py`) uses `slack-sdk`'s aiohttp
+  `SocketModeClient`, imported lazily in `connect()` (missing library -> status `transport_unavailable`, the Backend runs on).
+  The app-level token is read via `RelayManager.get_token(relay_id, "app")` at connect time only. The SDK's own endless
+  reconnect loop is disabled for URL-issue failures (`issue_new_wss_url`): the client is closed and the supervisor
+  (`service.py`) applies backoff 1 -> 60 s with jitter, >= 5 s between attempts, reset after 60 s stable. An auth failure
+  (`invalid_auth`, `token_revoked`, ...) -> `auth_failed` and NO retries until credentials change. One Backend per app-level
+  token (Slack splits events between connections; documented in the setup guide and the status tooltip).
+- **Status** (`GET /api/relays/{id}/inbound/status`, also `inbound_status` on the relay record): `disabled` (owner switch off
+  or not configured: no app token / user token / owner / self-DM) | `transport_unavailable` | `connecting` | `connected` |
+  `backoff` | `auth_failed` | `stopped`. `inbound_enabled` (default true) is the owner's switch (Library -> Relays chip + toggle,
+  one Save). Saving credentials, Test connection, OAuth, a relay update or delete restart that relay's service.
+- **Trust rule** (`router.py`, pure): an event is an instruction candidate only if its channel is the relay's resolved
+  self-DM, the sender is the owner, it has no `app_id` / `bot_id` / agent metadata, no agent marker, and `channel_type == "im"`.
+  Everything else (other users, channels, bots, the session's own replies, typed-marker messages) is dropped and counted.
+  Edits, deletes and every subtype except none / `file_share` / `thread_broadcast` are dropped before dedupe, so an edit never
+  re-triggers an instruction. Top-level: `!handle` is matched case-insensitively outside Slack angle tokens (`<!here>`),
+  reserved words ignored, the handle removed from the delivered text; 0 handles ignored, an unknown handle / two distinct
+  handles / empty instruction get ONE fixed marked reply (nothing from Slack is echoed). Thread replies route by an owned thread
+  record (`!other` inside is plain text, D5). Files are not delivered (noted in the block).
+- **Delivery**: `SessionCoordinator.enqueue_external_comm` -> `DeliveryGate.deliver` as an `EXTERNAL`, `WHEN_IDLE`, `auto_start`
+  comm (`from_user=True`, `CommType.SYSTEM`: busy sessions wait, stopped ones start, a paused queue keeps it pending; an
+  external instruction never implicitly resumes a queue). The comm id is deterministic (`uuid5` of relay:channel:ts) and an item
+  the in-memory pending store already holds is not enqueued twice. The text is an `OWNER INSTRUCTION` nonce block
+  (`wrap_instruction`) plus the channel / `thread_ts` and the instruction to answer with the relay `reply` tool.
+- **What `from_user=True` + `CommType.SYSTEM` change (versus the plan's `from_user=False` / `TASK`)**: `Comm.validate()` requires exactly one
+  source (a minion or the user), so `from_user=False` with no minion was not constructible; the owner's own instruction is "from the user",
+  tagged `sender_type=EXTERNAL`, `sender_id=relay_id`. Effects, each pinned in `test_relay_inbound_integration.py`: (1) `_is_authorized` is true
+  but `SYSTEM` is not a resume trigger (TASK/QUESTION/PIVOT only) and the delivery is `WHEN_IDLE`, so a paused queue keeps the instruction
+  pending and `queue_paused` is never written; (2) sender-scoped flush treats it as a USER item: a user-originated PIVOT/HALT cancels a still
+  pending Slack instruction exactly as it cancels a queued manual message, a minion's does not, and the stale-pivot note says "the user";
+  (3) `send_message` is called with `inject_timestamp=False` and the dispatch metadata `{"relay_inbound": ...}` (no `comm` key, so the timeline
+  shows an ordinary user turn with the instruction block, not a CommCard); (4) the gate writes no session fields (no last-input / queue
+  bookkeeping); busy sessions wait for idle and stopped ones are auto-started like any `WHEN_IDLE` item. While waiting it appears in the
+  session's Queue panel like a queued message (shown with the raw instruction text).
+- **Acknowledgement**: at-most-once with a persisted in-flight list (`inbound_state.json`, fsync BEFORE the Slack ack). The
+  in-flight list protects only the window between the ack and the enqueue: events accepted but not yet enqueued are re-run at
+  startup. Once enqueued, an instruction is delivered from the relay's point of view.
+- **Known limitation (pre-existing queue behavior, issue #2362; deliberately not fixed in 3a)**: the pending queue is not
+  recovered across a Backend restart (`PendingStore.load` has no production caller and nothing re-arms the when-idle drain at
+  startup). **An instruction queued for a busy or stopped session is lost if the Backend restarts before it is drained**; the
+  owner may need to resend it. 3a adds no `recover_pending`, no startup drain and does not touch `PendingStore` / `DeliveryGate`.
+- **Window and loops**: an instruction older than 15 minutes when processed (`INSTRUCTION_MAX_AGE_SECONDS`) is NOT executed and
+  gets one "received late" reply. First start sets the cursor to now (no backfill before enablement); every `hello`
+  backfills the self-DM since the cursor and owned-thread replies (3 pages max, truncation audited). Accepted instructions are
+  rate limited (30/min burst 10 per relay, 10/min per thread; over the limit -> dropped, audited once a minute, no reply). Relay
+  replies carry the marker, agent metadata and are checked with `contains_trigger_syntax`; a session's output can never
+  instruct another session.
+- **Instruction threads (D3/D4/D6)**: records (`kind=instruction_thread`, `subscriptions.json`) are created ONLY by the pipeline for a
+  validated top-level owner instruction (`origin_ts == thread_ts`); no tool, route or config can create one. Expire after 14 days
+  idle, cap 200 per relay (oldest idle evicted). Session delete drops its records; dispose suspends them (one "no longer active"
+  reply to a follow-up) and the next start restores them; reparent changes nothing.
+- **Thread exception in the policy gate** (`RelayPolicyGate._owned_thread`, one decision path for the pre-hook and the handler):
+  `reply` / `post` / `upload_file` with `thread_ts`, and `read_thread`, targeting an ACTIVE thread record owned by the CALLING
+  session in the relay's self-DM upgrade an effective policy of unset or `ask` to `auto` (audit `approval=thread_grant`). An
+  explicit `blocked` / `read_only` on the self-DM wins. `react`, `mark_read`, `search`, other threads / channels / sessions and
+  the trigger-syntax refusal, marker, footer and metadata paths are untouched. Switching `inbound_enabled` off disables it.
+- **Persistence** (`data/relays/{relay_id}/`): `subscriptions.json`, `inbound_state.json` (cursors, 5000-entry dedupe ring,
+  in-flight list), atomic tmp + fsync + replace; a corrupt file is moved aside (`*.corrupt-<ts>`) and the service starts empty.
+- **Audit** (existing relay audit log): `inbound_instruction` (`delivered|refused|late|rate_limited|deduped|error`, with `code`),
+  `inbound_reply` / `inbound_reply_failed`, `inbound_connection` (`inbound_status`, `code`), `inbound_drop_summary` (`reason_counts`
+  every 5 minutes), `inbound_housekeeping` (expiry / eviction / `backfill_truncated`).
+- **Lifecycle**: `InboundManager` (`RelayRuntime.inbound`) starts last in coordinator `initialize()` and stops first in `cleanup()`
+  (before sessions terminate, state flushed). Dependencies: `slack-sdk>=3.33,<4` (MIT), `aiohttp>=3.9` (Apache-2.0).
 
 #### Relay setup (owner walkthrough)
 

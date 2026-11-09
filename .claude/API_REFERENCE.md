@@ -135,7 +135,8 @@ referenced secret no longer exists), `user_secret_missing` / `app_secret_missing
 |--------|------|-------------|
 | `GET` | `/api/relays` | List relays (`{relays: [...]}`) |
 | `POST` | `/api/relays` | Create (`name`, `adapter_type="slack"`, optional `oauth_client_id`, `oauth_client_secret`); 201, 409 if one exists |
-| `GET`/`PUT`/`DELETE` | `/api/relays/{id}` | Read / rename + OAuth client fields / delete (also deletes its vault secrets) |
+| `GET`/`PUT`/`DELETE` | `/api/relays/{id}` | Read / rename + OAuth client fields + `inbound_enabled` (default true; a change restarts the relay's inbound connection) / delete (also deletes its vault secrets and inbound state files). The record carries `inbound_enabled`, `inbound_status`, `inbound_detail` |
+| `GET` | `/api/relays/{id}/inbound/status` | Live Socket Mode status (in memory): `{relay_id, enabled, status, detail, connected_at}`; `status` in `disabled\|transport_unavailable\|connecting\|connected\|backoff\|auth_failed\|stopped`, `detail` a sanitised code (e.g. `no_app_token`, `token_revoked`, `slack_sdk_missing`). 404 unknown relay |
 | `PUT` | `/api/relays/{id}/secrets` | Reference existing vault secrets: `{user_token_secret?, app_token_secret?}` (names, either alone). Each secret must exist and its value must start with `xoxp-` / `xapp-` (read in-process, never returned);  a secret also used elsewhere is allowed (relay references show in `GET /api/secrets` `usage.relays`); the user token is verified with `auth.test` (records `owner_user_id`, workspace). 400 with a message naming the secret on any failure (record untouched), 404 unknown relay. Replaces the removed paste-token route |
 | `POST` | `/api/relays/{id}/test` | `auth.test` with the stored user token -> `{ok, workspace_*, user_id}` |
 | `POST` | `/api/relays/{id}/oauth/initiate` | Best effort. Body `{redirect_uri}` (https, or http on localhost; otherwise 400) -> `{auth_url, state}` |
