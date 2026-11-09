@@ -1,6 +1,6 @@
 """Normalized relay events and agent-message detection (issue #2103).
 
-``RelayEvent`` is reserved for the inbound stage; ``is_agent_message`` is the
+``RelayEvent`` is the inbound stage's normalized message; ``is_agent_message`` is the
 echo-protection predicate (no sent-message ledger needed).
 """
 
@@ -25,6 +25,30 @@ class RelayEvent:
     channel_type: str | None = None  # "im" | "mpim" | "channel" | "group"
     is_agent: bool = False
     raw: dict[str, Any] | None = None
+    app_id: str | None = None
+    bot_id: str | None = None
+    metadata: dict[str, Any] | None = None
+    subtype: str | None = None
+    file_count: int = 0
+
+    def to_dict(self) -> dict[str, Any]:
+        """Persistable form (``raw`` is dropped: it can be large and is never needed again)."""
+        return {
+            "relay_id": self.relay_id, "channel": self.channel, "ts": self.ts, "user": self.user,
+            "text": self.text, "thread_ts": self.thread_ts, "channel_type": self.channel_type,
+            "is_agent": self.is_agent, "app_id": self.app_id, "bot_id": self.bot_id,
+            "metadata": self.metadata, "subtype": self.subtype, "file_count": self.file_count,
+        }
+
+    @classmethod
+    def from_dict(cls, data: dict[str, Any]) -> RelayEvent:
+        return cls(
+            relay_id=data["relay_id"], channel=data["channel"], ts=data["ts"],
+            user=data.get("user"), text=data.get("text") or "", thread_ts=data.get("thread_ts"),
+            channel_type=data.get("channel_type"), is_agent=bool(data.get("is_agent")),
+            app_id=data.get("app_id"), bot_id=data.get("bot_id"), metadata=data.get("metadata"),
+            subtype=data.get("subtype"), file_count=int(data.get("file_count") or 0),
+        )
 
 
 def is_agent_message(msg: RelayMessage | dict) -> bool:

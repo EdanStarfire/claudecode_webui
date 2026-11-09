@@ -33,6 +33,7 @@ _FIELDS = (
     "thread_ts", "message_ts", "outcome", "code", "policy", "approval", "prompt_via", "text_sha256",
     "text_preview", "query_sha256", "query_preview", "kinds", "result_count",
     "old_policy", "source", "tier", "tier_id", "tier_name",
+    "inbound_status", "count", "reason_counts",
 )
 QUERY_PREVIEW_LEN = 40
 
