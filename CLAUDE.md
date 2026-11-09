@@ -571,6 +571,10 @@ digests / unread (3c) and the inbound UI / audit view (3d) are later stages. Cod
   recovered across a Backend restart (`PendingStore.load` has no production caller and nothing re-arms the when-idle drain at
   startup). **An instruction queued for a busy or stopped session is lost if the Backend restarts before it is drained**; the
   owner may need to resend it. 3a adds no `recover_pending`, no startup drain and does not touch `PendingStore` / `DeliveryGate`.
+- **Known limitation (3a scope, carried into 3b/3d planning): no delivery feedback after the enqueue.** Once an instruction is enqueued it counts as
+  delivered, so if the delivery gate later fails it (auto-start error, session in ERROR, send failure) nothing is posted back to Slack; the
+  failure is only visible in the session's Queue panel (status `failed`). Refusals the pipeline can decide before the enqueue (unknown handle,
+  ephemeral / error / detached session, late) do get a marked reply. A pending instruction shows in the Queue panel as `Slack: <preview>`.
 - **Window and loops**: an instruction older than 15 minutes when processed (`INSTRUCTION_MAX_AGE_SECONDS`) is NOT executed and
   gets one "received late" reply. First start sets the cursor to now (no backfill before enablement); every `hello`
   backfills the self-DM since the cursor and owned-thread replies (3 pages max, truncation audited). Accepted instructions are

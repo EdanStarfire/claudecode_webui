@@ -7,7 +7,7 @@
     </p>
 
     <div v-for="f in FIELDS" :key="f.key" class="picker-field">
-      <label :for="`${uid}-${f.key}`">{{ f.label }} <span v-if="f.optional" class="optional">(inbound stage, optional)</span></label>
+      <label :for="`${uid}-${f.key}`">{{ f.label }} <span v-if="f.optional" class="optional">(for inbound instructions)</span></label>
       <select
         :id="`${uid}-${f.key}`"
         v-model="selection[f.key]"
@@ -38,7 +38,7 @@
     <label class="inbound-toggle" data-testid="relay-inbound-toggle">
       <input v-model="inbound" type="checkbox" data-testid="relay-inbound-checkbox" />
       <span>Receive instructions from Slack</span>
-      <small class="text-muted">(<code>!handle</code> in your self-DM)</small>
+      <small class="text-muted inbound-hint" title="Type !handle followed by the instruction in your own Slack self-DM">(<code>!handle</code> in your self-DM)</small>
     </label>
 
     <div v-if="error" class="picker-error" role="alert" data-testid="relay-secret-error">{{ error }}</div>
@@ -132,4 +132,5 @@ onMounted(() => secretsStore.fetchSecrets())
 }
 .inbound-toggle { display: flex; align-items: center; gap: 8px; font-size: 13px; margin: 0; white-space: nowrap; flex-wrap: wrap; }
 .picker-actions { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
+@media (max-width: 600px) { .inbound-hint { display: none; } }
 </style>
