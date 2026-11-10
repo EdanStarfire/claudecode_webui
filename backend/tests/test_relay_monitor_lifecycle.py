@@ -145,6 +145,13 @@ class TestManagement:
         assert got(env, mine) is None
         assert audit_events(env, "monitor_removed")[0]["source"] == "agent"
 
+    async def test_monitor_audit_rows_name_the_session(self, env):
+        rec = await monitor(env)
+        await env.service.remove_monitor(SESSION, rec["id"])
+        row = audit_events(env, "monitor_removed")[0]
+        assert row["session_name"] == f"Session {SESSION}" and row["handle"] == f"handle-{SESSION}"
+        assert row["session_id"] == SESSION
+
     async def test_audit_never_holds_message_text_or_keywords(self, env):
         await monitor(env, keywords=("super-secret-keyword",))
         await emit(env, env.t, "super-secret-keyword message body", seq=1)

@@ -213,8 +213,8 @@ class FakeSessions:
     def add(self, session_id=SESSION, *, state=SessionState.ACTIVE, ephemeral=False,
             relay_id=RELAY_ID):
         self.infos[session_id] = SimpleNamespace(
-            session_id=session_id, state=state, is_ephemeral=ephemeral,
-            config={"relay_id": relay_id},
+            session_id=session_id, state=state, is_ephemeral=ephemeral, name=f"Session {session_id}",
+            config={"relay_id": relay_id, "relay_handle": f"handle-{session_id}"},
         )
 
     async def get_session_info(self, session_id):

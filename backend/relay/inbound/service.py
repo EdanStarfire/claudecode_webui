@@ -450,9 +450,22 @@ class InboundService:
         if _tsf(ts) > _tsf(self._high_water.get(monitor_id)):
             self._high_water[monitor_id] = ts
 
+    async def _rec(self, **fields: Any) -> None:
+        """Audit a monitor event, naming the session (name + handle) so the viewer can show it."""
+        session_id = fields.get("session_id")
+        if session_id and "session_name" not in fields:
+            try:
+                info = await self._sessions.get_session_info(session_id)
+            except Exception:
+                info = None
+            if info is not None:
+                fields["session_name"] = getattr(info, "name", None)
+                fields.setdefault("handle", (getattr(info, "config", None) or {}).get("relay_handle"))
+        await self._audit.record(self.relay_id, **fields)
+
     def spawn_audit(self, **fields: Any) -> None:
         """Fire-and-forget audit write from synchronous code (never raises)."""
-        task = self._spawn(self._audit.record(self.relay_id, **fields))
+        task = self._spawn(self._rec(**fields))
         if task is not None:
             self._flush_audits.add(task)
             task.add_done_callback(self._flush_audits.discard)
@@ -815,8 +828,8 @@ class InboundService:
         await self._enforce_cap()
         for gone in await self.store.expire_monitors():
             self._forget_monitor(gone["id"])
-            await self._audit.record(
-                self.relay_id, event="monitor_expired", outcome="ok", code=gone.get("_expired_reason"),
+            await self._rec(
+                event="monitor_expired", outcome="ok", code=gone.get("_expired_reason"),
                 session_id=gone["session_id"], monitor_id=gone["id"], monitor_kind=gone["kind"],
                 channel_id=gone.get("channel"),
             )
@@ -848,8 +861,8 @@ class InboundService:
         self.watcher.drop_session(session_id)
         removed = await self.store.remove_by_session(session_id)
         if removed:
-            await self._audit.record(
-                self.relay_id, event="monitor_removed", outcome="ok", session_id=session_id,
+            await self._rec(
+                event="monitor_removed", outcome="ok", session_id=session_id,
                 source="session", count=removed,
             )
         for key, entry in list(self.state.inflight.items()):
@@ -885,8 +898,8 @@ class InboundService:
         for m in restored:
             self._high_water[m["id"]] = m.get("last_seen_ts") or self._ts_str(self._now())
             self._hold.discard(m["id"])
-            await self._audit.record(
-                self.relay_id, event="monitor_resumed", outcome="ok", session_id=session_id,
+            await self._rec(
+                event="monitor_resumed", outcome="ok", session_id=session_id,
                 monitor_id=m["id"], monitor_kind=m["kind"], channel_id=m.get("channel"),
                 source="session_start",
             )
@@ -931,8 +944,8 @@ class InboundService:
         self._high_water[record["id"]] = record["last_seen_ts"]
         if outcome in ("created", "resumed"):
             keywords = filters.get("keywords") or []
-            await self._audit.record(
-                self.relay_id, event="monitor_created" if outcome == "created" else "monitor_resumed",
+            await self._rec(
+                event="monitor_created" if outcome == "created" else "monitor_resumed",
                 outcome="ok", session_id=session_id, monitor_id=record["id"], monitor_kind=kind,
                 channel_id=channel, thread_ts=thread_ts, count=len(keywords),
                 query_sha256=hashlib.sha256("\n".join(keywords).encode()).hexdigest() if keywords else None,
@@ -947,8 +960,8 @@ class InboundService:
             return False
         await self.store.remove_monitor(monitor_id)
         self._forget_monitor(monitor_id)
-        await self._audit.record(
-            self.relay_id, event="monitor_removed", outcome="ok", session_id=session_id,
+        await self._rec(
+            event="monitor_removed", outcome="ok", session_id=session_id,
             monitor_id=monitor_id, monitor_kind=rec["kind"], channel_id=rec.get("channel"),
             source=source,
         )
@@ -1019,8 +1032,8 @@ class InboundService:
                     await self.store.set_monitor_status(m["id"], ACTIVE, resume_from=now)
                     self._high_water[m["id"]] = self._ts_str(now)
                     self._hold.discard(m["id"])
-                    await self._audit.record(
-                        self.relay_id, event="monitor_resumed", outcome="ok", session_id=session_id,
+                    await self._rec(
+                        event="monitor_resumed", outcome="ok", session_id=session_id,
                         monitor_id=m["id"], monitor_kind=m["kind"], channel_id=m.get("channel"),
                         source="policy",
                     )
@@ -1034,8 +1047,8 @@ class InboundService:
 
     async def _suspend(self, monitor: dict[str, Any], reason: str) -> None:
         await self.store.set_monitor_status(monitor["id"], SUSPENDED, reason)
-        await self._audit.record(
-            self.relay_id, event="monitor_suspended", outcome="ok", code=reason,
+        await self._rec(
+            event="monitor_suspended", outcome="ok", code=reason,
             session_id=monitor["session_id"], monitor_id=monitor["id"], monitor_kind=monitor["kind"],
             channel_id=monitor.get("channel"),
         )
@@ -1184,8 +1197,8 @@ class InboundService:
                     mid, last_delivered_at=now, last_error=None, failures=0, last_activity_at=now,
                 )
                 self.store.bump_counters(mid, delivered=int(entry.info.get("counts", {}).get(mid, 0)))
-            await self._audit.record(
-                self.relay_id, event="monitor_delivered", outcome="ok", session_id=entry.session_id,
+            await self._rec(
+                event="monitor_delivered", outcome="ok", session_id=entry.session_id,
                 envelope_id=entry.comm_id, count=entry.info.get("count"),
                 omitted=entry.info.get("omitted"),
             )
@@ -1214,8 +1227,8 @@ class InboundService:
             self._high_water[mid] = rec.get("last_seen_ts") or self._ts_str(self._now())
             if failures >= const.DELIVERY_FAILURES_TO_SUSPEND and rec["status"] == ACTIVE:
                 await self._suspend(rec, const.SUSPEND_DELIVERY_FAILED)
-        await self._audit.record(
-            self.relay_id, event="monitor_delivery_failed", outcome="error",
+        await self._rec(
+            event="monitor_delivery_failed", outcome="error",
             code=safe_error_code(error)[:60], session_id=session_id, envelope_id=comm_id, count=count,
         )
 
@@ -1288,8 +1301,8 @@ class InboundService:
             truncated = page_no == const.BACKFILL_MAX_PAGES - 1
         if truncated or older_omitted:
             older_omitted = True
-            await self._audit.record(
-                self.relay_id, event="monitor_backfill", outcome="truncated",
+            await self._rec(
+                event="monitor_backfill", outcome="truncated",
                 code="backfill_truncated", session_id=m["session_id"], monitor_id=mid,
                 monitor_kind=m["kind"], channel_id=m["channel"], count=len(messages),
             )
