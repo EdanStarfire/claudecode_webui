@@ -47,6 +47,7 @@ class JsonSubscriptionStore:
         self._records: dict[str, dict[str, Any]] = {}
         self._lock = asyncio.Lock()
         self._by_channel: dict[str, list[str]] = {}  # channel monitors only: channel -> record ids
+        self._scope_ids: list[str] = []  # mentions / DMs monitors (no channel)
         self._flush_task: asyncio.Task | None = None
 
     def load(self) -> None:
@@ -60,10 +61,14 @@ class JsonSubscriptionStore:
 
     def _reindex(self) -> None:
         index: dict[str, list[str]] = {}
+        scope: list[str] = []
         for rid, r in self._records.items():
-            if r.get("kind") in MONITOR_KINDS and r.get("channel"):
+            if r.get("kind") in const.SCOPE_KINDS:
+                scope.append(rid)
+            elif r.get("kind") in MONITOR_KINDS and r.get("channel"):
                 index.setdefault(r["channel"], []).append(rid)
         self._by_channel = index
+        self._scope_ids = scope
 
     async def _persist(self) -> None:
         self._reindex()
@@ -275,8 +280,8 @@ class JsonSubscriptionStore:
     def scope_monitors(self, kind: str | None = None) -> list[dict[str, Any]]:
         """Mentions / DMs monitors (no channel): small in-memory list, no I/O."""
         return [
-            r for r in self._records.values()
-            if r.get("kind") in const.SCOPE_KINDS and (kind is None or r.get("kind") == kind)
+            self._records[i] for i in self._scope_ids
+            if i in self._records and (kind is None or self._records[i].get("kind") == kind)
         ]
 
     def monitors_for_channel(self, channel: str) -> list[dict[str, Any]]:

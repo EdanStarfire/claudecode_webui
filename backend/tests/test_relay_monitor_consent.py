@@ -148,3 +148,31 @@ class TestHandlerFlow:
                                              filters={"keywords": ["a"], "users": []})
         assert code_of(await call(h)) == "monitor_limit"
         assert h.service.pending_permissions == {}
+
+
+class TestExistingMonitorNoPrompt:
+    async def test_pre_hook_raises_no_prompt_for_an_identical_existing_monitor(self, h):
+        from backend.relay.inbound.manager import InboundManager
+        rec, _ = await h.svc.store.create_monitor(
+            "s1", const.KIND_MONITOR_MENTIONS, None, filters={"keywords": ["x"], "users": []},
+            consent={"at": 1.0, "via": "prompt"})
+        mgr = InboundManager.__new__(InboundManager)
+        mgr.services = {"relay1": h.svc}
+        h.gate.scope_existing = mgr.scope_monitor_exists
+        same = await h.env.bridge.pre_hook(SID, MENTIONS, {"keywords": [" x "]})
+        assert same.kind == "allow"
+        other = await h.env.bridge.pre_hook(SID, MENTIONS, {"keywords": ["y"]})
+        assert other.kind == "prompt"
+        # a name that needs resolution never short-circuits (fail safe: the prompt shows)
+        named = await h.env.bridge.pre_hook(SID, MENTIONS, {"keywords": ["x"], "users": ["@alice"]})
+        assert named.kind == "prompt"
+
+    async def test_shortcut_consumes_a_leftover_callback_grant(self, h):
+        args = {"keywords": ["x"]}
+        await h.svc.store.create_monitor(
+            "s1", const.KIND_MONITOR_MENTIONS, None, filters={"keywords": ["x"], "users": []},
+            consent={"at": 1.0, "via": "prompt"})
+        h.gate.grants.add(SID, "monitor_mentions", args, "prompt_allow")
+        out = body(await call(h, **args))
+        assert out["outcome"] == "already_monitored"
+        assert h.gate.grants.consume(SID, "monitor_mentions", args) is None

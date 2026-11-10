@@ -251,6 +251,7 @@ class RelayMonitorTools:
             )
         existing = service.store.find_monitor(session_id, kind, None, None, filters)
         if existing is not None:  # already consented: no second prompt
+            p.gate.grants.consume(session_id, tool_name, args)  # a callback grant must not linger
             record, outcome = await service.create_monitor(
                 session_id, kind, None, thread_ts=None, filters=filters, expires_at=expires,
             )

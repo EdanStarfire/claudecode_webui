@@ -195,6 +195,7 @@ def build_core_managers(
     relay_manager.change_listeners.append(relay_inbound.schedule_refresh)
     relay_manager.inbound_status_provider = relay_inbound.status_for
     relay_gate.thread_grants = relay_inbound.has_thread_grant
+    relay_gate.scope_existing = relay_inbound.scope_monitor_exists  # 3b-ii: no second consent prompt
     relay = RelayRuntime(
         inbound=relay_inbound,
         manager=relay_manager,

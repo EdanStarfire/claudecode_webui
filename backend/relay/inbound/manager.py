@@ -162,6 +162,29 @@ class InboundManager:
     def service_for(self, relay_id: str) -> InboundService | None:
         return self.services.get(relay_id)
 
+    def scope_monitor_exists(self, session_id: str, relay_id: str, tool: str, args: dict[str, Any]) -> bool:
+        """True when this session already holds the IDENTICAL scope monitor (already consented): the
+        permission pre-hook then raises no second prompt. Only plain keywords and user IDs are compared;
+        anything needing name resolution answers False (so the prompt shows, fail safe)."""
+        service = self.services.get(relay_id)
+        if service is None:
+            return False
+        kind = const.KIND_MONITOR_MENTIONS if tool == "monitor_mentions" else const.KIND_MONITOR_DMS
+        keywords, users = args.get("keywords") or [], args.get("users") or []
+        if not isinstance(keywords, list) or not isinstance(users, list):
+            return False
+        if not all(isinstance(k, str) for k in keywords) or not all(
+            isinstance(u, str) and u.strip().upper() == u.strip() and u.strip()[:1] in ("U", "W")
+            and u.strip().isalnum() and len(u.strip()) >= 7 for u in users
+        ):
+            return False
+        filters = {
+            "keywords": list(dict.fromkeys(k.strip() for k in keywords if k.strip())),
+            "users": list(dict.fromkeys(u.strip() for u in users if u.strip())),
+        }
+        found = service.store.find_monitor(session_id, kind, None, None, filters)
+        return found is not None
+
     def schedule_reevaluate(self, session_id: str | None = None) -> None:
         """Sync trigger (policy edit, attachment change, tier edit): re-check the session's monitors
         (``None`` = every session with a monitor). Never raises."""

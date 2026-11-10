@@ -218,6 +218,7 @@ async def backfill_mentions(
             hydrated = run.cache[key]
             if hydrated is None:
                 run.counts["hydration_failed"] += 1
+                run.note_gap(stop_at)  # a hit that cannot be vetted may be lost once the cursor passes it
                 continue
             channel_type = "mpim" if hit.is_mpim else "im" if hit.is_im else "channel"
             event = event_from_message(svc.relay_id, hydrated, channel, channel_type=channel_type)

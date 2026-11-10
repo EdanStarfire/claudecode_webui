@@ -243,6 +243,7 @@ class TestMentionsBackfill:
         await env.service.backfill_monitors()
         assert await flush(env) == []
         assert env.service._drops["monitor_hydration_failed"] == 1
+        assert env.service._gaps.get(SESSION)  # an unvettable hit is announced, never silent
 
     async def test_hydration_error_and_ratelimit_fail_closed(self, env):
         await scope(env, M)

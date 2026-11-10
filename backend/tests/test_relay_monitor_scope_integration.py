@@ -200,6 +200,21 @@ class TestOwnerActions:
         assert env.port.statuses[(SESSION, comm_id)] == "cancelled"
         assert [r["source"] for r in audit_events(env, "monitor_removed")][-1] == "owner"
 
+    async def test_pause_cancels_a_queued_undispatched_envelope(self, env):
+        rec = await scope(env, D)
+        await emit(env, env.t, "x", seq=1, channel=DM1, channel_type="im")
+        await fire_window(env)
+        comm_id = env.port.calls[0]["comm_id"]
+        await env.service.set_paused(rec["id"], True)
+        assert env.port.statuses[(SESSION, comm_id)] == "cancelled"  # revoking consent stops queued content
+
+    async def test_scope_index_follows_create_and_delete(self, env):
+        rec = await scope(env, D)
+        assert [m["id"] for m in env.service.store.scope_monitors()] == [rec["id"]]
+        assert env.service.store.scope_monitors(M) == []
+        await env.service.delete_monitor(rec["id"])
+        assert env.service.store.scope_monitors() == []
+
     async def test_public_shape_has_no_content_and_filters_by_state(self, env):
         rec = await scope(env, M, keywords=["secret-keyword"], users=[OTHER_USER])
         await emit(env, env.t, f"<@{OWNER}> private text secret-keyword", seq=1, user=OTHER_USER)

@@ -177,6 +177,9 @@ class RelayPolicyGate:
         # (session_id, relay_id, channel_id, thread_ts) -> bool: the inbound stage's owned
         # instruction threads (issue #2103 stage 3a, D3). None = feature off.
         self.thread_grants = None
+        # (session_id, relay_id, tool, args) -> bool: the session already holds this identical scope
+        # monitor, so no (second) consent prompt (inbound 3b-ii). None = always prompt.
+        self.scope_existing = None
 
     # --------------------------------------------------------------- context
 
@@ -414,6 +417,9 @@ class RelayPolicyGate:
         plain-language prompt, no channel resolution and no policy involved (channels the owner
         blocked are excluded later, at delivery). Bypass keeps prompting: this branch never
         reads the permission mode."""
+        lookup = self.scope_existing
+        if lookup is not None and lookup(ctx.session_id, ctx.relay_id, tool, args):
+            return GateResult(ALLOW, tool, "monitor_scope")  # the handler returns it as already_monitored
         if not with_prompt:
             return GateResult(PROMPT, tool, "monitor_scope")
         record = self.relay_manager.relays.get(ctx.relay_id)

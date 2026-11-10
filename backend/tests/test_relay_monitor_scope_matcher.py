@@ -77,7 +77,8 @@ class TestDms:
         assert match(dm(metadata={"event_type": "cc_webui_agent_message"}), [m], ctx()) == []
         assert match(dm(text=f"{SELF_DM_MARKER} x"), [m], ctx()) == []
         assert match(dm(app_id="A0OWN"), [m], ctx()) == []
-        assert match(dm(user=OWNER, app_id="A0X"), [m], ctx()) == []
+        # (the owner's own messages never match a scope monitor at all; the owner-with-app-id rule is
+        # pinned in test_relay_monitor_matcher for the channel monitors)
         e = dm(bot_id="B0OTHER", user=ALICE)
         assert match(e, [m], ctx()) == [m]  # another bot is delivered (flagged by the entry)
 

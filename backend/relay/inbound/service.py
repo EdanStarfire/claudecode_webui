@@ -1065,7 +1065,8 @@ class InboundService:
             cfg = (getattr(info, "config", None) or {}) if info is not None else {}
             out.append(monitor_public.public_monitor(
                 m, session_name=getattr(info, "name", None), handle=cfg.get("relay_handle"),
-                channel_label=labels["channels"].get(m.get("channel")), user_labels=labels["users"],
+                channel_label=labels["channels"].get(m.get("channel")) or m.get("channel"),
+                user_labels=labels["users"],
             ))
         return out
 
@@ -1109,6 +1110,8 @@ class InboundService:
             self._high_water[monitor_id] = self._ts_str(now)
             self._hold.discard(monitor_id)
             self._recent_keys.pop(monitor_id, None)
+        if paused and not was_paused:
+            await self._cancel_pending_for({monitor_id})  # revoking: queued, undispatched content must not arrive
         if paused != was_paused:
             await self._rec(
                 event="monitor_paused" if paused else "monitor_resumed", outcome="ok",

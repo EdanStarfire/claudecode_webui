@@ -693,13 +693,14 @@ public,search_limiter}.py`, `mcp/relay_monitor_tools.py::handle_scope_monitor`.
   excluded; dms: direct and group messages other people send you, own messages and self-DM excluded). One prompt per creation; it never
   looks at the permission mode, so **bypass still prompts**; unattended sessions get `monitor_consent_unavailable`, don't-ask sessions
   `monitor_consent_unavailable_dont_ask` (nothing created, nothing waits). `permission_bridge.apply_response` answers Allow / Deny only
-  (never a policy write, whatever `relay_choice` carries). An **identical existing monitor returns `already_monitored` with no prompt**.
+  (never a policy write, whatever `relay_choice` carries). An **identical existing monitor returns `already_monitored` with no prompt** in every mode (the pre-hook asks `InboundManager.scope_monitor_exists`; filters needing name resolution always prompt) and consumes a leftover callback grant. Pausing or deleting a monitor also cancels its queued, undispatched envelopes.
   The record stores `consent: {at, via: "prompt"}`; the audit row has `approval=prompt_allow`. `RelayPermissionPrompt.vue` has the
   third kind (Allow / Deny only). Revoking consent = the owner deletes or pauses the monitor (REST).
 - **Policy semantics**: no policy is read at match time. At **flush** (fresh policy) messages from an explicitly `blocked` channel are
   dropped for scope monitors (counted `monitor_blocked_channel`, cursor still advances, the monitor stays active); unlisted, read_only,
-  ask and auto channels are delivered (the consent covers them). Accepted residual: a channel blocked after matching does not recall an
-  envelope that is already queued and undispatched. Channel / thread monitors keep the 3b-i suspend rules.
+  ask and auto channels are delivered (the consent covers them). Accepted residuals: a channel blocked after matching does not recall an
+  envelope that is already queued and undispatched; blocked-channel messages are filtered after the flood limits have counted them, so a very
+  noisy blocked channel can consume the relay-wide flood budget (no I/O is allowed at match time). Channel / thread monitors keep the 3b-i suspend rules.
 - **Matching**: `matcher.matches_monitor(event, monitor, owner_id)`; the owner's own messages never match; `never_content` (self-DM,
   echo rule, instruction threads) applies first; DM monitors need `channel_type` im/mpim (backfill sets it from the conversation kind);
   without a known owner scope monitors never match. `_leaf_text` renders rich-text `user` elements as `<@ID>` so a block-only mention is
@@ -713,7 +714,7 @@ public,search_limiter}.py`, `mcp/relay_monitor_tools.py::handle_scope_monitor`.
   `include_all_metadata`, via `conversations.replies` when the hit's permalink carries `thread_ts`) and judged by the live echo rule
   (metadata marker, own `api_app_id`, owner message with app/bot id, text marker) plus the mention regex on the HYDRATED text before it can
   be delivered. Cap 20 hydrations per run, serialized, a per-run cache; any error / rate limit / missing message drops the hit
-  (`hydration_failed`, `hydration_cap`, fail closed). No sent-message ledger. One delayed re-run ~30 s later (search index lag), idempotent
+  (`hydration_failed`, `hydration_cap`, fail closed; each also raises the gap notice, because a hit older than the cursor margin is not re-read later). DM / group-DM backfill uses `conversations.history`, which excludes thread replies: replies in a DM missed during a disconnect are not backfilled (live delivery is unaffected; not covered by the gap notice). No sent-message ledger. One delayed re-run ~30 s later (search index lag), idempotent
   through the per-monitor keys. Rate limits / caps / failed calls produce a **gap notice** (one line outside the fence on the next envelope
   of the session: "Slack backfill was incomplete for the period T0-T1 …"; audited `monitor_backfill` `code=gap_notice` with `reason_counts`).
 - **Duplicates**: the last 100 delivered keys per monitor are persisted with the cursor (`recent_keys`, debounced) and seeded at service
