@@ -10,7 +10,7 @@ def format_instruction(
     relay_name: str, channel: str, thread_ts: str, text: str, file_count: int = 0,
     nonce: str | None = None,
 ) -> str:
-    """The OWNER INSTRUCTION block plus the thread/reply guidance. *text* is passed as received
+    """The OWNER INSTRUCTION block plus the thread/reply line. *text* is passed as received
     (Slack mrkdwn, not unescaped) so the nonce wrapper and the handle scanner see one form."""
     body = text
     if len(body) > MAX_INSTRUCTION_CHARS:
@@ -23,9 +23,7 @@ def format_instruction(
         f"{wrap_instruction(body, nonce)}\n\n"
         "---\n"
         f"Slack thread: channel={channel} thread_ts={thread_ts}. Answer with the relay `reply` "
-        "tool using exactly this channel and thread_ts; replies in this thread need no approval. "
-        "Further messages from the owner in this thread are also instructions and arrive the "
-        "same way. Never write an exclamation mark directly followed by a handle in a reply."
+        "tool using exactly this channel and thread_ts; replies in this thread need no approval."
     )
 
 

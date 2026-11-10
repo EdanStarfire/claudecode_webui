@@ -130,12 +130,17 @@ class SlackAdapter:
     def _client(self) -> httpx.AsyncClient:
         return httpx.AsyncClient(transport=self._transport, timeout=30.0)
 
-    async def _call(self, method: str, params: dict[str, Any] | None = None, *, json_body: bool = False) -> dict:
-        """POST a Slack Web API method; returns the parsed ``ok:true`` payload."""
+    async def _call(
+        self, method: str, params: dict[str, Any] | None = None, *, json_body: bool = False,
+        retry: bool = True,
+    ) -> dict:
+        """POST a Slack Web API method; returns the parsed ``ok:true`` payload. ``retry=False``
+        never waits and retries on a rate limit (it raises ``ratelimited`` at once)."""
+        max_retries = _MAX_RETRIES if retry else 0
         token = await self._token_provider()
         headers = {"Authorization": f"Bearer {token}"}
         payload = {k: v for k, v in (params or {}).items() if v is not None}
-        for attempt in range(_MAX_RETRIES + 1):
+        for attempt in range(max_retries + 1):
             try:
                 async with self._client() as client:
                     if json_body:
@@ -149,7 +154,7 @@ class SlackAdapter:
                 raise RelayError("network_error", method) from None
 
             retry_after = self._retry_after(resp)
-            if resp.status_code == 429 and attempt < _MAX_RETRIES:
+            if resp.status_code == 429 and attempt < max_retries:
                 await self._sleep(retry_after)
                 continue
             if resp.status_code == 429:
@@ -163,7 +168,7 @@ class SlackAdapter:
             if data.get("ok"):
                 return data
             code = data.get("error", "unknown_error")
-            if code == "ratelimited" and attempt < _MAX_RETRIES:
+            if code == "ratelimited" and attempt < max_retries:
                 await self._sleep(retry_after)
                 continue
             raise RelayError(code, method)
@@ -287,8 +292,17 @@ class SlackAdapter:
         )
         return UploadResult(file_id=file_id, title=title or filename)
 
-    async def react(self, channel: str, ts: str, name: str) -> None:
-        await self._call("reactions.add", {"channel": channel, "timestamp": ts, "name": name}, json_body=True)
+    async def react(self, channel: str, ts: str, name: str, *, retry: bool = True) -> None:
+        await self._call(
+            "reactions.add", {"channel": channel, "timestamp": ts, "name": name},
+            json_body=True, retry=retry,
+        )
+
+    async def unreact(self, channel: str, ts: str, name: str, *, retry: bool = True) -> None:
+        await self._call(
+            "reactions.remove", {"channel": channel, "timestamp": ts, "name": name},
+            json_body=True, retry=retry,
+        )
 
     async def mark_read(self, channel: str, ts: str) -> None:
         await self._call("conversations.mark", {"channel": channel, "ts": ts}, json_body=True)
