@@ -90,7 +90,7 @@ export function stateCopy(m) {
 // ── monitor row ──────────────────────────────────────────────────────────
 
 const ID_LIKE = /^[CGDW][A-Z0-9]{6,}$/ // an unresolved Slack id is shown as is
-const KIND_GLYPH = { monitor_thread: '🧵', monitor_channel: '#', monitor_mentions: '@', monitor_dms: '✉' }
+const KIND_GLYPH = { monitor_thread: '↳', monitor_channel: '#', monitor_mentions: '@', monitor_dms: '✉\uFE0E' }
 
 /** `{glyph, text, title}`: what the monitor watches, on one line (Slack labels as plain text). */
 export function monitorLabel(m) {

@@ -29,9 +29,15 @@
             :disabled="busy"
             :title="paused ? RESUME_TITLE : PAUSE_TITLE"
             :aria-label="paused ? 'Resume monitor' : 'Pause monitor'"
+            :data-icon="paused ? 'play' : 'pause'"
             data-testid="monitor-toggle"
             @click="$emit('toggle-pause', monitor)"
-          >{{ paused ? '▶' : '⏸' }}</button>
+          >
+            <svg viewBox="0 0 16 16" width="14" height="14" fill="currentColor" aria-hidden="true">
+              <path v-if="paused" d="M4.5 3v10l8-5z" />
+              <path v-else d="M4 3h3v10H4zM9 3h3v10H9z" />
+            </svg>
+          </button>
           <button
             type="button"
             class="mon-btn"
@@ -40,7 +46,11 @@
             aria-label="Delete monitor"
             data-testid="monitor-delete"
             @click="confirming = true"
-          >🗑</button>
+          >
+            <svg viewBox="0 0 16 16" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+              <path d="M3 4.5h10M6.5 4.5V3h3v1.5M4.5 4.5l.6 8.5h5.8l.6-8.5M7 7v4M9 7v4" />
+            </svg>
+          </button>
         </template>
         <template v-else>
           <span class="mon-confirm" data-testid="monitor-confirm">Delete?</span>
@@ -145,7 +155,8 @@ function confirmDelete() {
 .mon-expand, .mon-btn {
   background: none; border: 0; padding: 0 4px; color: var(--bs-secondary-color); cursor: pointer; line-height: 20px; flex: 0 0 auto;
 }
-.mon-btn:hover:not(:disabled) { color: var(--bs-body-color); }
+.mon-btn { color: var(--bs-tertiary-color, #9ca3af); display: inline-flex; align-items: center; justify-content: center; }
+.mon-btn:hover:not(:disabled), .mon-btn:focus-visible { color: var(--bs-body-color); }
 .mon-btn:disabled { opacity: 0.4; cursor: default; }
 .mon-btn--text { font-size: 11px; text-decoration: underline; }
 .mon-glyph { flex: 0 0 auto; color: var(--bs-secondary-color); }

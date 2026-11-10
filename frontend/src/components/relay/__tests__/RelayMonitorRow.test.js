@@ -67,7 +67,8 @@ describe('RelayMonitorRow', () => {
   it('actions are icon-only with titles; delete asks inline', async () => {
     const { wrapper } = mountRow(monitor())
     const toggle = wrapper.find('[data-testid="monitor-toggle"]')
-    expect(toggle.text()).toBe('⏸')
+    expect(toggle.attributes('data-icon')).toBe('pause')
+    expect(toggle.find('svg').exists()).toBe(true)
     expect(toggle.attributes('title')).toContain('Applies immediately')
     expect(wrapper.find('[data-testid="monitor-delete"]').attributes('title')).toContain('Applies immediately')
     await toggle.trigger('click')
