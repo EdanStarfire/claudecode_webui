@@ -79,6 +79,7 @@ const EVENTS = {
   inbound_instruction: 'Slack instruction',
   inbound_reply: 'Slack reply',
   inbound_reply_failed: 'Slack reply',
+  inbound_ack: 'Slack acknowledgement', // received reaction on a dispatched instruction (#2364)
   inbound_connection: 'Inbound connection',
   inbound_drop_summary: 'Inbound drops',
   inbound_housekeeping: 'Inbound housekeeping',
@@ -207,7 +208,7 @@ defineExpose({ reload: () => load(true) })
   color: var(--bs-tertiary-color, #6b7280); border: 1px solid var(--bs-border-color, rgba(0,0,0,0.12));
   vertical-align: baseline; white-space: nowrap; user-select: none;
 }
-.outcome-denied .outcome, .outcome-refused .outcome, .outcome-late .outcome, .outcome-rate_limited .outcome { color: #d29922; }
+.outcome-denied .outcome, .outcome-refused .outcome, .outcome-late .outcome, .outcome-rate_limited .outcome, .outcome-removed .outcome { color: #d29922; }
 .outcome-error .outcome { color: #f87171; }
 .older { align-self: flex-start; }
 @media (max-width: 600px) {

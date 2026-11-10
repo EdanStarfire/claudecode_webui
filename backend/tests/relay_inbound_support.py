@@ -122,6 +122,10 @@ class FakeAdapter:
         self.history_calls: list[dict[str, Any]] = []
         self.threads: dict[str, list[RelayMessage]] = {}
         self.fail_post = False
+        self.reactions: list[tuple[str, str, str, str]] = []  # (op, channel, ts, name)
+        self.react_error: str | None = None
+        self.react_hang = False
+        self.unreact_error: str | None = None
         self.history_next: dict[str | None, str | None] = {}
 
     async def post(self, channel, text, blocks=None, thread_ts=None, metadata=None):
@@ -134,6 +138,22 @@ class FakeAdapter:
             "metadata": metadata,
         })
         return PostResult(channel, f"{BASE_TIME + len(self.posts):.6f}")
+
+    async def react(self, channel, ts, name, *, retry=True):
+        from backend.relay.adapter import RelayError
+
+        self.reactions.append(("add", channel, ts, name))
+        if self.react_hang:
+            await asyncio.sleep(3600)
+        if self.react_error:
+            raise RelayError(self.react_error, "reactions.add")
+
+    async def unreact(self, channel, ts, name, *, retry=True):
+        from backend.relay.adapter import RelayError
+
+        self.reactions.append(("remove", channel, ts, name))
+        if self.unreact_error:
+            raise RelayError(self.unreact_error, "reactions.remove")
 
     async def read_history(self, channel, limit=100, oldest=None, cursor=None):
         self.history_calls.append({"channel": channel, "oldest": oldest, "cursor": cursor})

@@ -553,7 +553,21 @@ digests / unread (3c) and the inbound UI / audit view (3d) are later stages. Cod
   comm (`from_user=True`, `CommType.SYSTEM`: busy sessions wait, stopped ones start, a paused queue keeps it pending; an
   external instruction never implicitly resumes a queue). The comm id is deterministic (`uuid5` of relay:channel:ts) and an item
   the in-memory pending store already holds is not enqueued twice. The text is an `OWNER INSTRUCTION` nonce block
-  (`wrap_instruction`) plus the channel / `thread_ts` and the instruction to answer with the relay `reply` tool.
+  (`wrap_instruction`) plus one closing line: `Slack thread: channel=… thread_ts=…. Answer with the relay `reply` tool using exactly this channel and
+  thread_ts; replies in this thread need no approval.` (issue #2364 dropped the "further messages are instructions" and "never write
+  !handle" sentences: a reply containing `!handle` is refused by the trigger-syntax check, whose message states the reason and the fix).
+- **Received reaction (issue #2364)**: when an instruction has passed every check (trust rule, handle/thread resolution, age window,
+  rate limits, session availability, relay attached) and is about to be enqueued, the RELAY adds `INBOUND_ACK_REACTION` (`"flying_saucer"`, 🛸, a reaction the owner rarely uses by hand so it is not mistaken for their own;
+  Slack name without colons, `inbound/constants.py`) to the owner's message through the adapter (`reactions.add`, owner user token; no
+  agent, gate or session involvement, whatever the session state). Scope: top-level instructions and thread follow-ups dispatched as
+  instructions, in the self-DM, and nothing else: no reaction for ignored/dropped events, unknown/ambiguous/empty handle, late,
+  rate-limited, deduped/replayed, session-unavailable or refused instructions, or any other channel/person, and never for the monitored
+  content of stage 3b (`InboundService._ack_received` is only reachable from the instruction path and guards on kind + self-DM). The call
+  is a tracked background task (10 s timeout `ACK_TIMEOUT_SECONDS`, no retry, `ratelimited` is not retried): Slack can neither delay nor
+  fail the enqueue. At most once: an `acked` flag on the in-flight entry is fsynced BEFORE the Slack call, so restarts, in-flight
+  re-runs and reconnect backfill never add it again or re-add one the owner removed (a crash in between loses the reaction, never doubles
+  it); `already_reacted` counts as success. If the enqueue then fails (the refusal reply path), the reaction is removed best effort
+  (`reactions.remove`, only if our add succeeded). Failures are audited, never block: `inbound_ack`.
 - **What `from_user=True` + `CommType.SYSTEM` change (versus the plan's `from_user=False` / `TASK`)**: `Comm.validate()` requires exactly one
   source (a minion or the user), so `from_user=False` with no minion was not constructible; the owner's own instruction is "from the user",
   tagged `sender_type=EXTERNAL`, `sender_id=relay_id`. Effects, each pinned in `test_relay_inbound_integration.py`: (1) `_is_authorized` is true
@@ -593,7 +607,8 @@ digests / unread (3c) and the inbound UI / audit view (3d) are later stages. Cod
 - **Persistence** (`data/relays/{relay_id}/`): `subscriptions.json`, `inbound_state.json` (cursors, 5000-entry dedupe ring,
   in-flight list), atomic tmp + fsync + replace; a corrupt file is moved aside (`*.corrupt-<ts>`) and the service starts empty.
 - **Audit** (existing relay audit log): `inbound_instruction` (`delivered|refused|late|rate_limited|deduped|error`, with `code`),
-  `inbound_reply` / `inbound_reply_failed`, `inbound_connection` (`inbound_status`, `code`), `inbound_drop_summary` (`reason_counts`
+  `inbound_ack` (received reaction: `ok|error|removed`, sanitised `code` such as `already_reacted`, `message_not_found`, `timeout`; `channel_id`,
+  `message_ts`, `session_id`, `handle`), `inbound_reply` / `inbound_reply_failed`, `inbound_connection` (`inbound_status`, `code`), `inbound_drop_summary` (`reason_counts`
   every 5 minutes), `inbound_housekeeping` (expiry / eviction / `backfill_truncated`).
 - **Lifecycle**: `InboundManager` (`RelayRuntime.inbound`) starts last in coordinator `initialize()` and stops first in `cleanup()`
   (before sessions terminate, state flushed). Dependencies: `slack-sdk>=3.33,<4` (MIT), `aiohttp>=3.9` (Apache-2.0).

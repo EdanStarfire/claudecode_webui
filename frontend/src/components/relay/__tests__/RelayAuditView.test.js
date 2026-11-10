@@ -81,6 +81,22 @@ describe('RelayAuditView', () => {
     expect(rows[7].find('.outcome').text()).toBe('token_revoked') // no leading separator without an outcome
   })
 
+  it('humanizes the received-reaction events (#2364)', async () => {
+    const E = (over) => REC({ tool: undefined, event: 'inbound_ack', ...over })
+    apiMock.get.mockResolvedValue({ records: [
+      E({ outcome: 'ok' }),
+      E({ outcome: 'error', code: 'message_not_found' }),
+      E({ outcome: 'removed' }),
+    ] })
+    const { wrapper } = await mountView()
+    const actions = wrapper.findAll('[data-testid="audit-action"]').map(a => a.text())
+    expect(actions).toEqual(['Slack acknowledgement', 'Slack acknowledgement', 'Slack acknowledgement'])
+    const rows = wrapper.findAll('[data-testid="audit-record"]')
+    expect(rows[1].text()).toContain('error · message_not_found')
+    expect(rows[1].classes()).toContain('outcome-error')
+    expect(rows[2].classes()).toContain('outcome-removed')
+  })
+
   it('policy changes show old → new with (none) and a quiet source/tier marker (#2355)', async () => {
     const P = (over) => REC({ event: 'policy_change', tool: undefined, ...over })
     apiMock.get.mockResolvedValue({ records: [

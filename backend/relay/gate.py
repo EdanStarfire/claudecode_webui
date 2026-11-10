@@ -312,8 +312,10 @@ class RelayPolicyGate:
         if any(contains_trigger_syntax(t) for t in self.outbound_texts(tool, args)):
             return GateResult(
                 DENY, tool, action, "trigger_syntax_refused",
-                "Outbound text must not contain !handle trigger syntax. Remove the '!' before the "
-                "word and try again.",
+                "Refused: an exclamation mark directly followed by a handle (e.g. !deploy) is not "
+                "allowed in Slack messages, because it would be read as an instruction to a "
+                "session. Rewrite the text without the '!' directly before the word (write the "
+                "handle without '!', or put a space after the '!') and send it again.",
                 channel_id=args.get("channel") if isinstance(args.get("channel"), str) else None,
             )
         try:

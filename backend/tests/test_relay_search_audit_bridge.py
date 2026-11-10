@@ -161,6 +161,9 @@ async def test_pre_hook_matrix(tmp_path):
     assert unl.kind == "choose_policy" and unl.prompt["kind"] == "choose_policy"
     trig = await hook("s1", "mcp__relay_slack__post", {"channel": CH_ASK, "text": "!deploy"})
     assert trig.kind == "deny" and trig.code == "trigger_syntax_refused"  # never prompts
+    # AC9 (#2364): the refusal states the reason and what to do instead
+    assert "exclamation mark directly followed by a handle" in trig.message
+    assert "not allowed in Slack messages" in trig.message and "without the '!'" in trig.message
     assert env.adapter.network_calls() == []
     denied = await env.audit.query("relay1")
     assert {r["code"] for r in denied} == {"send_not_permitted", "channel_blocked", "trigger_syntax_refused"}

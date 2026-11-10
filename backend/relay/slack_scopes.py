@@ -38,6 +38,7 @@ METHOD_SCOPES: dict[str, tuple[str, ...]] = {
     "files.getUploadURLExternal": ("files:write",),
     "files.completeUploadExternal": ("files:write",),
     "reactions.add": ("reactions:write",),
+    "reactions.remove": ("reactions:write",),
     "search.messages": ("search:read",),
     "users.info": ("users:read",),
     "users.list": ("users:read",),
@@ -59,7 +60,7 @@ USER_SCOPES_REQUIRED: dict[str, str] = {
     "im:write": "Mark direct messages as read and open a DM by user ID (mark_read, post).",
     "mpim:write": "Mark group direct messages as read and open them (mark_read, post).",
     "files:write": "Upload files you choose to share (upload_file).",
-    "reactions:write": "Add emoji reactions (react).",
+    "reactions:write": "Add and remove emoji reactions (react; the received reaction on dispatched instructions).",
     "search:read": "Search messages in conversations the policy allows (search).",
     "users:read": "Resolve user names for prompts and the audit log; find people and resolve @name (find_channels, post).",
 }

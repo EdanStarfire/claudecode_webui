@@ -106,6 +106,7 @@ class InboundService:
         self._stop = asyncio.Event()
         self._stopping = False
         self._drops: Counter[str] = Counter()
+        self._ack_tasks: dict[str, asyncio.Task] = {}  # in-flight key -> reaction add (issue #2364)
         self._rate_audit_at = -1e9
         self.status = const.STATUS_STOPPED
         self.detail: str | None = None
@@ -179,14 +180,15 @@ class InboundService:
                 self.relay_id, event="inbound_connection", inbound_status=status, code=detail,
             ))
 
-    def _spawn(self, coro) -> None:
+    def _spawn(self, coro) -> asyncio.Task | None:
         try:
             task = asyncio.get_running_loop().create_task(coro)
         except RuntimeError:
             coro.close()
-            return
+            return None
         self._tasks.append(task)
         task.add_done_callback(lambda t: self._tasks.remove(t) if t in self._tasks else None)
+        return task
 
     def status_dict(self) -> dict[str, Any]:
         return {
@@ -386,6 +388,7 @@ class InboundService:
     async def _finish_error(self, entry: dict[str, Any]) -> None:
         event = RelayEvent.from_dict(entry["event"])
         d = entry["decision"]
+        await self._retract_ack(entry, event, d)
         await self._audit_instruction(event, d, "error", "internal_error")
         await self._reply_once(entry, event, d.get("thread_ts") or event.ts, "delivery_failed")
 
@@ -472,6 +475,7 @@ class InboundService:
             created = self.store.find_thread(event.channel, event.ts) is None
             record = await self.store.create_thread(session_id, event.channel, event.ts, event.ts)
             await self._enforce_cap()
+        await self._ack_received(entry, event, d)
         relay_record = self.record
         dispatch = format_instruction(
             relay_record.name if relay_record else "Slack", event.channel, thread_ts, d["text"],
@@ -496,9 +500,11 @@ class InboundService:
         if outcome.status == "failed":
             if created and record is not None:  # no thread (and no reply exemption) without delivery
                 await self.store.remove(self.relay_id, record["id"])
+            await self._retract_ack(entry, event, d)
             await self._audit_instruction(event, d, "refused", "delivery_failed")
             await self._reply_once(entry, event, thread_ts, "delivery_failed")
             return
+        self._ack_tasks.pop(entry["key"], None)
         entry["delivered"] = True  # persisted: a re-run never enqueues this instruction again
         await self.state.flush()
         if record is not None and record.get("id"):
@@ -507,6 +513,96 @@ class InboundService:
             )
         await self._audit_instruction(
             event, d, "deduped" if outcome.status == "already_delivered" else "delivered"
+        )
+
+    # ------------------------------------------------- received reaction (issue #2364)
+
+    async def _ack_received(self, entry: dict[str, Any], event: RelayEvent, d: dict[str, Any]) -> None:
+        """Add the received reaction to an instruction that passed every check and is about to be
+        enqueued. Reached ONLY from ``_handle`` after the age window, refusal, rate-limit, session
+        and relay checks, and only for a self-DM instruction decision: ignored, refused, late,
+        rate-limited, replayed and (3b) monitored-content events never get here, so they never get
+        a reaction. This stays true for the future Content branch: it must not call this.
+
+        At most once: ``acked`` is persisted (fsync) BEFORE the Slack call, so a restart, in-flight
+        re-run or backfill replay never adds it again (and never re-adds one the owner removed); a
+        crash in between loses the reaction, never doubles it. The call runs as a tracked
+        background task with a hard timeout and no retry, so Slack can neither delay nor fail the
+        enqueue."""
+        record = self.record
+        if (
+            entry.get("acked") or d.get("kind") != KIND_INSTRUCTION
+            or record is None or event.channel != record.self_dm_channel_id
+        ):
+            return
+        entry["acked"] = True
+        await self.state.flush()
+        task = self._spawn(self._add_reaction(entry, event, d))
+        if task is not None:
+            self._ack_tasks[entry["key"]] = task  # popped on delivery or retraction
+
+    async def _add_reaction(self, entry: dict[str, Any], event: RelayEvent, d: dict[str, Any]) -> None:
+        outcome, code = "ok", None
+        try:
+            await asyncio.wait_for(
+                self._manager.adapter_for(self.relay_id).react(
+                    event.channel, event.ts, const.INBOUND_ACK_REACTION, retry=False
+                ),
+                const.ACK_TIMEOUT_SECONDS,
+            )
+        except RelayError as e:
+            if e.code == "already_reacted":
+                code = e.code  # present already: success, but not ours to remove
+            else:
+                outcome, code = "error", safe_error_code(e.code)
+        except TimeoutError:
+            outcome, code = "error", "timeout"
+        except asyncio.CancelledError:
+            raise
+        except Exception:
+            logger.exception("Inbound reaction failed")
+            outcome, code = "error", "internal_error"
+        if outcome == "ok" and code is None:
+            entry["ack_added"] = True  # persisted with the entry: only then may a retraction remove it
+            self.state.schedule_flush()
+        await self._audit_ack(event, d, outcome, code)
+
+    async def _retract_ack(self, entry: dict[str, Any], event: RelayEvent, d: dict[str, Any]) -> None:
+        """Delivery failed after the reaction was (or may have been) added: remove it, best effort."""
+        if not entry.get("acked") or entry.get("delivered"):
+            return
+        task = self._ack_tasks.pop(entry.get("key"), None)
+        if task is not None:  # bounded by ACK_TIMEOUT_SECONDS
+            await asyncio.gather(task, return_exceptions=True)
+        if not entry.get("ack_added"):
+            return  # our add did not happen (failed, already present, lost in a crash): not ours to remove
+        outcome, code = "removed", None
+        try:
+            await asyncio.wait_for(
+                self._manager.adapter_for(self.relay_id).unreact(
+                    event.channel, event.ts, const.INBOUND_ACK_REACTION, retry=False
+                ),
+                const.ACK_TIMEOUT_SECONDS,
+            )
+        except RelayError as e:
+            if e.code != "no_reaction":
+                outcome, code = "error", safe_error_code(e.code)
+        except TimeoutError:
+            outcome, code = "error", "timeout"
+        except asyncio.CancelledError:
+            raise
+        except Exception:
+            logger.exception("Inbound reaction removal failed")
+            outcome, code = "error", "internal_error"
+        await self._audit_ack(event, d, outcome, code)
+
+    async def _audit_ack(
+        self, event: RelayEvent, d: dict[str, Any], outcome: str, code: str | None
+    ) -> None:
+        await self._audit.record(
+            self.relay_id, event="inbound_ack", outcome=outcome, code=code,
+            session_id=d.get("session_id"), handle=d.get("handle"), channel_id=event.channel,
+            message_ts=event.ts,
         )
 
     async def _enforce_cap(self) -> None:
@@ -628,6 +724,7 @@ class InboundService:
         for key, entry in list(self.state.inflight.items()):
             if (entry.get("decision") or {}).get("session_id") == session_id:
                 self.state.inflight.pop(key, None)
+                self._ack_tasks.pop(key, None)
         await self.state.flush()
 
     async def on_session_disposed(self, session_id: str) -> None:
