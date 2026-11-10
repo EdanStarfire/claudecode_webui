@@ -24,6 +24,11 @@
       </select>
     </div>
 
+    <div v-if="eventsFilter" class="audit-events" data-testid="audit-events-filter">
+      <span class="audit-tag" :title="eventsFilter">events: {{ eventsFilter }}</span>
+      <button type="button" class="audit-clear" title="Show every event" aria-label="Clear event filter" data-testid="audit-events-clear" @click="eventsFilter = ''">✕</button>
+    </div>
+
     <div v-if="error" class="audit-error" role="alert" data-testid="audit-error">{{ error }}</div>
     <div v-else-if="!loading && !shown.length" class="audit-empty" data-testid="audit-empty">No entries.</div>
 
@@ -62,6 +67,7 @@ import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { useRoute } from 'vue-router'
 import { useRelayStore } from '@/stores/relay'
 import { useSessionStore } from '@/stores/session'
+import { EVENTS, inboundDetail } from '@/utils/relayAuditLabels'
 
 const props = defineProps({ relayId: { type: String, required: true } })
 
@@ -74,38 +80,14 @@ const ACTIONS = {
   get_identity: 'Get identity', find_channels: 'Find channels', read_thread: 'Read thread', search: 'Search',
 }
 
-// Inbound (stage 3a) events: humanized like the tool actions above.
-const EVENTS = {
-  inbound_instruction: 'Slack instruction',
-  inbound_reply: 'Slack reply',
-  inbound_reply_failed: 'Slack reply',
-  inbound_ack: 'Slack acknowledgement', // received reaction on a dispatched instruction (#2364)
-  inbound_connection: 'Inbound connection',
-  inbound_drop_summary: 'Inbound drops',
-  inbound_housekeeping: 'Inbound housekeeping',
-  // Monitors (stage 3b-i): never any message text, only ids, counts and reasons
-  monitor_created: 'Monitor created',
-  monitor_removed: 'Monitor removed',
-  monitor_suspended: 'Monitor suspended',
-  monitor_resumed: 'Monitor resumed',
-  monitor_paused: 'Monitor paused',
-  monitor_delivered: 'Monitor delivered',
-  monitor_delivery_failed: 'Monitor delivery failed',
-  monitor_expired: 'Monitor expired',
-  monitor_flood: 'Monitor flood',
-  monitor_backfill: 'Monitor backfill',
-}
-const MONITOR_KINDS = {
-  monitor_thread: 'thread', monitor_channel: 'channel', monitor_mentions: 'mentions', monitor_dms: 'DMs',
-}
-
 const store = useRelayStore()
 const sessionStore = useSessionStore()
 const route = useRoute()
 
 const sessionFilter = ref(typeof route.query.session === 'string' ? route.query.session : '')
 const channelFilter = ref(typeof route.query.channel === 'string' ? route.query.channel : '')
-const outcomeFilter = ref('')
+const eventsFilter = ref(typeof route.query.events === 'string' ? route.query.events : '')
+const outcomeFilter = ref(typeof route.query.outcome === 'string' ? route.query.outcome : '')
 const records = ref([])
 const loading = ref(false)
 const error = ref('')
@@ -142,12 +124,8 @@ function detail(r) {
     if (!r.source || r.source === 'prompt') return r.policy ? `→ ${r.policy}` : `→ ${NONE}`
     return `${r.old_policy || NONE} → ${next}`
   }
-  if (r.event === 'inbound_connection') return r.inbound_status || ''
-  if (r.event === 'inbound_drop_summary') {
-    return Object.entries(r.reason_counts || {}).map(([k, n]) => `${k} ${n}`).join(' · ')
-  }
-  if (r.event === 'inbound_housekeeping') return r.count != null ? `${r.count}` : ''
-  if (r.event?.startsWith('monitor_')) return monitorDetail(r)
+  if (r.event === 'inbound_connection' || r.event === 'inbound_drop_summary'
+    || r.event === 'inbound_housekeeping' || r.event?.startsWith('monitor_')) return inboundDetail(r)
   const parts = []
   if (r.tool === 'find_channels' || r.tool === 'get_identity') {
     if (r.query_preview) parts.push(`“${r.query_preview}”`)
@@ -158,48 +136,6 @@ function detail(r) {
   if (r.text_preview) return r.text_preview.slice(0, PREVIEW_CAP)
   if (r.policy) return `policy ${r.policy}`
   return ''
-}
-
-function plural(n, word) {
-  return `${n} ${word}${n === 1 ? '' : 's'}`
-}
-
-// Humanized monitor rows: kind + count or reason (no message text is ever audited).
-function monitorDetail(r) {
-  const parts = []
-  const kind = MONITOR_KINDS[r.monitor_kind]
-  if (kind) parts.push(`${kind} monitor`)
-  switch (r.event) {
-    case 'monitor_created':
-    case 'monitor_resumed':
-    case 'monitor_paused':
-      if (r.count) parts.push(plural(r.count, 'keyword'))
-      if (r.approval === 'prompt_allow') parts.push('owner consented')
-      if (r.source) parts.push(`by ${r.source}`)
-      break
-    case 'monitor_removed':
-      if (r.source) parts.push(`by ${r.source}`)
-      if (r.count) parts.push(plural(r.count, 'monitor'))
-      break
-    case 'monitor_delivered':
-      if (r.count != null) parts.push(plural(r.count, 'message'))
-      if (r.omitted) parts.push(`+${r.omitted} omitted`)
-      break
-    case 'monitor_flood':
-      parts.push('over the flood limit, messages dropped')
-      break
-    case 'monitor_backfill':
-      if (r.code === 'gap_notice') parts.push('backfill incomplete, gap notice sent with the next envelope')
-      else if (r.code === 'backfill_truncated') parts.push('older content omitted')
-      if (r.count != null && r.code !== 'gap_notice') parts.push(plural(r.count, 'message'))
-      if (r.reason_counts) {
-        parts.push(Object.entries(r.reason_counts).map(([k, n]) => `${k} ${n}`).join(' · '))
-      }
-      break
-    default:
-      if (r.code) parts.push(r.code)
-  }
-  return parts.join(' · ')
 }
 
 function policySource(r) {
@@ -223,6 +159,7 @@ async function load(reset) {
     const before = reset ? null : records.value[records.value.length - 1]?.ts
     const page = await store.loadAudit(props.relayId, {
       sessionId: sessionFilter.value, channel: channelFilter.value.trim(), limit: PAGE, before,
+      events: eventsFilter.value,
     })
     if (mine !== seq) return
     records.value = reset ? page : [...records.value, ...page]
@@ -235,12 +172,13 @@ async function load(reset) {
 }
 
 // A deep link (info modal -> Audit) can arrive while this page is already open.
-watch(() => [route.query.session, route.query.channel], ([session, channel]) => {
+watch(() => [route.query.session, route.query.channel, route.query.events], ([session, channel, events]) => {
   sessionFilter.value = typeof session === 'string' ? session : ''
   channelFilter.value = typeof channel === 'string' ? channel : ''
+  eventsFilter.value = typeof events === 'string' ? events : ''
 })
 
-watch([sessionFilter, channelFilter], () => {
+watch([sessionFilter, channelFilter, eventsFilter], () => {
   clearTimeout(timer)
   timer = setTimeout(() => load(true), 250)
 })
@@ -268,6 +206,9 @@ defineExpose({ reload: () => load(true) })
 .outcome-denied .outcome, .outcome-refused .outcome, .outcome-late .outcome, .outcome-rate_limited .outcome, .outcome-removed .outcome, .outcome-dropped .outcome, .outcome-truncated .outcome, .outcome-cancelled .outcome { color: #d29922; }
 .outcome-error .outcome, .outcome-delivery_failed .outcome { color: #f87171; }
 .older { align-self: flex-start; }
+.audit-events { display: flex; align-items: center; gap: 4px; max-width: 100%; }
+.audit-events .audit-tag { margin-left: 0; overflow: hidden; text-overflow: ellipsis; max-width: 80%; }
+.audit-clear { background: none; border: 0; padding: 0 4px; font-size: 11px; color: var(--bs-secondary-color); cursor: pointer; }
 @media (max-width: 600px) {
   .audit-filters > * { max-width: none; }
   .audit-table, .audit-table tbody, .audit-table tr, .audit-table td { display: block; width: 100%; }

@@ -203,13 +203,67 @@ export const useRelayStore = defineStore('relay', () => {
   }
 
   /** Audit records, newest first; `before` is the exclusive ISO timestamp cursor. */
-  async function loadAudit(relayId, { sessionId, channel, limit, before } = {}) {
-    const params = { session_id: sessionId || null, channel: channel || null, limit: limit || null, before: before || null }
+  async function loadAudit(relayId, { sessionId, channel, limit, before, events, outcome, since } = {}) {
+    const params = {
+      session_id: sessionId || null, channel: channel || null, limit: limit || null, before: before || null,
+      events: events || null, outcome: outcome || null, since: since || null,
+    }
     const { records } = await api.get(`/api/relays/${encodeURIComponent(relayId)}/audit`, { params })
     return records || []
   }
 
+  // ── Inbound tab (UI stage 3d-i): health, monitors, activity ──────────────
+  const _relayUrl = (relayId) => `/api/relays/${encodeURIComponent(relayId)}`
+
+  /** Health facts + attention items (counts / codes / times only; no Slack call, no message text). */
+  async function loadInboundHealth(relayId, { signal } = {}) {
+    return api.get(`${_relayUrl(relayId)}/inbound/health`, { signal })
+  }
+
+  /** Relay-wide monitor rows `{monitors, total}`; 409 (inbound not running) reads as an empty list. */
+  async function loadMonitors(relayId, { sessionId, status, kind, limit, offset, signal } = {}) {
+    const params = {
+      session_id: sessionId || null, status: status || null, kind: kind || null,
+      limit: limit || null, offset: offset || null,
+    }
+    try {
+      return await api.get(`${_relayUrl(relayId)}/monitors`, { params, signal })
+    } catch (e) {
+      if (e?.status === 409) return { monitors: [], total: 0, notRunning: true }
+      throw e
+    }
+  }
+
+  /** Owner pause / resume (immediate). Resolves the monitor row as the server now has it. */
+  async function setMonitorPaused(relayId, monitorId, paused) {
+    try {
+      return await api.patch(`${_relayUrl(relayId)}/monitors/${encodeURIComponent(monitorId)}`, { paused })
+    } catch (e) {
+      throw Object.assign(new Error(errorMessage(e)), { status: e?.status })
+    }
+  }
+
+  async function deleteMonitor(relayId, monitorId) {
+    try {
+      return await api.delete(`${_relayUrl(relayId)}/monitors/${encodeURIComponent(monitorId)}`)
+    } catch (e) {
+      throw Object.assign(new Error(errorMessage(e)), { status: e?.status })
+    }
+  }
+
+  const ACTIVITY_EVENTS = 'inbound_*,monitor_*'
+  // Instruction rows carry a text preview in the audit; the feed never needs (or holds) it.
+  const _stripText = ({ text_preview: _p, text_sha256: _h, ...rest }) => rest
+
+  /** Recent inbound / monitor audit rows, newest first, without any message text. */
+  async function loadInboundActivity(relayId, { limit = 50, before, events, outcome, signal } = {}) {
+    const params = { events: events || ACTIVITY_EVENTS, limit, before: before || null, outcome: outcome || null }
+    const { records } = await api.get(`${_relayUrl(relayId)}/audit`, { params, signal })
+    return (records || []).map(_stripText)
+  }
+
   return {
+    loadInboundHealth, loadMonitors, setMonitorPaused, deleteMonitor, loadInboundActivity,
     getPolicyModel, searchConversations, resolveLabels, cachedLabel, setPolicy, removePolicy,
     loadAudit, errorMessage, rememberLabel,
     relays, relay, loaded, loading, error,

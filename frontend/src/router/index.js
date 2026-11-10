@@ -155,7 +155,13 @@ const router = createRouter({
   routes
 })
 
-router.beforeEach((to, _from, next) => {
+router.beforeEach((to, from, next) => {
+  // A query-only change on the same path (e.g. Library > Relays `?tab=`) does not leave the editing
+  // area, so unsaved edits are not at risk and the guard stays out of the way.
+  if (from.name && to.path === from.path) {
+    next()
+    return
+  }
   // useSettingsStore() is safe to call outside setup() once Pinia is initialized
   const settingsStore = useSettingsStore()
   const blocked = settingsStore.requestNavigation(to)

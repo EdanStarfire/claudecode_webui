@@ -6,6 +6,7 @@ the record exposes the referenced secret NAMES plus has_* booleans (false when t
 """
 
 import asyncio
+from datetime import UTC, datetime
 from urllib.parse import urlparse
 
 from fastapi import APIRouter, HTTPException
@@ -14,6 +15,7 @@ from shared.exception_handlers import handle_exceptions
 
 from ..relay.adapter import RelayError
 from ..relay.adapters import get_spec
+from ..relay.audit import validate_events
 from ..relay.directory import DEFAULT_PAGE, DirectoryLookupError, entry_label
 from ..relay.handles import HandleConflictError
 from ..relay.inbound.constants import MONITOR_KINDS
@@ -116,6 +118,15 @@ def build_router(webui) -> APIRouter:
             "status": status["status"], "detail": status["detail"],
             "connected_at": status.get("connected_at"),
         }
+
+    @router.get("/api/relays/{relay_id}/inbound/health")
+    @handle_exceptions("relay inbound health")
+    async def inbound_health(relay_id: str):
+        """Owner-facing inbound health: connection facts, monitor counts, 24 h audit counters and
+        attention items. Counts / codes / ids / times only; never a Slack call, never message text."""
+        if await manager().get_relay(relay_id) is None:
+            raise HTTPException(status_code=404, detail="Relay not found")
+        return await webui.service.relay_inbound.health_for(relay_id)
 
     @router.delete("/api/relays/{relay_id}")
     @handle_exceptions("delete relay")
@@ -266,11 +277,24 @@ def build_router(webui) -> APIRouter:
         channel: str | None = None,
         limit: int = 100,
         before: str | None = None,
+        events: str | None = None,
+        since: str | None = None,
+        outcome: str | None = None,
     ):
         if await manager().get_relay(relay_id) is None:
             raise HTTPException(status_code=404, detail="Relay not found")
+        # ``events``: comma-separated exact names, a trailing * is a prefix (ValueError -> 400)
+        names = validate_events([e.strip() for e in events.split(",")] if events else None)
+        if since is not None:
+            try:
+                parsed = datetime.fromisoformat(since)
+            except ValueError as e:
+                raise HTTPException(status_code=400, detail="since must be an ISO timestamp") from e
+            # audit ts are UTC isoformat strings: compare like with like
+            since = parsed.replace(tzinfo=parsed.tzinfo or UTC).astimezone(UTC).isoformat()
         records = await webui.service.relay_audit.query(
-            relay_id, session_id=session_id, channel=channel, limit=limit, before=before
+            relay_id, session_id=session_id, channel=channel, limit=limit, before=before,
+            events=names, since=since, outcome=outcome,
         )
         return {"records": records}
 

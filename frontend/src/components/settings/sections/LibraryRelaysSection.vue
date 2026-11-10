@@ -85,57 +85,90 @@
           <div v-if="actionError" class="msg-error" role="alert">{{ actionError }}</div>
         </div>
 
-        <!-- Credentials: references to existing vault secrets -->
-        <div class="relay-card">
-          <h3>Credentials</h3>
-          <RelaySecretPickers ref="pickers" :relay="relay" :saving="savingSecrets" :error="secretError" @submit="saveSecrets" @dirty="onDirty" />
+        <!-- Tabs: every panel stays mounted (v-show) so the credentials form and its dirty state
+             survive a tab switch -->
+        <div class="tabs" role="tablist" aria-label="Relay sections" data-testid="relay-tabs">
+          <button
+            v-for="t in TABS"
+            :key="t.key"
+            type="button"
+            role="tab"
+            class="tab"
+            :class="{ on: activeTab === t.key }"
+            :aria-selected="activeTab === t.key"
+            :data-testid="`relay-tab-${t.key}`"
+            @click="selectTab(t.key)"
+          >{{ t.label }}<span v-if="t.key === 'inbound' && inboundAttention" class="dot" title="Inbound needs attention" data-testid="relay-tab-dot"></span></button>
         </div>
 
-        <!-- Setup guide -->
-        <RelaySetupGuide :relay-id="relay.relay_id" :open="!relay.has_user_token" />
-
-        <!-- Audit -->
-        <div class="relay-card" data-testid="relay-audit-card">
-          <h3>Audit</h3>
-          <RelayAuditView :relay-id="relay.relay_id" />
-        </div>
-
-        <!-- OAuth -->
-        <details class="relay-card" data-testid="relay-advanced">
-          <summary>Advanced: authorize with OAuth</summary>
-          <div v-if="!oauthAvailable" class="muted oauth-note" data-testid="relay-oauth-unavailable">
-            Slack accepts OAuth redirects only to https or localhost URLs. Open the UI over https or
-            on localhost to use OAuth; otherwise paste the tokens above.
+        <div v-show="activeTab === 'setup'" class="panel" role="tabpanel" data-testid="relay-panel-setup">
+          <!-- Credentials: references to existing vault secrets -->
+          <div class="relay-card">
+            <h3>Credentials</h3>
+            <RelaySecretPickers ref="pickers" :relay="relay" :saving="savingSecrets" :error="secretError" @submit="saveSecrets" @dirty="onDirty" />
           </div>
-          <form v-else class="oauth-form" autocomplete="off" @submit.prevent="startOAuth" data-testid="relay-oauth">
-            <label>Client ID
-              <input v-model="oauthClientId" class="form-control form-control-sm" autocomplete="off" />
-            </label>
-            <label>Client secret
-              <input v-model="oauthClientSecret" type="password" class="form-control form-control-sm" autocomplete="off" placeholder="write-only" />
-            </label>
-            <small class="muted">Redirect URL to register in the Slack app: <code>{{ redirectUri }}</code></small>
-            <button type="submit" class="btn btn-sm btn-outline-primary" :disabled="oauthBusy || !oauthClientId" data-testid="relay-oauth-start">
-              {{ oauthBusy ? 'Waiting for Slack…' : 'Authorize with Slack' }}
-            </button>
-            <div v-if="oauthMessage" class="muted" role="status">{{ oauthMessage }}</div>
-          </form>
-        </details>
+
+          <!-- Setup guide -->
+          <RelaySetupGuide :relay-id="relay.relay_id" :open="!relay.has_user_token" />
+
+          <!-- OAuth -->
+          <details class="relay-card" data-testid="relay-advanced">
+            <summary>Advanced: authorize with OAuth</summary>
+            <div v-if="!oauthAvailable" class="muted oauth-note" data-testid="relay-oauth-unavailable">
+              Slack accepts OAuth redirects only to https or localhost URLs. Open the UI over https or
+              on localhost to use OAuth; otherwise paste the tokens above.
+            </div>
+            <form v-else class="oauth-form" autocomplete="off" @submit.prevent="startOAuth" data-testid="relay-oauth">
+              <label>Client ID
+                <input v-model="oauthClientId" class="form-control form-control-sm" autocomplete="off" />
+              </label>
+              <label>Client secret
+                <input v-model="oauthClientSecret" type="password" class="form-control form-control-sm" autocomplete="off" placeholder="write-only" />
+              </label>
+              <small class="muted">Redirect URL to register in the Slack app: <code>{{ redirectUri }}</code></small>
+              <button type="submit" class="btn btn-sm btn-outline-primary" :disabled="oauthBusy || !oauthClientId" data-testid="relay-oauth-start">
+                {{ oauthBusy ? 'Waiting for Slack…' : 'Authorize with Slack' }}
+              </button>
+              <div v-if="oauthMessage" class="muted" role="status">{{ oauthMessage }}</div>
+            </form>
+          </details>
+        </div>
+
+        <div v-show="activeTab === 'inbound'" class="panel" role="tabpanel" data-testid="relay-panel-inbound">
+          <div class="relay-card">
+            <RelayInboundTab
+              :relay-id="relay.relay_id"
+              :active="activeTab === 'inbound'"
+              :initial-session="routeSession"
+              @attention="inboundAttention = $event"
+            />
+          </div>
+        </div>
+
+        <div v-show="activeTab === 'audit'" class="panel" role="tabpanel" data-testid="relay-panel-audit">
+          <div class="relay-card" data-testid="relay-audit-card">
+            <RelayAuditView :relay-id="relay.relay_id" />
+          </div>
+        </div>
       </template>
     </div>
   </div>
 </template>
 
 <script setup>
-import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
+import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
+import { useRoute, useRouter } from 'vue-router'
 import { useRelayStore } from '@/stores/relay'
 import { useSettingsStore } from '@/stores/settings'
 import SettingsToolbar from '../SettingsToolbar.vue'
 import RelaySecretPickers from '../../relay/RelaySecretPickers.vue'
 import RelaySetupGuide from '../../relay/RelaySetupGuide.vue'
 import RelayAuditView from '../../relay/RelayAuditView.vue'
+import RelayInboundTab from '../../relay/RelayInboundTab.vue'
 
 const store = useRelayStore()
+const route = useRoute()
+const router = useRouter()
 const settingsStore = useSettingsStore()
 const pickers = ref(null)
 const relay = computed(() => store.relay)
@@ -150,6 +183,23 @@ const confirmDelete = ref(false)
 const deleting = ref(false)
 const savingSecrets = ref(false)
 const secretError = ref('')
+
+// Tabs (`?tab=setup|inbound|audit`). A legacy deep link with only `session` / `channel` / `events`
+// (the session info row's Audit link) opens Audit.
+const TABS = [{ key: 'setup', label: 'Setup' }, { key: 'inbound', label: 'Inbound' }, { key: 'audit', label: 'Audit' }]
+function tabFromRoute() {
+  const q = route?.query || {}
+  if (TABS.some(t => t.key === q.tab)) return q.tab
+  return q.session || q.channel || q.events ? 'audit' : 'setup'
+}
+const activeTab = ref(tabFromRoute())
+const inboundAttention = ref(false)
+const routeSession = computed(() => (typeof route?.query?.session === 'string' ? route.query.session : ''))
+function selectTab(key) {
+  activeTab.value = key
+  if (router && route?.query?.tab !== key) router.replace({ query: { ...route.query, tab: key } }).catch(() => {})
+}
+watch(() => route?.query, () => { activeTab.value = tabFromRoute() })
 
 const INBOUND_CHIPS = {
   connected: ['connected', 'chip--ok'],
@@ -324,6 +374,14 @@ onBeforeUnmount(() => {
 .chip--missing { color: #d29922; border-color: #d2992266; }
 .chip--bad { color: #f87171; border-color: #f8717166; }
 .chip--muted { color: var(--bs-secondary-color); }
+.tabs { display: flex; gap: 2px; overflow-x: auto; white-space: nowrap; border-bottom: 1px solid var(--bs-border-color); flex: 0 0 auto; }
+.tab {
+  background: none; border: 0; border-bottom: 2px solid transparent; padding: 6px 14px; font-size: 13px;
+  color: var(--bs-secondary-color); cursor: pointer; flex: 0 0 auto;
+}
+.tab.on { color: var(--bs-body-color); border-bottom-color: var(--bs-body-color); font-weight: 600; }
+.dot { display: inline-block; width: 6px; height: 6px; border-radius: 50%; background: #d29922; margin-left: 6px; vertical-align: middle; }
+.panel { display: flex; flex-direction: column; gap: 16px; }
 .card-actions { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
 .test-result { margin-top: 10px; padding: 8px 12px; border-radius: 6px; font-size: 13px; }
 .test-result--ok { background: rgba(63, 185, 80, 0.1); border: 1px solid rgba(63, 185, 80, 0.3); }
