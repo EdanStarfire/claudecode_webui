@@ -136,6 +136,9 @@ def test_monitor_error_rule():
     assert item["count"] == 1 and item["audit"]["events"] == ["monitor_delivery_failed"]
     dup = build(monitors=[mon(status="suspended", reason="delivery_failed", failures=3, last_error="x")])
     assert "monitor_error" not in codes(dup) and "monitors_delivery_failed" in codes(dup)
+    for other in (mon(status="suspended", reason="flood", failures=2, last_error="x"),
+                  mon(paused=True, failures=2, last_error="x")):
+        assert "monitor_error" not in codes(build(monitors=[other]))
 
 
 def test_paused_wins_over_suspended_in_counts():

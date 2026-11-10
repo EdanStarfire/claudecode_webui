@@ -97,6 +97,8 @@ const nowSec = ref(Date.now() / 1000)
 let seq = 0
 let moreSeq = 0
 let filterGen = 0
+let unmounted = false
+let needReset = false // a reset load was superseded by an action: the reload keeps it
 let reloadAfter = null // a load skipped while an action was in flight: re-run when it ends
 let timer = null
 
@@ -119,12 +121,15 @@ function query(extra = {}) {
 
 /** Reload the loaded span (a poll, a filter change, after an action). Skipped while an action is in flight. */
 async function load({ reset = false } = {}) {
+  if (unmounted) return
+  if (reset) needReset = true
   const mine = ++seq
   if (reset) removedNote.value = ''
   try {
     const limit = reset ? PAGE : Math.min(MAX_PAGE, Math.max(PAGE, rows.value.length))
     const res = await store.loadMonitors(props.relayId, query({ limit }))
     if (mine !== seq) return
+    if (reset) needReset = false
     if (busy.size) { // the optimistic rows win; reload once the action has finished
       reloadAfter = { reset }
       return
@@ -189,9 +194,10 @@ async function togglePause(monitor) {
 }
 
 function settleAction() {
+  if (unmounted) return
   seq++ // a poll that started during the action carries pre-action state
   if (!busy.size) {
-    const again = reloadAfter || { reset: false }
+    const again = { reset: needReset || !!reloadAfter?.reset }
     reloadAfter = null
     load(again)
   }
@@ -245,7 +251,14 @@ watch([status, kind, sessionFilter], () => { filterGen++; load({ reset: true }) 
 watch(() => props.active, (on) => {
   if (on) { load(); startPolling() } else stopPolling()
 }, { immediate: true })
-onBeforeUnmount(() => { stopPolling(); seq++ })
+function onVisible() { if (!document.hidden && props.active) load() }
+document.addEventListener('visibilitychange', onVisible)
+onBeforeUnmount(() => {
+  unmounted = true
+  stopPolling()
+  seq++
+  document.removeEventListener('visibilitychange', onVisible)
+})
 defineExpose({ reload: () => load(), rows })
 </script>
 

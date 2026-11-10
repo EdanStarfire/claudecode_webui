@@ -179,10 +179,9 @@ def build_health(
             ))
 
     # ---- a monitor whose deliveries keep failing (not yet suspended)
-    erroring = [
+    erroring = [  # active monitors only: suspended / paused ones are already reported by their own tag
         m for m in monitors
-        if int(m.get("failures") or 0) > 0 and m.get("last_error")
-        and m.get("suspended_reason") != const.SUSPEND_DELIVERY_FAILED
+        if effective_state(m) == "active" and int(m.get("failures") or 0) > 0 and m.get("last_error")
     ]
     if erroring:
         attention.append(_item(

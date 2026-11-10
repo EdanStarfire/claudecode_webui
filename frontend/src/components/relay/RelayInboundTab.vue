@@ -70,11 +70,20 @@ function start() {
   timer = setInterval(() => { if (!document.hidden && !inflight) loadHealth() }, props.pollMs)
 }
 
-onMounted(() => { if (!props.active) loadHealth() }) // one read so the tab's dot is right even while another tab is showing
+function onVisible() { if (!document.hidden && props.active) loadHealth() }
+onMounted(() => {
+  document.addEventListener('visibilitychange', onVisible)
+  if (!props.active) loadHealth()
+}) // one read so the tab's dot is right even while another tab is showing
 watch(() => props.active, (on) => {
   if (on) { loadHealth(); start() } else stop()
 }, { immediate: true })
-onBeforeUnmount(() => { stop(); seq++; controller?.abort() })
+onBeforeUnmount(() => {
+  stop()
+  seq++
+  controller?.abort()
+  document.removeEventListener('visibilitychange', onVisible)
+})
 defineExpose({ reload: loadHealth })
 </script>
 
