@@ -4,11 +4,8 @@ shape, authority consequences, end-to-end cursor-on-confirm and instruction fail
 from __future__ import annotations
 
 import asyncio
-import uuid
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, patch
-
-import pytest
 
 from backend.legion.comm_router import CommRouter
 from backend.models.legion_models import (
@@ -23,9 +20,7 @@ from backend.relay.inbound.sink import enqueue_external_comm
 from backend.session_manager import SessionState
 from backend.tests.relay_inbound_support import (
     BASE_TIME,
-    OTHER_USER,
     SELF_DM,
-    SESSION,
     audit_events,
     envelope,
     make_inbound,
@@ -36,7 +31,6 @@ from backend.tests.relay_monitor_support import CHANNEL, emit, fire_window, moni
 from backend.tests.test_relay_inbound_integration import (
     _fast_sleep,
     _wait_for,
-    fake_coordinator,
     live_coordinator,
 )
 

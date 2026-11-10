@@ -81,6 +81,44 @@ describe('RelayAuditView', () => {
     expect(rows[7].find('.outcome').text()).toBe('token_revoked') // no leading separator without an outcome
   })
 
+  it('humanizes the monitor events with kind + count or reason, never message text (3b-i)', async () => {
+    const E = (over) => REC({ tool: undefined, ...over })
+    apiMock.get.mockResolvedValue({ records: [
+      E({ event: 'monitor_created', outcome: 'ok', monitor_kind: 'monitor_channel', count: 2, source: 'agent' }),
+      E({ event: 'monitor_removed', outcome: 'ok', monitor_kind: 'monitor_thread', source: 'expired' }),
+      E({ event: 'monitor_suspended', outcome: 'ok', code: 'channel_blocked', monitor_kind: 'monitor_thread' }),
+      E({ event: 'monitor_resumed', outcome: 'ok', source: 'policy', monitor_kind: 'monitor_thread' }),
+      E({ event: 'monitor_delivered', outcome: 'ok', count: 3, omitted: 10 }),
+      E({ event: 'monitor_delivery_failed', outcome: 'error', code: 'cancelled' }),
+      E({ event: 'monitor_expired', outcome: 'ok', code: 'idle', monitor_kind: 'monitor_thread' }),
+      E({ event: 'monitor_flood', outcome: 'dropped', code: 'flood_limit', monitor_kind: 'monitor_channel' }),
+      E({ event: 'monitor_backfill', outcome: 'truncated', code: 'backfill_truncated', count: 300 }),
+      E({ event: 'inbound_instruction', outcome: 'delivery_failed', code: 'delivery_failed' }),
+      E({ event: 'inbound_instruction', outcome: 'cancelled', code: 'cancelled' }),
+    ] })
+    const { wrapper } = await mountView()
+    const actions = wrapper.findAll('[data-testid="audit-action"]').map(a => a.text())
+    expect(actions).toEqual(['Monitor created', 'Monitor removed', 'Monitor suspended', 'Monitor resumed',
+      'Monitor delivered', 'Monitor delivery failed', 'Monitor expired', 'Monitor flood', 'Monitor backfill',
+      'Slack instruction', 'Slack instruction'])
+    expect(actions.join(' ')).not.toMatch(/monitor_/)
+    const details = wrapper.findAll('[data-testid="audit-detail"]').map(d => d.text())
+    expect(details[0]).toBe('channel monitor · 2 keywords · by agent')
+    expect(details[1]).toBe('thread monitor · by expired')
+    expect(details[2]).toBe('thread monitor · channel_blocked')
+    expect(details[3]).toBe('thread monitor · by policy')
+    expect(details[4]).toBe('3 messages · +10 omitted')
+    expect(details[5]).toBe('cancelled')
+    expect(details[6]).toBe('thread monitor · idle')
+    expect(details[7]).toBe('channel monitor · over the flood limit, messages dropped')
+    expect(details[8]).toBe('300 messages')
+    const rows = wrapper.findAll('[data-testid="audit-record"]')
+    expect(rows[5].classes()).toContain('outcome-error')
+    expect(rows[7].classes()).toContain('outcome-dropped')
+    expect(rows[9].classes()).toContain('outcome-delivery_failed')
+    expect(rows[10].classes()).toContain('outcome-cancelled')
+  })
+
   it('humanizes the received-reaction events (#2364)', async () => {
     const E = (over) => REC({ tool: undefined, event: 'inbound_ack', ...over })
     apiMock.get.mockResolvedValue({ records: [

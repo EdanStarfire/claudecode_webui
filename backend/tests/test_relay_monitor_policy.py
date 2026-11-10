@@ -12,7 +12,6 @@ from backend.relay.inbound.manager import InboundManager
 from backend.relay.service import RelayService
 from backend.session_manager import SessionState
 from backend.tests.relay_inbound_support import (
-    BASE_TIME,
     RELAY_ID,
     SESSION,
     FakeSocketTransport,

@@ -47,6 +47,28 @@ describe('UserMessage', () => {
     expect(link.getAttribute('href')).toBe('#/session/sender-1')
   })
 
+  it('renders a Slack monitor envelope as a collapsed CommCard without a jump link (3b-i)', () => {
+    const message = {
+      type: 'user',
+      content: '📡 Slack monitor update — 2 message(s) ...',
+      timestamp: 1700000000,
+      metadata: {
+        comm: {
+          from_name: 'slack-monitor', from_display_name: 'Slack monitor', comm_type: 'info',
+          summary: 'Slack monitor: 2 messages', content: 'Slack monitor: 2 messages',
+        },
+        relay_inbound: { kind: 'monitor', count: 2 },
+      },
+    }
+
+    const { wrapper } = renderWithStores(UserMessage, { props: { message }, stubs: { MarkdownView: MarkdownViewStub } })
+
+    const name = screen.getByText('Slack monitor')
+    expect(name.tagName).not.toBe('A')
+    expect(wrapper.text()).toContain('Slack monitor: 2 messages')
+    expect(wrapper.text()).not.toContain('📡')  // collapsed: the fenced body is not shown until expanded
+  })
+
   it('renders plain text when from_minion_id is missing (legacy comm)', () => {
     const message = {
       type: 'user',

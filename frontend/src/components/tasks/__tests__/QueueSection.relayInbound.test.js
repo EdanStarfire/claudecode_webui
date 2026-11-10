@@ -30,4 +30,17 @@ describe('QueueSection: Slack instruction items (issue #2103)', () => {
     expect(labels[2].length).toBeLessThanOrEqual('Slack: '.length + 52 + 3)
     expect(wrapper.text()).not.toContain('OWNER INSTRUCTION')
   })
+
+  it('shows a Slack monitor envelope as counts only, without a second "Slack:" prefix (3b-i)', async () => {
+    apiMock.get.mockResolvedValue({ items: [
+      item('m', 'Slack monitor: 3 messages', { relay_inbound: { kind: 'monitor', count: 3 }, comm: { summary: 'x' } }),
+      item('i', 'do it', { relay_inbound: { kind: 'instruction', thread_ts: '1.1' } }),
+    ] })
+    const { wrapper, pinia } = renderWithStores(QueueSection, { props: { expanded: true } })
+    useSessionStore(pinia).currentSessionId = 's1'
+    await flush()
+    await flush()
+    const labels = wrapper.findAll('.item-content').map(w => w.text())
+    expect(labels).toEqual(['Slack monitor: 3 messages', 'Slack: do it'])
+  })
 })
