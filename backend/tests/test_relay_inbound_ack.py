@@ -47,12 +47,12 @@ def adds(env):
 
 class TestReactionAdded:
     async def test_constant(self):
-        assert const.INBOUND_ACK_REACTION == "eyes"
+        assert const.INBOUND_ACK_REACTION == "flying_saucer"
 
     async def test_top_level_instruction_gets_reaction_ac1_t1(self, env):  # AC1, AC4, T1
         t = await started(env)
         ts = await send(env, t, "!my-agent ping")
-        assert env.adapter.reactions == [("add", SELF_DM, ts, "eyes")]
+        assert env.adapter.reactions == [("add", SELF_DM, ts, "flying_saucer")]
         assert len(env.sink.calls) == 1
         await env.service.stop()
         [rec] = audit_events(env, "inbound_ack")
@@ -207,7 +207,7 @@ class TestRetraction:
         env.sink.outcome = DeliveryOutcome("failed", "x")
         t = await started(env)
         ts = await send(env, t, "!my-agent go")
-        assert env.adapter.reactions == [("add", SELF_DM, ts, "eyes"), ("remove", SELF_DM, ts, "eyes")]
+        assert env.adapter.reactions == [("add", SELF_DM, ts, "flying_saucer"), ("remove", SELF_DM, ts, "flying_saucer")]
         await env.service.stop()
         assert [r["outcome"] for r in audit_events(env, "inbound_ack")] == ["ok", "removed"]
         assert len(env.adapter.posts) == 1  # the refusal reply is unchanged

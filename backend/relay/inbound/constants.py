@@ -30,9 +30,10 @@ THREAD_BURST = 10
 COMM_NAMESPACE = uuid.UUID("5d3e2c7e-0b0a-4f2a-9a55-2103a0b17a3a")
 
 # Slack reaction (emoji name without colons) the relay itself adds to an owner's self-DM message once
-# it is accepted and about to be enqueued as an instruction (issue #2364). Only instructions get
-# it: never ignored/refused/late/rate-limited/replayed messages and never monitored content (3b).
-INBOUND_ACK_REACTION = "eyes"
+# it is accepted and about to be enqueued as an instruction (issue #2364). A flying saucer: a reaction
+# the owner rarely uses by hand, so it is not mistaken for their own. Only instructions get it: never
+# ignored/refused/late/rate-limited/replayed messages and never monitored content (3b).
+INBOUND_ACK_REACTION = "flying_saucer"
 # Upper bound for the (background) reaction call; delivery never waits for it.
 ACK_TIMEOUT_SECONDS = 10.0
 

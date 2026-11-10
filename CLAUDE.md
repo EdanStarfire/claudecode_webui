@@ -557,7 +557,7 @@ digests / unread (3c) and the inbound UI / audit view (3d) are later stages. Cod
   thread_ts; replies in this thread need no approval.` (issue #2364 dropped the "further messages are instructions" and "never write
   !handle" sentences: a reply containing `!handle` is refused by the trigger-syntax check, whose message states the reason and the fix).
 - **Received reaction (issue #2364)**: when an instruction has passed every check (trust rule, handle/thread resolution, age window,
-  rate limits, session availability, relay attached) and is about to be enqueued, the RELAY adds `INBOUND_ACK_REACTION` (`"eyes"`,
+  rate limits, session availability, relay attached) and is about to be enqueued, the RELAY adds `INBOUND_ACK_REACTION` (`"flying_saucer"`, 🛸, a reaction the owner rarely uses by hand so it is not mistaken for their own;
   Slack name without colons, `inbound/constants.py`) to the owner's message through the adapter (`reactions.add`, owner user token; no
   agent, gate or session involvement, whatever the session state). Scope: top-level instructions and thread follow-ups dispatched as
   instructions, in the self-DM, and nothing else: no reaction for ignored/dropped events, unknown/ambiguous/empty handle, late,
