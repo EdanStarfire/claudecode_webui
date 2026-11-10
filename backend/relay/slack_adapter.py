@@ -22,6 +22,8 @@ from .adapter import (
     PostResult,
     RelayError,
     RelayMessage,
+    SearchHit,
+    SearchPage,
     ThreadPage,
     UploadResult,
     UserInfo,
@@ -44,6 +46,8 @@ def _leaf_text(node: Any) -> str:
         return "".join(_leaf_text(n) for n in node)
     if not isinstance(node, dict):
         return ""
+    if node.get("type") == "user" and isinstance(node.get("user_id"), str):
+        return f"<@{node['user_id']}>"  # a mention in a block-only message stays detectable
     if isinstance(node.get("text"), str):
         return node["text"]
     if node.get("type") == "link":
@@ -83,6 +87,13 @@ def _parse_message(raw: dict, channel: str | None = None) -> RelayMessage:
     )
 
 
+def _latest_ts(raw: Any) -> str | None:
+    """``latest`` is a ts string on some conversation payloads and a message object on others."""
+    if isinstance(raw, dict):
+        raw = raw.get("ts")
+    return raw if isinstance(raw, str) and raw else None
+
+
 def _parse_conversation(raw: dict) -> ConversationInfo:
     return ConversationInfo(
         id=raw.get("id", ""),
@@ -95,6 +106,7 @@ def _parse_conversation(raw: dict) -> ConversationInfo:
         last_read=raw.get("last_read"),
         unread_count=raw.get("unread_count_display", raw.get("unread_count")),
         is_member=raw.get("is_member") if isinstance(raw.get("is_member"), bool) else None,
+        latest_ts=_latest_ts(raw.get("latest")),
     )
 
 
@@ -229,23 +241,26 @@ class SlackAdapter:
 
     async def read_thread(
         self, channel: str, thread_ts: str, limit: int = 100, cursor: str | None = None,
-        oldest: str | None = None,
+        oldest: str | None = None, latest: str | None = None, inclusive: bool = False,
     ) -> ThreadPage:
         items, next_cursor = await self._paginate(
             "conversations.replies",
             {"channel": channel, "ts": thread_ts, "include_all_metadata": "true", "cursor": cursor,
-             "oldest": oldest},
+             "oldest": oldest, "latest": latest, "inclusive": "true" if inclusive else None},
             "messages",
             limit,
         )
         return ThreadPage([_parse_message(m, channel) for m in items], next_cursor)
 
     async def read_history(
-        self, channel: str, limit: int = 100, oldest: str | None = None, cursor: str | None = None
+        self, channel: str, limit: int = 100, oldest: str | None = None, cursor: str | None = None,
+        latest: str | None = None, inclusive: bool = False,
     ) -> ThreadPage:
         items, next_cursor = await self._paginate(
             "conversations.history",
-            {"channel": channel, "oldest": oldest, "include_all_metadata": "true", "cursor": cursor},
+            {"channel": channel, "oldest": oldest, "latest": latest,
+             "inclusive": "true" if inclusive else None, "include_all_metadata": "true",
+             "cursor": cursor},
             "messages",
             limit,
         )
@@ -264,6 +279,28 @@ class SlackAdapter:
             channel_id = (raw.get("channel") or {}).get("id")
             results.append(_parse_message({**raw, "channel": channel_id}, channel_id))
         return results
+
+    async def search_page(
+        self, query: str, page: int = 1, count: int = 100, sort: str = "timestamp",
+        sort_dir: str = "desc",
+    ) -> SearchPage:
+        """One page of ``search.messages`` with the sort the caller asks for (inbound mentions
+        backfill: newest first). The hits are search metadata only: hydrate before trusting them."""
+        data = await self._call(
+            "search.messages",
+            {"query": query, "count": min(count, 100), "page": page, "sort": sort, "sort_dir": sort_dir},
+        )
+        block = data.get("messages") or {}
+        hits = []
+        for raw in block.get("matches") or []:
+            chan = raw.get("channel") if isinstance(raw.get("channel"), dict) else {}
+            channel_id = chan.get("id")
+            hits.append(SearchHit(
+                _parse_message({**raw, "channel": channel_id}, channel_id),
+                is_im=bool(chan.get("is_im")), is_mpim=bool(chan.get("is_mpim")),
+            ))
+        paging = block.get("paging") or {}
+        return SearchPage(hits, int(paging.get("page") or page), int(paging.get("pages") or 1))
 
     async def upload(
         self,

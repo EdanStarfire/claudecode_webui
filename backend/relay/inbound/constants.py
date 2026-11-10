@@ -51,7 +51,10 @@ STATUS_STOPPED = "stopped"
 # ---------------------------------------------------------------- monitors (stage 3b-i)
 KIND_MONITOR_THREAD = "monitor_thread"
 KIND_MONITOR_CHANNEL = "monitor_channel"
-MONITOR_KINDS = frozenset({KIND_MONITOR_THREAD, KIND_MONITOR_CHANNEL})  # 3b-ii adds mentions / dms
+KIND_MONITOR_MENTIONS = "monitor_mentions"  # stage 3b-ii: every message that mentions the owner
+KIND_MONITOR_DMS = "monitor_dms"  # stage 3b-ii: direct and group messages other people send the owner
+SCOPE_KINDS = frozenset({KIND_MONITOR_MENTIONS, KIND_MONITOR_DMS})  # no channel; need the owner's consent
+MONITOR_KINDS = frozenset({KIND_MONITOR_THREAD, KIND_MONITOR_CHANNEL}) | SCOPE_KINDS
 
 # Coalescing window and envelope caps
 MONITOR_WINDOW_SECONDS = 60.0
@@ -79,6 +82,15 @@ MAX_KEYWORDS = 10
 MAX_KEYWORD_CHARS = 100
 MAX_FILTER_USERS = 10
 MONITOR_RECENT_KEYS = 1000  # per monitor: message keys remembered for per-monitor dedupe
+
+# Scope-monitor backfill (3b-ii)
+BACKFILL_MARGIN_SECONDS = 60.0  # re-read this far before the cursor: search indexes lag
+MENTION_RERUN_DELAY_SECONDS = 30.0  # one delayed re-run of the mentions backfill (index lag)
+HYDRATION_CAP = 20  # single-message fetches per backfill run
+DM_BACKFILL_MAX_CONVERSATIONS = 50
+SEARCH_MIN_SPACING_SECONDS = 6.0  # per relay between two backfill searches
+SEARCH_MAX_PAGES = 3
+RECENT_KEYS_PERSISTED = 100  # per monitor: delivered keys written with the cursor
 
 # Delivery watcher
 WATCH_POLL_SECONDS = 5.0

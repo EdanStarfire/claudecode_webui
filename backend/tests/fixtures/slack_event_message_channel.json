@@ -1,0 +1,49 @@
+{
+ "token": "<redacted>",
+ "team_id": "T0TEAM001",
+ "context_team_id": "T0TEAM001",
+ "context_enterprise_id": null,
+ "api_app_id": "A0OWNAPP01",
+ "event": {
+  "type": "message",
+  "user": "U0TESTER01",
+  "ts": "1800000000.000100",
+  "client_msg_id": "<redacted>",
+  "text": "hello from the tester",
+  "team": "T0TEAM001",
+  "blocks": [
+   {
+    "type": "rich_text",
+    "block_id": "blk01",
+    "elements": [
+     {
+      "type": "rich_text_section",
+      "elements": [
+       {
+        "type": "text",
+        "text": "hello from the tester"
+       }
+      ]
+     }
+    ]
+   }
+  ],
+  "channel": "C0CHAN0001",
+  "event_ts": "1800000000.000100",
+  "channel_type": "channel"
+ },
+ "type": "event_callback",
+ "event_id": "Ev0FIXTURE01",
+ "event_time": 1800000000,
+ "authorizations": [
+  {
+   "enterprise_id": null,
+   "team_id": "T0TEAM001",
+   "user_id": "U0OWNER001",
+   "is_bot": false,
+   "is_enterprise_install": false
+  }
+ ],
+ "is_ext_shared_channel": false,
+ "event_context": "<redacted>"
+}

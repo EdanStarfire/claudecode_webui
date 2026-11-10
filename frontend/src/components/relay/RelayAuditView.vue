@@ -88,13 +88,16 @@ const EVENTS = {
   monitor_removed: 'Monitor removed',
   monitor_suspended: 'Monitor suspended',
   monitor_resumed: 'Monitor resumed',
+  monitor_paused: 'Monitor paused',
   monitor_delivered: 'Monitor delivered',
   monitor_delivery_failed: 'Monitor delivery failed',
   monitor_expired: 'Monitor expired',
   monitor_flood: 'Monitor flood',
   monitor_backfill: 'Monitor backfill',
 }
-const MONITOR_KINDS = { monitor_thread: 'thread', monitor_channel: 'channel' }
+const MONITOR_KINDS = {
+  monitor_thread: 'thread', monitor_channel: 'channel', monitor_mentions: 'mentions', monitor_dms: 'DMs',
+}
 
 const store = useRelayStore()
 const sessionStore = useSessionStore()
@@ -169,7 +172,9 @@ function monitorDetail(r) {
   switch (r.event) {
     case 'monitor_created':
     case 'monitor_resumed':
+    case 'monitor_paused':
       if (r.count) parts.push(plural(r.count, 'keyword'))
+      if (r.approval === 'prompt_allow') parts.push('owner consented')
       if (r.source) parts.push(`by ${r.source}`)
       break
     case 'monitor_removed':
@@ -184,7 +189,12 @@ function monitorDetail(r) {
       parts.push('over the flood limit, messages dropped')
       break
     case 'monitor_backfill':
-      if (r.count != null) parts.push(plural(r.count, 'message'))
+      if (r.code === 'gap_notice') parts.push('backfill incomplete, gap notice sent with the next envelope')
+      else if (r.code === 'backfill_truncated') parts.push('older content omitted')
+      if (r.count != null && r.code !== 'gap_notice') parts.push(plural(r.count, 'message'))
+      if (r.reason_counts) {
+        parts.push(Object.entries(r.reason_counts).map(([k, n]) => `${k} ${n}`).join(' · '))
+      }
       break
     default:
       if (r.code) parts.push(r.code)

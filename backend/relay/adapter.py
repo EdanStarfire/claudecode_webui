@@ -63,6 +63,23 @@ class ThreadPage:
 
 
 @dataclass
+class SearchHit:
+    """One ``search.messages`` match: the (unhydrated) message plus the search metadata Slack
+    attaches to its channel. Never delivered as content on its own (inbound stage 3b-ii)."""
+
+    message: RelayMessage
+    is_im: bool = False
+    is_mpim: bool = False
+
+
+@dataclass
+class SearchPage:
+    hits: list[SearchHit] = field(default_factory=list)
+    page: int = 1
+    pages: int = 1
+
+
+@dataclass
 class ConversationInfo:
     id: str
     name: str | None = None
@@ -74,6 +91,7 @@ class ConversationInfo:
     last_read: str | None = None
     unread_count: int | None = None
     is_member: bool | None = None  # None = Slack did not say
+    latest_ts: str | None = None  # ts of the newest message (``latest``: a ts string or a message object)
 
 
 @dataclass
@@ -105,16 +123,22 @@ class RelayAdapter(Protocol):
 
     async def read_thread(
         self, channel: str, thread_ts: str, limit: int = 100, cursor: str | None = None,
-        oldest: str | None = None,
+        oldest: str | None = None, latest: str | None = None, inclusive: bool = False,
     ) -> ThreadPage: ...
 
     async def read_history(
-        self, channel: str, limit: int = 100, oldest: str | None = None, cursor: str | None = None
+        self, channel: str, limit: int = 100, oldest: str | None = None, cursor: str | None = None,
+        latest: str | None = None, inclusive: bool = False,
     ) -> ThreadPage: ...
 
     async def search(
         self, query: str, in_channels: list[str] | None = None, limit: int = 20
     ) -> list[RelayMessage]: ...
+
+    async def search_page(
+        self, query: str, page: int = 1, count: int = 100, sort: str = "timestamp",
+        sort_dir: str = "desc",
+    ) -> SearchPage: ...
 
     async def upload(
         self,

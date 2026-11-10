@@ -7,6 +7,7 @@ rules; (4) the monitor is active, not paused and not expired. Nothing here does 
 
 from __future__ import annotations
 
+import re
 import unicodedata
 from collections.abc import Callable, Iterable
 from dataclasses import dataclass
@@ -14,7 +15,12 @@ from typing import Any
 
 from ..events import RELAY_EVENT_TYPE, RelayEvent
 from ..safety import has_agent_marker
-from .constants import KIND_MONITOR_CHANNEL, KIND_MONITOR_THREAD
+from .constants import (
+    KIND_MONITOR_CHANNEL,
+    KIND_MONITOR_DMS,
+    KIND_MONITOR_MENTIONS,
+    KIND_MONITOR_THREAD,
+)
 from .store import ACTIVE
 
 
@@ -91,11 +97,31 @@ def monitor_active(monitor: dict[str, Any], now: float) -> bool:
     return expires is None or now < float(expires)
 
 
-def matches_monitor(event: RelayEvent, monitor: dict[str, Any]) -> bool:
-    """Scope + filter rule for one monitor (state is checked separately)."""
+def mentions_owner(text: str | None, owner_user_id: str | None) -> bool:
+    """``<@OWNER>`` or ``<@OWNER|name>`` in *text* (anchored on the user id, never on names).
+    ``@here`` / ``@channel`` / ``@everyone`` and user-group mentions do not count."""
+    if not owner_user_id or not text:
+        return False
+    return re.search(rf"<@{re.escape(owner_user_id)}(?:\|[^>]*)?>", text) is not None
+
+
+def matches_monitor(
+    event: RelayEvent, monitor: dict[str, Any], owner_user_id: str | None = None
+) -> bool:
+    """Scope + filter rule for one monitor (state is checked separately). The scope kinds
+    (mentions / DMs) have no channel and need the owner's id; without it they never match."""
+    kind = monitor.get("kind")
+    if kind in (KIND_MONITOR_MENTIONS, KIND_MONITOR_DMS):
+        if not owner_user_id or event.user == owner_user_id:
+            return False  # the owner's own messages are never content
+        if kind == KIND_MONITOR_MENTIONS:
+            if not mentions_owner(event.text, owner_user_id):
+                return False
+        elif event.channel_type not in ("im", "mpim"):
+            return False
+        return filters_match(monitor.get("filters") or {}, event)
     if monitor.get("channel") != event.channel:
         return False
-    kind = monitor.get("kind")
     if kind == KIND_MONITOR_THREAD:
         if event.thread_ts != monitor.get("thread_ts") or event.ts == monitor.get("thread_ts"):
             return False
@@ -110,5 +136,5 @@ def match(event: RelayEvent, candidates: Iterable[dict[str, Any]], ctx: MatchCon
         return []
     return [
         m for m in candidates
-        if monitor_active(m, ctx.now) and matches_monitor(event, m)
+        if monitor_active(m, ctx.now) and matches_monitor(event, m, ctx.owner_user_id)
     ]

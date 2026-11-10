@@ -42,6 +42,18 @@ _PERSON_NAME_RE = re.compile(r"^@\s*(\S.{0,79})\Z")
 # can return the full structured refusal, including the fenced candidate list.
 NAME_LOOKUP_CODES = frozenset({"name_ambiguous", "name_not_found"})
 _PLAIN_RE = re.compile(r"[\x00-\x1f\x7f]+")  # agent-supplied filter text shown in a prompt: one line
+SCOPE_PROMPT_TEXT = {
+    "mentions": (
+        "Let this session read every Slack message that mentions you, in any channel or "
+        "conversation you are in? It will receive them as untrusted content. Channels you blocked "
+        "stay excluded."
+    ),
+    "dms": (
+        "Let this session read the direct and group messages other people send you? Your own "
+        "messages and your self-DM are excluded; it will receive the rest as untrusted content. "
+        "Conversations you blocked stay excluded."
+    ),
+}
 PREVIEW_LEN = 40000  # the prompt shows everything that will be sent (bodies are capped at 35000)
 
 
@@ -165,6 +177,9 @@ class RelayPolicyGate:
         # (session_id, relay_id, channel_id, thread_ts) -> bool: the inbound stage's owned
         # instruction threads (issue #2103 stage 3a, D3). None = feature off.
         self.thread_grants = None
+        # (session_id, relay_id, tool, args) -> bool: the session already holds this identical scope
+        # monitor, so no (second) consent prompt (inbound 3b-ii). None = always prompt.
+        self.scope_existing = None
 
     # --------------------------------------------------------------- context
 
@@ -319,6 +334,8 @@ class RelayPolicyGate:
                 DENY, tool, action, "relay_not_attached",
                 "No relay with a user token is attached to this session.",
             )
+        if tool in ctx.spec.scope_tools:
+            return self._scope_decision(ctx, tool, args, with_prompt)
         if action is None:  # search: filtered per channel in the handler
             return GateResult(ALLOW, tool)
 
@@ -392,6 +409,39 @@ class RelayPolicyGate:
             decision.kind, tool, action, channel_id=channel_id, channel_name=name,
             channel_label=label, policy=policy, prompt=prompt,
         )
+
+    def _scope_decision(
+        self, ctx: RelayContext, tool: str, args: dict[str, Any], with_prompt: bool
+    ) -> GateResult:
+        """Scope monitors (mentions / DMs, inbound 3b-ii) always need the owner's consent: one
+        plain-language prompt, no channel resolution and no policy involved (channels the owner
+        blocked are excluded later, at delivery). Bypass keeps prompting: this branch never
+        reads the permission mode."""
+        lookup = self.scope_existing
+        if lookup is not None and lookup(ctx.session_id, ctx.relay_id, tool, args):
+            return GateResult(ALLOW, tool, "monitor_scope")  # the handler returns it as already_monitored
+        if not with_prompt:
+            return GateResult(PROMPT, tool, "monitor_scope")
+        record = self.relay_manager.relays.get(ctx.relay_id)
+        scope = "mentions" if tool == "monitor_mentions" else "dms"
+        prompt = {
+            "kind": "monitor_scope", "tool": tool, "action": "monitor_scope", "scope": scope,
+            "filters_summary": self._filters_summary(args),
+            "relay_name": _PLAIN_RE.sub(" ", str(getattr(record, "name", "") or ""))[:80],
+            "text": SCOPE_PROMPT_TEXT[scope],
+        }
+        return GateResult(PROMPT, tool, "monitor_scope", prompt=prompt)
+
+    @staticmethod
+    def _filters_summary(args: dict[str, Any]) -> str:
+        keywords = [_PLAIN_RE.sub(" ", str(k)) for k in (
+            args.get("keywords") if isinstance(args.get("keywords"), list) else [])]
+        users = [_PLAIN_RE.sub(" ", str(u)) for u in (
+            args.get("users") if isinstance(args.get("users"), list) else [])]
+        return "; ".join(p for p in (
+            f"keywords: {', '.join(keywords)}"[:300] if keywords else "",
+            f"users: {', '.join(users)}"[:300] if users else "",
+        ) if p)
 
     def _owned_thread(
         self, ctx: RelayContext, tool: str, args: dict[str, Any], channel_id: str
@@ -481,6 +531,14 @@ def approval_refusal(code: str, channel_id: str | None, action: str, policy: str
             f"Channel {channel_id or ''} has no policy and this session is in don't-ask mode, so "
             "none can be chosen and nothing was sent. Ask the owner to set a policy for the "
             "channel (for example `auto`) or to change the permission mode."
+        ),
+        "monitor_consent_unavailable": (
+            "No one is available to approve this monitor (unattended session). Nothing was "
+            "created; ask the user to run it in an attended session."
+        ),
+        "monitor_consent_unavailable_dont_ask": (
+            "This session is in don't-ask mode, so a monitor that needs consent is refused "
+            "instead of prompting. Nothing was created; ask the user to change the permission mode."
         ),
         "approval_cancelled": (
             "The session was interrupted or stopped before the owner answered; nothing was sent."

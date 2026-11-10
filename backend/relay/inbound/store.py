@@ -46,7 +46,8 @@ class JsonSubscriptionStore:
         self._clock = clock
         self._records: dict[str, dict[str, Any]] = {}
         self._lock = asyncio.Lock()
-        self._by_channel: dict[str, list[str]] = {}  # monitors only: channel -> record ids
+        self._by_channel: dict[str, list[str]] = {}  # channel monitors only: channel -> record ids
+        self._scope_ids: list[str] = []  # mentions / DMs monitors (no channel)
         self._flush_task: asyncio.Task | None = None
 
     def load(self) -> None:
@@ -60,10 +61,14 @@ class JsonSubscriptionStore:
 
     def _reindex(self) -> None:
         index: dict[str, list[str]] = {}
+        scope: list[str] = []
         for rid, r in self._records.items():
-            if r.get("kind") in MONITOR_KINDS and r.get("channel"):
+            if r.get("kind") in const.SCOPE_KINDS:
+                scope.append(rid)
+            elif r.get("kind") in MONITOR_KINDS and r.get("channel"):
                 index.setdefault(r["channel"], []).append(rid)
         self._by_channel = index
+        self._scope_ids = scope
 
     async def _persist(self) -> None:
         self._reindex()
@@ -272,6 +277,13 @@ class JsonSubscriptionStore:
             if r.get("kind") in MONITOR_KINDS and (session_id is None or r.get("session_id") == session_id)
         ]
 
+    def scope_monitors(self, kind: str | None = None) -> list[dict[str, Any]]:
+        """Mentions / DMs monitors (no channel): small in-memory list, no I/O."""
+        return [
+            self._records[i] for i in self._scope_ids
+            if i in self._records and (kind is None or self._records[i].get("kind") == kind)
+        ]
+
     def monitors_for_channel(self, channel: str) -> list[dict[str, Any]]:
         """Index lookup used by the event handler (never a full scan)."""
         return [self._records[i] for i in self._by_channel.get(channel, ()) if i in self._records]
@@ -284,7 +296,7 @@ class JsonSubscriptionStore:
         return len(self.monitors(session_id))
 
     def find_monitor(
-        self, session_id: str, kind: str, channel: str, thread_ts: str | None,
+        self, session_id: str, kind: str, channel: str | None, thread_ts: str | None,
         filters: dict[str, Any],
     ) -> dict[str, Any] | None:
         for r in self.monitors(session_id):
@@ -294,9 +306,9 @@ class JsonSubscriptionStore:
         return None
 
     async def create_monitor(
-        self, session_id: str, kind: str, channel: str, *, thread_ts: str | None = None,
+        self, session_id: str, kind: str, channel: str | None, *, thread_ts: str | None = None,
         filters: dict[str, Any] | None = None, expires_at: float | None = None,
-        created_by: str = "agent",
+        created_by: str = "agent", consent: dict[str, Any] | None = None,
     ) -> tuple[dict[str, Any], str]:
         """Create a monitor, or return the identical existing one. Returns ``(record, outcome)``
         with outcome ``created`` | ``existing`` | ``resumed`` (a flood / delivery-failed monitor
@@ -330,7 +342,10 @@ class JsonSubscriptionStore:
                 "last_seen_ts": self._ts(now), "last_activity_at": now, "last_delivered_at": None,
                 "last_error": None, "failures": 0, "flood_windows": 0,
                 "counters": {"delivered": 0, "dropped": 0, "coalesced": 0},
+                "recent_keys": [],
             }
+            if consent is not None:
+                rec["consent"] = consent  # written only after an approved scope prompt
             self._records[rec["id"]] = rec
             await self._persist()
             return rec, "created"
@@ -354,14 +369,21 @@ class JsonSubscriptionStore:
             await self._persist()
             return rec
 
-    async def set_paused(self, monitor_id: str, paused: bool) -> bool:
+    async def set_paused(
+        self, monitor_id: str, paused: bool, *, resume_from: float | None = None
+    ) -> dict[str, Any] | None:
+        """Owner pause / resume. A resume with ``resume_from`` restarts the durable cursor there
+        (the paused period is not backfilled). Returns the record, or None when unknown."""
         async with self._lock:
             rec = self.get_monitor(monitor_id)
             if rec is None:
-                return False
+                return None
             rec["paused"] = bool(paused)
+            if not paused and resume_from is not None:
+                rec["last_seen_ts"] = self._ts(resume_from)
+                rec["recent_keys"] = []
             await self._persist()
-            return True
+            return rec
 
     def advance_cursor(self, monitor_id: str, ts: str) -> bool:
         """Monotonic durable cursor (debounced write)."""
@@ -371,6 +393,16 @@ class JsonSubscriptionStore:
         rec["last_seen_ts"] = ts
         self._persist_soon()
         return True
+
+    def note_delivered_keys(self, monitor_id: str, keys: list[str]) -> None:
+        """Persist the newest delivered message keys of a monitor (bounded) together with the cursor
+        advance: the 60 s backfill margin must not repeat them after a restart."""
+        rec = self.get_monitor(monitor_id)
+        if rec is None or not keys:
+            return
+        merged = [k for k in rec.get("recent_keys") or [] if k not in keys] + list(keys)
+        rec["recent_keys"] = merged[-const.RECENT_KEYS_PERSISTED:]
+        self._persist_soon()
 
     def bump_counters(self, monitor_id: str, **deltas: int) -> None:
         rec = self.get_monitor(monitor_id)

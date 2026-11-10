@@ -331,3 +331,56 @@ async def test_issue_2103_list_channels_and_users_paginate_and_parse():
     assert users[0].display_name == "Jane" and users[0].real_name == "Jane Doe"
     assert users[0].handle == "jane" and users[0].name == "Jane" and not users[0].deleted
     assert users[1].deleted and users[1].is_bot
+
+
+# ---- inbound 3b-ii additions -------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_issue_2103_search_page_sort_params_and_hit_shape():
+    seen = {}
+
+    def handler(request):
+        seen.update(_form(request))
+        return httpx.Response(200, json={"ok": True, "messages": {
+            "paging": {"page": 2, "pages": 3},
+            "matches": [{"ts": "1.1", "text": "hi", "user": "U1", "permalink": "https://x/p?thread_ts=0.5",
+                         "channel": {"id": "G0MPIM0001", "is_mpim": True}}]}})
+
+    page = await make_adapter(handler).search_page("<@U0OWNER001>", page=2, count=250)
+    assert seen["sort"] == "timestamp" and seen["sort_dir"] == "desc" and seen["page"] == "2"
+    assert seen["count"] == "100" and seen["query"] == "<@U0OWNER001>"
+    assert "after" not in seen["query"] and "before" not in seen["query"]  # never date filters
+    assert (page.page, page.pages) == (2, 3)
+    hit = page.hits[0]
+    assert hit.is_mpim and not hit.is_im and hit.message.channel == "G0MPIM0001"
+    assert hit.message.permalink.endswith("thread_ts=0.5")
+
+
+@pytest.mark.asyncio
+async def test_issue_2103_history_latest_inclusive_and_conversation_latest_ts():
+    seen = []
+
+    def handler(request):
+        seen.append((request.url.path, _form(request)))
+        if request.url.path.endswith("conversations.info"):
+            return httpx.Response(200, json={"ok": True, "channel": {"id": "D1", "is_im": True,
+                                                                     "latest": {"ts": "9.9"}}})
+        return httpx.Response(200, json={"ok": True, "messages": []})
+
+    adapter = make_adapter(handler)
+    await adapter.read_history("C1", limit=1, oldest="5.0", latest="5.0", inclusive=True)
+    await adapter.read_thread("C1", "4.0", limit=2, oldest="5.0", latest="5.0", inclusive=True)
+    assert seen[0][1]["latest"] == "5.0" and seen[0][1]["inclusive"] == "true"
+    assert seen[1][1]["ts"] == "4.0" and seen[1][1]["inclusive"] == "true"
+    assert (await adapter.conversation_info("D1")).latest_ts == "9.9"
+    from backend.relay.slack_adapter import _parse_conversation
+    assert _parse_conversation({"id": "D2", "latest": "7.7"}).latest_ts == "7.7"
+    assert _parse_conversation({"id": "D3"}).latest_ts is None
+
+
+def test_issue_2103_rich_text_user_element_renders_as_mention():
+    from backend.relay.slack_adapter import _text_from_blocks
+    blocks = [{"type": "rich_text", "elements": [{"type": "rich_text_section", "elements": [
+        {"type": "user", "user_id": "U0OWNER001"}, {"type": "text", "text": " ping"}]}]}]
+    assert _text_from_blocks(blocks) == "<@U0OWNER001> ping"

@@ -7,7 +7,15 @@ from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
 
-from backend.relay.adapter import PostResult, RelayMessage, ThreadPage
+from backend.relay.adapter import (
+    ConversationInfo,
+    PostResult,
+    RelayError,
+    RelayMessage,
+    SearchHit,
+    SearchPage,
+    ThreadPage,
+)
 from backend.relay.audit import RelayAuditLog
 from backend.relay.handles import RelayHandleIndex
 from backend.relay.inbound.service import DeliveryOutcome, InboundService
@@ -132,6 +140,16 @@ class FakeAdapter:
         self.channel_names: dict[str, str] = {}
         self.user_names: dict[str, str] = {}
         self.member: bool | None = True
+        # --- scope monitors (3b-ii)
+        self.conversations: dict[str, ConversationInfo] = {}  # id -> info (list / info calls)
+        self.search_hits: list[SearchHit] = []  # newest first, as search.messages sort=timestamp desc
+        self.search_visible: int | None = None  # index lag: only the first N hits are visible
+        self.search_calls: list[dict[str, Any]] = []
+        self.thread_parents: dict[str, RelayMessage] = {}  # thread_ts -> parent (always returned first)
+        self.call_log: list[tuple[str, str]] = []  # (method, channel)
+        self.fail_methods: dict[str, str] = {}  # method -> error code raised by that method
+        self.list_calls: list[str] = []
+        self.fail_channels: dict[str, str] = {}  # channel -> error code for info / history on it
 
     async def post(self, channel, text, blocks=None, thread_ts=None, metadata=None):
         if self.fail_post:
@@ -160,20 +178,64 @@ class FakeAdapter:
         if self.unreact_error:
             raise RelayError(self.unreact_error, "reactions.remove")
 
-    async def read_history(self, channel, limit=100, oldest=None, cursor=None):
-        self.history_calls.append({"channel": channel, "oldest": oldest, "cursor": cursor})
+    def _maybe_fail(self, method: str) -> None:
+        code = self.fail_methods.get(method)
+        if code:
+            raise RelayError(code, method)
+
+    @staticmethod
+    def _in_range(msg, oldest, latest, inclusive) -> bool:
+        ts = float(msg.ts)
+        if oldest is not None and not (ts >= float(oldest) if inclusive else ts > float(oldest)):
+            return False
+        return not (latest is not None and not (ts <= float(latest) if inclusive else ts < float(latest)))
+
+    async def read_history(self, channel, limit=100, oldest=None, cursor=None, latest=None, inclusive=False):
+        self.history_calls.append({"channel": channel, "oldest": oldest, "cursor": cursor,
+                                   "latest": latest, "inclusive": inclusive})
+        self.call_log.append(("history", channel))
+        self._maybe_fail("read_history")
         source = self.histories.get(channel, self.history)
-        msgs = [m for m in source if oldest is None or float(m.ts) > float(oldest)]
+        msgs = [m for m in source if self._in_range(m, oldest, latest, inclusive)]
         return ThreadPage(msgs if cursor is None else [], self.history_next.get(cursor))
 
-    async def read_thread(self, channel, thread_ts, limit=100, cursor=None, oldest=None):
-        self.thread_calls.append({"channel": channel, "thread_ts": thread_ts, "oldest": oldest})
-        msgs = [m for m in self.threads.get(thread_ts, []) if oldest is None or float(m.ts) > float(oldest)]
+    async def read_thread(self, channel, thread_ts, limit=100, cursor=None, oldest=None, latest=None,
+                          inclusive=False):
+        self.thread_calls.append({"channel": channel, "thread_ts": thread_ts, "oldest": oldest,
+                                  "latest": latest, "inclusive": inclusive})
+        self.call_log.append(("thread", channel))
+        self._maybe_fail("read_thread")
+        msgs = [m for m in self.threads.get(thread_ts, []) if self._in_range(m, oldest, latest, inclusive)]
+        parent = self.thread_parents.get(thread_ts)
+        if parent is not None:
+            msgs = [parent, *msgs]
         return ThreadPage(msgs, None)
 
-    async def conversation_info(self, channel):
-        from backend.relay.adapter import ConversationInfo
+    async def search_page(self, query, page=1, count=100, sort="timestamp", sort_dir="desc"):
+        self.search_calls.append({"query": query, "page": page, "sort": sort, "sort_dir": sort_dir})
+        self._maybe_fail("search_page")
+        hits = self.search_hits if self.search_visible is None else self.search_hits[: self.search_visible]
+        pages = max(1, -(-len(hits) // count))
+        return SearchPage(hits[(page - 1) * count: page * count], page, pages)
 
+    async def list_conversations(self, types="public_channel,private_channel,mpim,im", limit=200):
+        self.list_calls.append(types)
+        self._maybe_fail("list_conversations")
+        wanted = set(types.split(","))
+        out = []
+        for c in self.conversations.values():
+            kind = "im" if c.is_im else "mpim" if c.is_mpim else "private_channel" if c.is_private else "public_channel"
+            if kind in wanted:
+                out.append(c)
+        return out
+
+    async def conversation_info(self, channel):
+        self.call_log.append(("info", channel))
+        self._maybe_fail("conversation_info")
+        if channel in self.fail_channels:
+            raise RelayError(self.fail_channels[channel], "conversations.info")
+        if channel in self.conversations:
+            return self.conversations[channel]
         return ConversationInfo(id=channel, name=self.channel_names.get(channel, "general"),
                                 is_channel=True, is_member=self.member)
 
@@ -361,14 +423,21 @@ def make_inbound(tmp_path: Path, *, handles: dict[str, str] | None = None, facto
         await asyncio.sleep(0)
 
     service_relay = FakeRelayService(sessions, index)
+    rerun = ManualSleep(clock)  # the delayed mentions re-run only happens when a test fires it
+    search_sleeps: list[float] = []
+
+    async def search_sleep(seconds: float) -> None:
+        search_sleeps.append(seconds)
+        clock.advance(seconds)
+
     service = InboundService(
         RELAY_ID, relay_manager=manager, relay_service=service_relay,
         session_manager=sessions, audit=audit, sink=sink, relays_root=tmp_path / "relays",
         transport_factory=factory or default_factory, now=clock.now, mono=clock.mono,
         sleep=fake_sleep, rng=lambda: 1.0, port=port, window_sleep=window,
-        watch_sleep=ManualSleep(clock),
+        watch_sleep=ManualSleep(clock), search_sleep=search_sleep, rerun_sleep=rerun,
     )
-    return SimpleNamespace(
+    return SimpleNamespace(rerun=rerun, search_sleeps=search_sleeps,
         service=service, adapter=adapter, manager=manager, sessions=sessions, index=index,
         sink=sink, audit=audit, clock=clock, transports=transports, delays=delays, port=port,
         window=window, relay_service=service_relay,

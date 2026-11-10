@@ -615,8 +615,8 @@ digests / unread (3c) and the inbound UI / audit view (3d) are later stages. Cod
 
 ### Relay inbound: monitors (3b-i)
 
-Stage 3b-i lets a session watch Slack threads and channels. Mentions, DMs, the consent prompt and the REST/panel surface
-are later stages (3b-ii, 3d); digests/unread are 3c. All monitored content is **untrusted**, never an instruction.
+Stage 3b-i lets a session watch Slack threads and channels. Mentions and DM monitors, the consent prompt and the REST surface
+are stage 3b-ii (below); the panel is 3d; digests/unread are 3c. All monitored content is **untrusted**, never an instruction.
 Code: `relay/inbound/{matcher,coalescer,flood,content,watcher,monitor_delivery}.py`, `mcp/relay_monitor_tools.py`.
 
 - **Tools** (`mcp__relay_slack__*`, `AdapterSpec.monitor_tools`, audited, not send tools): `monitor_thread(channel, thread_ts, expires_at?)`,
@@ -677,6 +677,58 @@ Code: `relay/inbound/{matcher,coalescer,flood,content,watcher,monitor_delivery}.
 - **Audit**: `monitor_created|removed|suspended|resumed|delivered|delivery_failed|expired|flood|backfill`, instruction outcomes
   `delivery_failed|cancelled`; new fields `monitor_id, monitor_kind, envelope_id, omitted`. No message text, ever; keyword filters
   are stored as sha256 (`query_sha256`) + count only. Unmatched-event drops join the 5-minute `inbound_drop_summary` (`monitor_*` reasons).
+
+### Relay inbound: mentions and DM monitors (3b-ii)
+
+Stage 3b-ii adds two **scope monitors** that have no channel: `monitor_mentions` (every message that mentions the owner,
+`<@OWNER>` / `<@OWNER|name>` anchored on the id; `@here` / `@channel` / user groups do not count) and `monitor_dms` (direct
+messages and group DMs/MPIMs other people send the owner). Same record schema (`channel`/`thread_ts` null), coalescer, flood
+limits, envelope, Comm shape and cursor-on-confirm as 3b-i; optional keyword / sender filters as `monitor_channel`. Counts toward
+the 20 / 100 caps. Consent UI, digests (3c) and the monitors panel (3d) are other stages. Code: `relay/inbound/{backfill,hydrate,
+public,search_limiter}.py`, `mcp/relay_monitor_tools.py::handle_scope_monitor`.
+
+- **Consent (`monitor_scope`)**: `AdapterSpec.scope_tools`; `RelayPolicyGate.evaluate` has an early branch (before channel resolution
+  and the policy matrix) that returns a PROMPT carrying `{kind: "monitor_scope", scope, filters_summary, relay_name, text}` with the
+  fixed plain-language wording (mentions: every message that mentions you, in any conversation, untrusted content, blocked channels stay
+  excluded; dms: direct and group messages other people send you, own messages and self-DM excluded). One prompt per creation; it never
+  looks at the permission mode, so **bypass still prompts**; unattended sessions get `monitor_consent_unavailable`, don't-ask sessions
+  `monitor_consent_unavailable_dont_ask` (nothing created, nothing waits). `permission_bridge.apply_response` answers Allow / Deny only
+  (never a policy write, whatever `relay_choice` carries). An **identical existing monitor returns `already_monitored` with no prompt** in every mode (the pre-hook asks `InboundManager.scope_monitor_exists`; filters needing name resolution always prompt) and consumes a leftover callback grant. Pausing or deleting a monitor also cancels its queued, undispatched envelopes.
+  The record stores `consent: {at, via: "prompt"}`; the audit row has `approval=prompt_allow`. `RelayPermissionPrompt.vue` has the
+  third kind (Allow / Deny only). Revoking consent = the owner deletes or pauses the monitor (REST).
+- **Policy semantics**: no policy is read at match time. At **flush** (fresh policy) messages from an explicitly `blocked` channel are
+  dropped for scope monitors (counted `monitor_blocked_channel`, cursor still advances, the monitor stays active); unlisted, read_only,
+  ask and auto channels are delivered (the consent covers them). Accepted residuals: a channel blocked after matching does not recall an
+  envelope that is already queued and undispatched; blocked-channel messages are filtered after the flood limits have counted them, so a very
+  noisy blocked channel can consume the relay-wide flood budget (no I/O is allowed at match time). Channel / thread monitors keep the 3b-i suspend rules.
+- **Matching**: `matcher.matches_monitor(event, monitor, owner_id)`; the owner's own messages never match; `never_content` (self-DM,
+  echo rule, instruction threads) applies first; DM monitors need `channel_type` im/mpim (backfill sets it from the conversation kind);
+  without a known owner scope monitors never match. `_leaf_text` renders rich-text `user` elements as `<@ID>` so a block-only mention is
+  detectable.
+- **Backfill** (every `hello`, session start; `InboundService.backfill_monitors`): **DMs/MPIMs** one `users.conversations` call per run
+  (self-DM removed, at most 50 conversations checked, `conversation_cap` counted), per conversation (serialized) `conversations.info` newest
+  ts decides whether a history fetch is needed (unknown `latest` fetches; a conversation that answers `channel_not_found` / `user_disabled` / `is_archived`, e.g. a DM with a deactivated user, is skipped without a gap notice, counted `conversation_gone`). **Mentions**: `search.messages "<@OWNER>"` newest first
+  (`sort=timestamp&sort_dir=desc`, <= 3 pages, **no date filters**: the window is re-read from `cursor - 60 s`), spaced >= 6 s per relay
+  (`SearchLimiter`); hits from conversations the owner is not a member of, the self-DM and the owner's own are dropped (`non_member`);
+  if the membership list cannot be fetched the run fails closed. **Every remaining hit is hydrated** (single-message fetch with
+  `include_all_metadata`, via `conversations.replies` when the hit's permalink carries `thread_ts`) and judged by the live echo rule
+  (metadata marker, own `api_app_id`, owner message with app/bot id, text marker) plus the mention regex on the HYDRATED text before it can
+  be delivered. Cap 20 hydrations per run, serialized, a per-run cache; any error / rate limit / missing message drops the hit
+  (`hydration_failed`, `hydration_cap`, fail closed; each also raises the gap notice, because a hit older than the cursor margin is not re-read later). DM / group-DM backfill uses `conversations.history`, which excludes thread replies: replies in a DM missed during a disconnect are not backfilled (live delivery is unaffected; not covered by the gap notice). No sent-message ledger. One delayed re-run ~30 s later (search index lag), idempotent
+  through the per-monitor keys. Rate limits / caps / failed calls produce a **gap notice** (one line outside the fence on the next envelope
+  of the session: "Slack backfill was incomplete for the period T0-T1 …"; audited `monitor_backfill` `code=gap_notice` with `reason_counts`).
+- **Duplicates**: the last 100 delivered keys per monitor are persisted with the cursor (`recent_keys`, debounced) and seeded at service
+  start, so the 60 s margin does not repeat messages after a restart. Residual: at-least-once, a repeat is possible after a crash between
+  delivery and the debounced write (messages carry `ts`).
+- **REST** (`routers/relay.py`, public shape `inbound/public.py`): list / `PATCH {paused}` / `DELETE` relay-qualified
+  (`/api/relays/{id}/monitors[/{monitor_id}]`) and session-qualified (`/api/sessions/{sid}/relays/{rid}/monitors[/{monitor_id}]`);
+  404 unknown relay/session/monitor, 409 relay not attached / inbound not running, 422 body. Resume restarts the cursor from now and does
+  not lift a system suspension. Owner actions audit with `source=owner` (`monitor_paused|resumed|removed`). The public shape carries labels
+  (plain text) and counters, never message content. Dispose suspends scope monitors, start restores them (owner pause survives), delete
+  drops them.
+- **Not changed**: `PendingStore` / `DeliveryGate` (#2362: the pending queue is still not recovered across a restart; mitigated for
+  monitors by cursor-on-confirm). Sessions started before the upgrade lack the two tools (static tool list): restart them. `api_app_id`
+  placement on a real event is confirmed only by the live validation recorded in the PR.
 
 #### Relay setup (owner walkthrough)
 

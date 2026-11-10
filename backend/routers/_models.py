@@ -598,6 +598,12 @@ class SecretOAuthReconnectInitiateRequest(BaseModel):
     custom_callback_port: int | None = None
 
 
+class RelayMonitorPatchRequest(BaseModel):
+    """Owner pause / resume of a relay monitor (issue #2103 3b-ii)."""
+
+    paused: bool
+
+
 class RelayChoice(BaseModel):
     """Answer to a relay permission prompt (issue #2103)."""
 

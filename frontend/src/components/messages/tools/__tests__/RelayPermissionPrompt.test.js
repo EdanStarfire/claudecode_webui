@@ -24,6 +24,49 @@ beforeEach(() => {
   apiMock.post.mockResolvedValue({})
 })
 
+const SCOPE = {
+  kind: 'monitor_scope', tool: 'monitor_mentions', action: 'monitor_scope', scope: 'mentions',
+  filters_summary: 'keywords: deploy', relay_name: 'Slack',
+  text: 'Let this session read every Slack message that mentions you, in any channel or conversation you are in? It will receive them as untrusted content. Channels you blocked stay excluded.'
+}
+
+describe('RelayPermissionPrompt monitor_scope (3b-ii)', () => {
+  it('shows the plain consent text and only Allow / Deny, no policy controls', async () => {
+    const user = userEvent.setup()
+    const { emitted } = renderWithStores(RelayPermissionPrompt, { props: { prompt: SCOPE } })
+    expect(screen.getByText('Allow reading all mentions of you')).toBeTruthy()
+    expect(screen.getByTestId('relay-scope-text').textContent).toBe(SCOPE.text)
+    expect(screen.getByTestId('relay-scope-filters').textContent).toContain('keywords: deploy')
+    expect(screen.queryByTestId('relay-channel')).toBeNull()
+    expect(screen.queryByTestId('relay-allow-once')).toBeNull()
+    expect(screen.queryByTestId('relay-allow-auto')).toBeNull()
+    expect(screen.queryByTestId('relay-save-policy')).toBeNull()
+    expect(screen.queryByRole('radio')).toBeNull()
+
+    await user.click(screen.getByTestId('relay-scope-allow'))
+    await user.click(screen.getByTestId('relay-deny'))
+    expect(emitted().decide.map(e => e[0])).toEqual([
+      { decision: 'allow', relayChoice: null },
+      { decision: 'deny', relayChoice: null }
+    ])
+  })
+
+  it('titles the DM scope and renders the text as plain text', () => {
+    renderWithStores(RelayPermissionPrompt, {
+      props: { prompt: { ...SCOPE, scope: 'dms', tool: 'monitor_dms', text: 'DMs <b>x</b>', filters_summary: '' } }
+    })
+    expect(screen.getByText('Allow reading your direct messages')).toBeTruthy()
+    expect(screen.getByTestId('relay-scope-text').querySelector('b')).toBeNull()
+    expect(screen.queryByTestId('relay-scope-filters')).toBeNull()
+  })
+
+  it('disables the buttons while an answer is in flight', () => {
+    renderWithStores(RelayPermissionPrompt, { props: { prompt: SCOPE, disabled: true } })
+    expect(screen.getByTestId('relay-scope-allow').disabled).toBe(true)
+    expect(screen.getByTestId('relay-deny').disabled).toBe(true)
+  })
+})
+
 describe('RelayPermissionPrompt', () => {
   it('ask_send shows channel + preview and emits allow-once / promote / deny', async () => {
     const user = userEvent.setup()
