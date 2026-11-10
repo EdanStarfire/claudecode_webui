@@ -30,6 +30,7 @@ class RelayEvent:
     metadata: dict[str, Any] | None = None
     subtype: str | None = None
     file_count: int = 0
+    api_app_id: str | None = None  # the receiving app (event_callback.api_app_id), live events only
 
     def to_dict(self) -> dict[str, Any]:
         """Persistable form (``raw`` is dropped: it can be large and is never needed again)."""
@@ -38,6 +39,7 @@ class RelayEvent:
             "text": self.text, "thread_ts": self.thread_ts, "channel_type": self.channel_type,
             "is_agent": self.is_agent, "app_id": self.app_id, "bot_id": self.bot_id,
             "metadata": self.metadata, "subtype": self.subtype, "file_count": self.file_count,
+            "api_app_id": self.api_app_id,
         }
 
     @classmethod
@@ -48,6 +50,7 @@ class RelayEvent:
             channel_type=data.get("channel_type"), is_agent=bool(data.get("is_agent")),
             app_id=data.get("app_id"), bot_id=data.get("bot_id"), metadata=data.get("metadata"),
             subtype=data.get("subtype"), file_count=int(data.get("file_count") or 0),
+            api_app_id=data.get("api_app_id"),
         )
 
 

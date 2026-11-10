@@ -14,6 +14,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 from . import constants as const
+from .monitor_delivery import CoordinatorPort
 from .service import InboundService, InstructionSink, TransportFactory
 from .sink import enqueue_external_comm
 from .slack_socket import SlackSocketTransport
@@ -38,6 +39,7 @@ class InboundManager:
         relays_root: Path,
         transport_factory: TransportFactory | None = None,
         service_kwargs: dict[str, Any] | None = None,
+        names: Any = None,
     ) -> None:
         self._manager = relay_manager
         self._relay_service = relay_service
@@ -47,6 +49,8 @@ class InboundManager:
         self._service_kwargs = service_kwargs or {}
         self._transport_factory = transport_factory or self._default_transport
         self.sink: InstructionSink | None = None  # set by the coordinator
+        self.port: Any = None  # monitor delivery port, set by the coordinator
+        self._names = names
         self.services: dict[str, InboundService] = {}
         self._lock = asyncio.Lock()
         self._tasks: set[asyncio.Task] = set()
@@ -68,12 +72,14 @@ class InboundManager:
             sink=self.sink or self._unwired_sink,
             relays_root=self._root,
             transport_factory=self._transport_factory,
+            port=self.port, names=self._names,
             **self._service_kwargs,
         )
 
     def bind(self, coordinator) -> None:
         """Wire the delivery sink to the coordinator (called once from its constructor)."""
         self.sink = partial(enqueue_external_comm, coordinator)
+        self.port = CoordinatorPort(coordinator)
 
     # ------------------------------------------------------------- lifecycle
 
@@ -150,6 +156,33 @@ class InboundManager:
     ) -> bool:
         service = self.services.get(relay_id)
         return bool(service and service.has_thread_grant(session_id, channel, thread_ts))
+
+    # ------------------------------------------------------------- monitors (3b-i)
+
+    def service_for(self, relay_id: str) -> InboundService | None:
+        return self.services.get(relay_id)
+
+    def schedule_reevaluate(self, session_id: str | None = None) -> None:
+        """Sync trigger (policy edit, attachment change, tier edit): re-check the session's monitors
+        (``None`` = every session with a monitor). Never raises."""
+        if not any(service.store.count() for service in self.services.values()):
+            return  # no monitors anywhere: nothing to re-check (the common case)
+        try:
+            task = asyncio.get_running_loop().create_task(self.reevaluate(session_id))
+        except RuntimeError:
+            return
+        self._tasks.add(task)
+        task.add_done_callback(self._tasks.discard)
+
+    async def reevaluate(self, session_id: str | None = None) -> None:
+        for service in list(self.services.values()):
+            try:
+                if session_id is None:
+                    await service.reevaluate_all()
+                elif service.store.monitors(session_id):
+                    await service.reevaluate(session_id)
+            except Exception:
+                logger.exception("Monitor re-evaluation failed")
 
     # ----------------------------------------------------------- session hooks
 

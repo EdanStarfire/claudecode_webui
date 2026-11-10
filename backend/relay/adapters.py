@@ -14,6 +14,7 @@ from dataclasses import dataclass
 from .policy import PolicyModel
 from .slack_policy import (
     SLACK_DISCOVERY_TOOLS,
+    SLACK_MONITOR_TOOLS,
     SLACK_POLICY_MODEL,
     SLACK_TOOL_ACTIONS,
     SLACK_WRITE_TOOLS,
@@ -28,6 +29,7 @@ class AdapterSpec:
     write_tools: frozenset[str]
     policy_model: PolicyModel
     discovery_tools: frozenset[str] = frozenset()  # audited minimally (no contents)
+    monitor_tools: frozenset[str] = frozenset()  # inbound monitors: audited, never send tools
 
     @property
     def tool_prefix(self) -> str:
@@ -41,6 +43,7 @@ SLACK_SPEC = AdapterSpec(
     write_tools=SLACK_WRITE_TOOLS,
     policy_model=SLACK_POLICY_MODEL,
     discovery_tools=SLACK_DISCOVERY_TOOLS,
+    monitor_tools=SLACK_MONITOR_TOOLS,
 )
 
 SPECS: dict[str, AdapterSpec] = {"slack": SLACK_SPEC}

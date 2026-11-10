@@ -29,9 +29,16 @@ SLACK_TOOL_ACTIONS: dict[str, str | None] = {
     # Identity and discovery are read-only metadata: no policy, no prompt, never a send right.
     "get_identity": None,
     "find_channels": None,
+    # Monitors (inbound 3b-i): creating one reads like read_thread (blocked refused, unlisted ->
+    # choose-policy prompt, don't-ask / unattended refusals); removing / listing needs no policy.
+    "monitor_thread": "read",
+    "monitor_channel": "read",
+    "unmonitor": None,
+    "list_monitors": None,
 }
 SLACK_WRITE_TOOLS = frozenset({"post", "reply", "upload_file", "react", "mark_read"})
 SLACK_DISCOVERY_TOOLS = frozenset({"get_identity", "find_channels"})
+SLACK_MONITOR_TOOLS = frozenset({"monitor_thread", "monitor_channel", "unmonitor", "list_monitors"})
 
 _ALLOW = Decision(ALLOW)
 _PROMPT = Decision(PROMPT)

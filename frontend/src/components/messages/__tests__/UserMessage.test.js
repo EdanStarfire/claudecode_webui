@@ -47,6 +47,48 @@ describe('UserMessage', () => {
     expect(link.getAttribute('href')).toBe('#/session/sender-1')
   })
 
+  it('renders a Slack monitor envelope as a collapsed CommCard without a jump link (3b-i)', () => {
+    const message = {
+      type: 'user',
+      content: '📡 Slack monitor update — 2 message(s) ...',
+      timestamp: 1700000000,
+      metadata: {
+        comm: {
+          from_name: 'slack-monitor', from_display_name: 'Slack monitor', comm_type: 'info',
+          summary: 'Slack monitor: 2 messages', content: 'Slack monitor: 2 messages',
+        },
+        relay_inbound: { kind: 'monitor', count: 2 },
+      },
+    }
+
+    const { wrapper } = renderWithStores(UserMessage, { props: { message }, stubs: { MarkdownView: MarkdownViewStub } })
+
+    const name = screen.getByText('Slack monitor')
+    expect(name.tagName).not.toBe('A')
+    expect(wrapper.text()).toContain('Slack monitor: 2 messages')
+    expect(wrapper.text()).not.toContain('📡')  // collapsed: the fenced body is not shown until expanded
+  })
+
+  it('expands a Slack monitor envelope into a verbatim code block (3b-i)', async () => {
+    const body = '📡 update\n[UNTRUSTED EXTERNAL CONTENT id=ab]\n[\n {"text": "```js\\nx```"}\n]\n[END UNTRUSTED EXTERNAL CONTENT id=ab]'
+    const message = {
+      type: 'user', content: body, timestamp: 1700000000,
+      metadata: {
+        comm: { from_display_name: 'Slack monitor', comm_type: 'info', summary: 's', content: 's' },
+        relay_inbound: { kind: 'monitor' },
+      },
+    }
+    const seen = []
+    const Stub = { props: ['content'], setup(p) { seen.push(p) }, template: '<div class="markdown-stub" />' }
+    const { wrapper } = renderWithStores(UserMessage, { props: { message }, stubs: { MarkdownView: Stub, CommCard: {
+      props: ['bodyContent'], template: '<div class="card-stub">{{ bodyContent }}</div>' } } })
+    const shown = wrapper.find('.card-stub').text()
+    expect(shown.startsWith('````text')).toBe(true)
+    expect(shown).toContain('[UNTRUSTED EXTERNAL CONTENT id=ab]')
+    // the fence is longer than any backtick run inside the content, so it cannot be closed early
+    expect(shown.split('\n')[0]).toBe('````text')
+  })
+
   it('renders plain text when from_minion_id is missing (legacy comm)', () => {
     const message = {
       type: 'user',

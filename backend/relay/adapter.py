@@ -31,6 +31,8 @@ class RelayMessage:
     bot_id: str | None = None
     metadata: dict[str, Any] | None = None
     permalink: str | None = None
+    subtype: str | None = None
+    file_count: int = 0
 
 
 @dataclass
@@ -71,6 +73,7 @@ class ConversationInfo:
     user: str | None = None  # peer user id for IMs
     last_read: str | None = None
     unread_count: int | None = None
+    is_member: bool | None = None  # None = Slack did not say
 
 
 @dataclass
@@ -101,7 +104,8 @@ class RelayAdapter(Protocol):
     ) -> PostResult: ...
 
     async def read_thread(
-        self, channel: str, thread_ts: str, limit: int = 100, cursor: str | None = None
+        self, channel: str, thread_ts: str, limit: int = 100, cursor: str | None = None,
+        oldest: str | None = None,
     ) -> ThreadPage: ...
 
     async def read_history(

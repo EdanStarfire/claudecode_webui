@@ -22,6 +22,7 @@ class RelayRecord:
     adapter_type: str = "slack"
     workspace_id: str | None = None
     workspace_name: str | None = None
+    workspace_url: str | None = None  # auth.test url (permalinks of monitored messages); not secret
     user_token_secret: str | None = None  # vault secret NAME
     app_token_secret: str | None = None  # vault secret NAME
     oauth_client_id: str | None = None
@@ -44,6 +45,7 @@ class RelayRecord:
             "adapter_type": self.adapter_type,
             "workspace_id": self.workspace_id,
             "workspace_name": self.workspace_name,
+            "workspace_url": self.workspace_url,
             "user_token_secret": self.user_token_secret,
             "app_token_secret": self.app_token_secret,
             "oauth_client_id": self.oauth_client_id,
@@ -73,6 +75,7 @@ class RelayRecord:
             adapter_type=data.get("adapter_type", "slack"),
             workspace_id=data.get("workspace_id"),
             workspace_name=data.get("workspace_name"),
+            workspace_url=data.get("workspace_url"),
             user_token_secret=data.get("user_token_secret"),
             app_token_secret=data.get("app_token_secret"),
             oauth_client_id=data.get("oauth_client_id"),

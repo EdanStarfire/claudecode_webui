@@ -8,7 +8,7 @@
       :comm-type="message.metadata.comm.comm_type"
       :summary="message.metadata.comm.summary"
       :content="commContent"
-      :body-content="message.content"
+      :body-content="commBodyContent"
       :timestamp="message.timestamp"
       :attachments="attachmentsForCard"
       :expanded="messageStore.isCommExpanded(commScopeKey)"
@@ -128,6 +128,16 @@ const commContent = computed(() => {
   const comm = props.message.metadata?.comm
   if (!comm) return ''
   return 'content' in comm ? comm.content : props.message.content
+})
+
+// Slack monitor envelope (issue #2103 3b-i): its fenced JSON entries are not valid markdown (the
+// renderer swallows them), so the expanded card shows the delivered text verbatim in a code block.
+const commBodyContent = computed(() => {
+  const content = props.message.content
+  if (props.message.metadata?.relay_inbound?.kind !== 'monitor' || typeof content !== 'string') return content
+  const longest = Math.max(0, ...(content.match(/`+/g) || []).map(run => run.length))
+  const fence = '`'.repeat(Math.max(3, longest + 1))
+  return `${fence}text\n${content}\n${fence}`
 })
 
 // Issue #1714: jump-link to the sender's session when it still exists (from_minion_id

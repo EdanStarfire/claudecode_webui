@@ -1,8 +1,10 @@
-"""JsonSubscriptionStore: durable subscription / thread records (issue #2103 stage 3a, D7).
+"""JsonSubscriptionStore: durable subscription / thread / monitor records (issue #2103 stage 3a/3b).
 
-``data/relays/{relay_id}/subscriptions.json`` = ``{"version":1,"subscriptions":[...]}``. 3a only
-writes ``kind="instruction_thread"`` records; 3b adds kinds on the same storage. The in-memory
-index is the read path (thread-grant lookups are synchronous); every mutation writes through.
+``data/relays/{relay_id}/subscriptions.json`` = ``{"version":1,"subscriptions":[...]}``. 3a writes
+``kind="instruction_thread"`` records; 3b-i adds ``monitor_thread`` / ``monitor_channel`` on the same
+storage (unknown fields are tolerated on load). The in-memory index is the read path (thread-grant
+and monitor lookups are synchronous); structural mutations write through, cursor / counter updates
+are debounced (a lost update only costs a re-fetch, see the monitor cursor design).
 """
 
 from __future__ import annotations
@@ -14,7 +16,14 @@ import uuid
 from pathlib import Path
 from typing import Any
 
-from .constants import MAX_THREAD_RECORDS, THREAD_KIND, THREAD_TTL_SECONDS
+from . import constants as const
+from .constants import (
+    MAX_THREAD_RECORDS,
+    MONITOR_KINDS,
+    STATE_FLUSH_DEBOUNCE_SECONDS,
+    THREAD_KIND,
+    THREAD_TTL_SECONDS,
+)
 from .persist import atomic_write_json, load_json
 
 logger = logging.getLogger(__name__)
@@ -24,6 +33,12 @@ ACTIVE = "active"
 SUSPENDED = "suspended"
 
 
+class MonitorLimitError(Exception):
+    """A monitor cap (per session / per relay) is reached; ``code`` is ``monitor_limit``."""
+
+    code = "monitor_limit"
+
+
 class JsonSubscriptionStore:
     def __init__(self, relay_dir: Path, relay_id: str, *, clock=time.time) -> None:
         self._path = relay_dir / STORE_FILE
@@ -31,6 +46,8 @@ class JsonSubscriptionStore:
         self._clock = clock
         self._records: dict[str, dict[str, Any]] = {}
         self._lock = asyncio.Lock()
+        self._by_channel: dict[str, list[str]] = {}  # monitors only: channel -> record ids
+        self._flush_task: asyncio.Task | None = None
 
     def load(self) -> None:
         data = load_json(self._path)
@@ -39,13 +56,45 @@ class JsonSubscriptionStore:
         for rec in data.get("subscriptions") or []:
             if isinstance(rec, dict) and rec.get("id"):
                 self._records[rec["id"]] = rec
+        self._reindex()
+
+    def _reindex(self) -> None:
+        index: dict[str, list[str]] = {}
+        for rid, r in self._records.items():
+            if r.get("kind") in MONITOR_KINDS and r.get("channel"):
+                index.setdefault(r["channel"], []).append(rid)
+        self._by_channel = index
 
     async def _persist(self) -> None:
+        self._reindex()
         payload = {"version": 1, "subscriptions": list(self._records.values())}
         try:
             await asyncio.to_thread(atomic_write_json, self._path, payload)
         except OSError:
             logger.exception("Could not write relay subscriptions")
+
+    def _persist_soon(self) -> None:
+        """Debounced write for cursor / counter updates."""
+        if self._flush_task is not None and not self._flush_task.done():
+            return
+        try:
+            loop = asyncio.get_running_loop()
+        except RuntimeError:
+            return
+
+        async def later() -> None:
+            await asyncio.sleep(STATE_FLUSH_DEBOUNCE_SECONDS)
+            async with self._lock:
+                await self._persist()
+
+        self._flush_task = loop.create_task(later())
+
+    async def close(self) -> None:
+        if self._flush_task is not None and not self._flush_task.done():
+            self._flush_task.cancel()
+            await asyncio.gather(self._flush_task, return_exceptions=True)
+        async with self._lock:
+            await self._persist()
 
     # ------------------------------------------------- SubscriptionStore API
 
@@ -108,16 +157,24 @@ class JsonSubscriptionStore:
 
     async def set_status_by_session(
         self, session_id: str, status: str, *, reason: str | None = None,
-        only_reason: str | None = None,
+        only_reason: str | None = None, only_status: str | None = None,
+        kinds: frozenset[str] | None = None,
     ) -> int:
-        """Set status on a session's records; ``only_reason`` restricts to records suspended for
-        that reason (used to restore dispose-suspended records on start)."""
+        """Set status on a session's records (never touches the owner ``paused`` flag).
+        ``only_reason`` restricts to records suspended for that reason (restoring dispose-
+        suspended records on start); ``only_status`` to records in that status (dispose suspends
+        only ACTIVE ones, so another suspension reason is not overwritten); ``kinds`` to those
+        record kinds."""
         async with self._lock:
             n = 0
             for r in self._records.values():
                 if r.get("session_id") != session_id:
                     continue
+                if kinds is not None and r.get("kind") not in kinds:
+                    continue
                 if only_reason is not None and r.get("suspended_reason") != only_reason:
+                    continue
+                if only_status is not None and r.get("status") != only_status:
                     continue
                 r["status"] = status
                 r["suspended_reason"] = reason if status == SUSPENDED else None
@@ -200,6 +257,161 @@ class JsonSubscriptionStore:
             if expired or evicted:
                 await self._persist()
             return len(expired), evicted
+
+
+    # ----------------------------------------------------------------- monitors (3b-i)
+
+    @staticmethod
+    def _ts(now: float) -> str:
+        return f"{now:.6f}"
+
+    def monitors(self, session_id: str | None = None) -> list[dict[str, Any]]:
+        """Monitor records (live references: callers must not mutate them)."""
+        return [
+            r for r in self._records.values()
+            if r.get("kind") in MONITOR_KINDS and (session_id is None or r.get("session_id") == session_id)
+        ]
+
+    def monitors_for_channel(self, channel: str) -> list[dict[str, Any]]:
+        """Index lookup used by the event handler (never a full scan)."""
+        return [self._records[i] for i in self._by_channel.get(channel, ()) if i in self._records]
+
+    def get_monitor(self, monitor_id: str) -> dict[str, Any] | None:
+        rec = self._records.get(monitor_id)
+        return rec if rec is not None and rec.get("kind") in MONITOR_KINDS else None
+
+    def count(self, session_id: str | None = None) -> int:
+        return len(self.monitors(session_id))
+
+    def find_monitor(
+        self, session_id: str, kind: str, channel: str, thread_ts: str | None,
+        filters: dict[str, Any],
+    ) -> dict[str, Any] | None:
+        for r in self.monitors(session_id):
+            if (r["kind"] == kind and r.get("channel") == channel and r.get("thread_ts") == thread_ts
+                    and r.get("filters") == filters):
+                return r
+        return None
+
+    async def create_monitor(
+        self, session_id: str, kind: str, channel: str, *, thread_ts: str | None = None,
+        filters: dict[str, Any] | None = None, expires_at: float | None = None,
+        created_by: str = "agent",
+    ) -> tuple[dict[str, Any], str]:
+        """Create a monitor, or return the identical existing one. Returns ``(record, outcome)``
+        with outcome ``created`` | ``existing`` | ``resumed`` (a flood / delivery-failed monitor
+        re-created by the agent starts again from now). Caps are checked under the lock."""
+        if kind not in MONITOR_KINDS:
+            raise ValueError(f"unknown monitor kind {kind!r}")
+        filters = filters or {"keywords": [], "users": []}
+        async with self._lock:
+            existing = self.find_monitor(session_id, kind, channel, thread_ts, filters)
+            now = self._clock()
+            if existing is not None:
+                if existing["status"] == SUSPENDED and existing.get("suspended_reason") in (
+                    const.SUSPEND_FLOOD, const.SUSPEND_DELIVERY_FAILED
+                ):
+                    existing.update(
+                        status=ACTIVE, suspended_reason=None, last_seen_ts=self._ts(now),
+                        last_error=None, failures=0, flood_windows=0,
+                    )
+                    await self._persist()
+                    return existing, "resumed"
+                return existing, "existing"
+            if self.count(session_id) >= const.MAX_MONITORS_PER_SESSION or (
+                self.count() >= const.MAX_MONITORS_PER_RELAY
+            ):
+                raise MonitorLimitError()
+            rec = {
+                "id": str(uuid.uuid4()), "relay_id": self._relay_id, "kind": kind,
+                "session_id": session_id, "created_by": created_by, "created_at": now,
+                "expires_at": expires_at, "status": ACTIVE, "suspended_reason": None,
+                "paused": False, "channel": channel, "thread_ts": thread_ts, "filters": filters,
+                "last_seen_ts": self._ts(now), "last_activity_at": now, "last_delivered_at": None,
+                "last_error": None, "failures": 0, "flood_windows": 0,
+                "counters": {"delivered": 0, "dropped": 0, "coalesced": 0},
+            }
+            self._records[rec["id"]] = rec
+            await self._persist()
+            return rec, "created"
+
+    async def set_monitor_status(
+        self, monitor_id: str, status: str, reason: str | None = None, *, resume_from: float | None = None
+    ) -> dict[str, Any] | None:
+        """Suspend / resume one monitor. A resume with ``resume_from`` restarts the durable cursor
+        there (policy resume starts from now, D4)."""
+        async with self._lock:
+            rec = self.get_monitor(monitor_id)
+            if rec is None:
+                return None
+            rec["status"] = status
+            rec["suspended_reason"] = reason if status == SUSPENDED else None
+            if status == ACTIVE:
+                rec["failures"] = 0
+                rec["flood_windows"] = 0
+                if resume_from is not None:
+                    rec["last_seen_ts"] = self._ts(resume_from)
+            await self._persist()
+            return rec
+
+    async def set_paused(self, monitor_id: str, paused: bool) -> bool:
+        async with self._lock:
+            rec = self.get_monitor(monitor_id)
+            if rec is None:
+                return False
+            rec["paused"] = bool(paused)
+            await self._persist()
+            return True
+
+    def advance_cursor(self, monitor_id: str, ts: str) -> bool:
+        """Monotonic durable cursor (debounced write)."""
+        rec = self.get_monitor(monitor_id)
+        if rec is None or not _newer(ts, rec.get("last_seen_ts")):
+            return False
+        rec["last_seen_ts"] = ts
+        self._persist_soon()
+        return True
+
+    def bump_counters(self, monitor_id: str, **deltas: int) -> None:
+        rec = self.get_monitor(monitor_id)
+        if rec is None:
+            return
+        counters = rec.setdefault("counters", {})
+        for key, delta in deltas.items():
+            counters[key] = int(counters.get(key, 0)) + delta
+        self._persist_soon()
+
+    def touch_monitor(self, monitor_id: str, **fields: Any) -> None:
+        """Update bookkeeping fields (last_activity_at, last_delivered_at, last_error, failures,
+        flood_windows); debounced."""
+        rec = self.get_monitor(monitor_id)
+        if rec is None:
+            return
+        rec.update(fields)
+        self._persist_soon()
+
+    async def remove_monitor(self, monitor_id: str) -> dict[str, Any] | None:
+        async with self._lock:
+            if self.get_monitor(monitor_id) is None:
+                return None
+            rec = self._records.pop(monitor_id)
+            await self._persist()
+            return rec
+
+    async def expire_monitors(self) -> list[dict[str, Any]]:
+        """Remove monitors past ``expires_at`` and thread monitors idle past the TTL."""
+        async with self._lock:
+            now = self._clock()
+            gone = []
+            for r in list(self.monitors()):
+                expired = r.get("expires_at") is not None and now >= float(r["expires_at"])
+                idle = (r["kind"] == const.KIND_MONITOR_THREAD
+                        and now - float(r.get("last_activity_at") or 0) > const.MONITOR_THREAD_IDLE_SECONDS)
+                if expired or idle:
+                    gone.append({**self._records.pop(r["id"]), "_expired_reason": "expired" if expired else "idle"})
+            if gone:
+                await self._persist()
+            return gone
 
 
 def _newer(a: str, b: str | None) -> bool:

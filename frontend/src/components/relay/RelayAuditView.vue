@@ -83,7 +83,18 @@ const EVENTS = {
   inbound_connection: 'Inbound connection',
   inbound_drop_summary: 'Inbound drops',
   inbound_housekeeping: 'Inbound housekeeping',
+  // Monitors (stage 3b-i): never any message text, only ids, counts and reasons
+  monitor_created: 'Monitor created',
+  monitor_removed: 'Monitor removed',
+  monitor_suspended: 'Monitor suspended',
+  monitor_resumed: 'Monitor resumed',
+  monitor_delivered: 'Monitor delivered',
+  monitor_delivery_failed: 'Monitor delivery failed',
+  monitor_expired: 'Monitor expired',
+  monitor_flood: 'Monitor flood',
+  monitor_backfill: 'Monitor backfill',
 }
+const MONITOR_KINDS = { monitor_thread: 'thread', monitor_channel: 'channel' }
 
 const store = useRelayStore()
 const sessionStore = useSessionStore()
@@ -133,6 +144,7 @@ function detail(r) {
     return Object.entries(r.reason_counts || {}).map(([k, n]) => `${k} ${n}`).join(' · ')
   }
   if (r.event === 'inbound_housekeeping') return r.count != null ? `${r.count}` : ''
+  if (r.event?.startsWith('monitor_')) return monitorDetail(r)
   const parts = []
   if (r.tool === 'find_channels' || r.tool === 'get_identity') {
     if (r.query_preview) parts.push(`“${r.query_preview}”`)
@@ -143,6 +155,41 @@ function detail(r) {
   if (r.text_preview) return r.text_preview.slice(0, PREVIEW_CAP)
   if (r.policy) return `policy ${r.policy}`
   return ''
+}
+
+function plural(n, word) {
+  return `${n} ${word}${n === 1 ? '' : 's'}`
+}
+
+// Humanized monitor rows: kind + count or reason (no message text is ever audited).
+function monitorDetail(r) {
+  const parts = []
+  const kind = MONITOR_KINDS[r.monitor_kind]
+  if (kind) parts.push(`${kind} monitor`)
+  switch (r.event) {
+    case 'monitor_created':
+    case 'monitor_resumed':
+      if (r.count) parts.push(plural(r.count, 'keyword'))
+      if (r.source) parts.push(`by ${r.source}`)
+      break
+    case 'monitor_removed':
+      if (r.source) parts.push(`by ${r.source}`)
+      if (r.count) parts.push(plural(r.count, 'monitor'))
+      break
+    case 'monitor_delivered':
+      if (r.count != null) parts.push(plural(r.count, 'message'))
+      if (r.omitted) parts.push(`+${r.omitted} omitted`)
+      break
+    case 'monitor_flood':
+      parts.push('over the flood limit, messages dropped')
+      break
+    case 'monitor_backfill':
+      if (r.count != null) parts.push(plural(r.count, 'message'))
+      break
+    default:
+      if (r.code) parts.push(r.code)
+  }
+  return parts.join(' · ')
 }
 
 function policySource(r) {
@@ -208,8 +255,8 @@ defineExpose({ reload: () => load(true) })
   color: var(--bs-tertiary-color, #6b7280); border: 1px solid var(--bs-border-color, rgba(0,0,0,0.12));
   vertical-align: baseline; white-space: nowrap; user-select: none;
 }
-.outcome-denied .outcome, .outcome-refused .outcome, .outcome-late .outcome, .outcome-rate_limited .outcome, .outcome-removed .outcome { color: #d29922; }
-.outcome-error .outcome { color: #f87171; }
+.outcome-denied .outcome, .outcome-refused .outcome, .outcome-late .outcome, .outcome-rate_limited .outcome, .outcome-removed .outcome, .outcome-dropped .outcome, .outcome-truncated .outcome, .outcome-cancelled .outcome { color: #d29922; }
+.outcome-error .outcome, .outcome-delivery_failed .outcome { color: #f87171; }
 .older { align-self: flex-start; }
 @media (max-width: 600px) {
   .audit-filters > * { max-width: none; }

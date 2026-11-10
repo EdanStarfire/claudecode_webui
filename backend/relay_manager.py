@@ -303,6 +303,7 @@ class RelayManager:
             record.owner_user_id = info.user_id or None
             record.workspace_id = info.team_id or None
             record.workspace_name = info.team
+            record.workspace_url = info.url or None
             record.user_token_secret = user_token_secret.strip()
             await self._refresh_self_dm(
                 record, previous_owner, self._adapter_for_token(values["user_token_secret"]), previous_ws
@@ -367,6 +368,7 @@ class RelayManager:
         record.owner_user_id = info.user_id or record.owner_user_id
         record.workspace_id = info.team_id or record.workspace_id
         record.workspace_name = info.team or record.workspace_name
+        record.workspace_url = info.url or record.workspace_url
         await self._refresh_self_dm(record, previous_owner, self.adapter_for(relay_id), previous_ws)
         self._save(record)
         self._notify_changed(relay_id)  # also restarts inbound (e.g. after fixing a revoked app token)
@@ -453,6 +455,7 @@ class RelayManager:
             record.owner_user_id = info.user_id or None
             record.workspace_id = info.team_id or None
             record.workspace_name = info.team
+            record.workspace_url = info.url or None
             await self._refresh_self_dm(record, previous_owner, self._adapter_for_token(token), previous_ws)
             self._save(record)
             self._notify_changed(record.relay_id)

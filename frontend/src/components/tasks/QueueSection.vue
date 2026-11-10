@@ -201,6 +201,8 @@ function truncate(text, maxLen) {
 function displayLabel(item) {
   if (item.metadata?.schedule_name) return item.metadata.schedule_name
   // Slack self-DM instruction (relay inbound, issue #2103): quiet source prefix, short preview
+  // Slack monitor envelope (3b-i): the ledger text is already "Slack monitor: N messages" (counts only)
+  if (item.metadata?.relay_inbound?.kind === 'monitor') return truncate(item.content, 60)
   if (item.metadata?.relay_inbound) return `Slack: ${truncate(item.content, 52)}`
   return truncate(item.content, 60)
 }
