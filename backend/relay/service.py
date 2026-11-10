@@ -61,6 +61,9 @@ class RelayService:
         self.channel_namer = None
         self._audit_tasks: set[asyncio.Task] = set()
         self._audit_order = asyncio.Lock()  # FIFO: records land in the order edits happened
+        # sync callbacks ``(session_id | None) -> None``: a session's effective policy / relay
+        # attachment may have changed (None = every dependent session); monitors re-evaluate (3b-i)
+        self.change_listeners: list = []
 
     # ---------------------------------------------------------------- tiers
 
@@ -218,6 +221,7 @@ class RelayService:
         """One session scan for any number of templates; never fails the triggering save."""
         if not template_ids:
             return
+        self._notify_changed(None)  # attachment / policies of dependent sessions may have changed
         try:
             infos = await self._sessions.list_sessions()
         except Exception:
@@ -248,11 +252,19 @@ class RelayService:
         """Route every audited session-tier policy write into the relay audit log (#2355)."""
         session_manager.add_policy_change_callback(self._on_policy_change, self._sole_relay_id)
 
+    def _notify_changed(self, session_id: str | None) -> None:
+        for listener in list(self.change_listeners):
+            try:
+                listener(session_id)
+            except Exception:
+                logger.exception("Relay change listener failed")
+
     def _on_policy_change(
         self, session_id: str, changes: list[dict], source: str, extra: dict | None
     ) -> None:
         """SessionManager callback (runs under the session lock): schedule only, never raise."""
         self._schedule_audit(self._audit_session_changes(session_id, changes, source, extra))
+        self._notify_changed(session_id)
 
     def audit_tier_policy_change(
         self, tier: str, tier_id: str, tier_name: str | None, old_cfg: dict | None,
@@ -270,6 +282,7 @@ class RelayService:
                 changes, source=tier,
                 fields={"tier": tier, "tier_id": tier_id, "tier_name": tier_name},
             ))
+            self._notify_changed(None)
 
     def _schedule_audit(self, coro) -> None:
         if self._audit is None:
@@ -409,6 +422,7 @@ class RelayService:
         except Exception:  # never block a session start on handle bookkeeping
             logger.exception("Relay handle sync failed for session %s", session_id)
         await self.refresh_summary(session_id)
+        self._notify_changed(session_id)  # attachment / config may have changed
         return handle
 
     async def initialize(self) -> None:

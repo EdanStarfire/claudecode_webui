@@ -127,6 +127,11 @@ class FakeAdapter:
         self.react_hang = False
         self.unreact_error: str | None = None
         self.history_next: dict[str | None, str | None] = {}
+        self.histories: dict[str, list[RelayMessage]] = {}
+        self.thread_calls: list[dict[str, Any]] = []
+        self.channel_names: dict[str, str] = {}
+        self.user_names: dict[str, str] = {}
+        self.member: bool | None = True
 
     async def post(self, channel, text, blocks=None, thread_ts=None, metadata=None):
         if self.fail_post:
@@ -157,11 +162,25 @@ class FakeAdapter:
 
     async def read_history(self, channel, limit=100, oldest=None, cursor=None):
         self.history_calls.append({"channel": channel, "oldest": oldest, "cursor": cursor})
-        msgs = [m for m in self.history if oldest is None or float(m.ts) > float(oldest)]
+        source = self.histories.get(channel, self.history)
+        msgs = [m for m in source if oldest is None or float(m.ts) > float(oldest)]
         return ThreadPage(msgs if cursor is None else [], self.history_next.get(cursor))
 
-    async def read_thread(self, channel, thread_ts, limit=100, cursor=None):
-        return ThreadPage(list(self.threads.get(thread_ts, [])), None)
+    async def read_thread(self, channel, thread_ts, limit=100, cursor=None, oldest=None):
+        self.thread_calls.append({"channel": channel, "thread_ts": thread_ts, "oldest": oldest})
+        msgs = [m for m in self.threads.get(thread_ts, []) if oldest is None or float(m.ts) > float(oldest)]
+        return ThreadPage(msgs, None)
+
+    async def conversation_info(self, channel):
+        from backend.relay.adapter import ConversationInfo
+
+        return ConversationInfo(id=channel, name=self.channel_names.get(channel, "general"),
+                                is_channel=True, is_member=self.member)
+
+    async def user_info(self, user_id):
+        from backend.relay.adapter import UserInfo
+
+        return UserInfo(id=user_id, name=self.user_names.get(user_id, f"user-{user_id}"))
 
     async def open_dm(self, user_id):
         return SELF_DM
@@ -209,9 +228,84 @@ class FakeRelayService:
     def __init__(self, sessions: FakeSessions, handles: RelayHandleIndex) -> None:
         self.handles = handles
         self._sessions = sessions
+        # channel -> policy value; tests edit it live (blocked | read_only | ask | auto)
+        self.policies: dict[str, str] = {}
 
     async def effective_attachment(self, info):
         return {"relay_id": info.config.get("relay_id")}
+
+    async def effective_relay_policies(self, info, relay_id):
+        return {c: SimpleNamespace(policy=p, source="session") for c, p in self.policies.items()}
+
+
+class FakePort:
+    """Monitor delivery port: records envelopes; tests move item statuses by hand."""
+
+    def __init__(self) -> None:
+        self.calls: list[dict[str, Any]] = []
+        self.statuses: dict[tuple[str, str], str] = {}
+        self.fail_enqueue = False
+        self.pending_monitor = False
+
+    async def enqueue(self, session_id, **kwargs):
+        if self.fail_enqueue:
+            return DeliveryOutcome("failed", "boom")
+        self.calls.append({"session_id": session_id, **kwargs})
+        key = (session_id, kwargs["comm_id"])
+        if key in self.statuses:
+            return DeliveryOutcome("already_delivered")
+        self.statuses[key] = "pending"
+        return DeliveryOutcome("delivered")
+
+    def item_status(self, session_id, comm_id):
+        return self.statuses.get((session_id, comm_id))
+
+    def has_pending_monitor(self, session_id, relay_id):
+        if self.pending_monitor:
+            return True
+        monitor_ids = {c["comm_id"] for c in self.calls}
+        return any(
+            st == "pending" and sid == session_id and cid in monitor_ids
+            for (sid, cid), st in self.statuses.items()
+        )
+
+    def set_status(self, comm_id, status, session_id=SESSION):
+        self.statuses[(session_id, comm_id)] = status
+
+
+class ManualSleep:
+    """Window / postponement sleeps that only finish when the test says so (advancing the clock)."""
+
+    def __init__(self, clock) -> None:
+        self.clock = clock
+        self.waiting: list[tuple[float, asyncio.Future]] = []
+        self.requested: list[float] = []
+
+    async def __call__(self, seconds: float) -> None:
+        fut = asyncio.get_running_loop().create_future()
+        self.waiting.append((seconds, fut))
+        self.requested.append(seconds)
+        await fut
+
+    async def fire(self) -> bool:
+        """Finish the oldest pending sleep; True when there was one."""
+        for _ in range(100):
+            if self.waiting:
+                break
+            await asyncio.sleep(0.002)
+        if not self.waiting:
+            return False
+        seconds, fut = self.waiting.pop(0)
+        self.clock.advance(seconds)
+        fut.set_result(None)
+        await asyncio.sleep(0.01)
+        return True
+
+    async def drain(self, rounds: int = 30) -> None:
+        for _ in range(rounds):
+            if not await self.fire():
+                return
+            await asyncio.sleep(0.02)
 
 
 class RecordingSink:
@@ -242,6 +336,8 @@ def make_inbound(tmp_path: Path, *, handles: dict[str, str] | None = None, facto
     for handle, sid in (handles if handles is not None else {"my-agent": SESSION}).items():
         index.rebind(sid, handle)
     sink = RecordingSink()
+    port = FakePort()
+    window = ManualSleep(clock)
     audit = RelayAuditLog(tmp_path)
     transports: list[FakeSocketTransport] = []
     delays: list[float] = []
@@ -256,15 +352,18 @@ def make_inbound(tmp_path: Path, *, handles: dict[str, str] | None = None, facto
         clock.advance(seconds)
         await asyncio.sleep(0)
 
+    service_relay = FakeRelayService(sessions, index)
     service = InboundService(
-        RELAY_ID, relay_manager=manager, relay_service=FakeRelayService(sessions, index),
+        RELAY_ID, relay_manager=manager, relay_service=service_relay,
         session_manager=sessions, audit=audit, sink=sink, relays_root=tmp_path / "relays",
         transport_factory=factory or default_factory, now=clock.now, mono=clock.mono,
-        sleep=fake_sleep, rng=lambda: 1.0,
+        sleep=fake_sleep, rng=lambda: 1.0, port=port, window_sleep=window,
+        watch_sleep=ManualSleep(clock),
     )
     return SimpleNamespace(
         service=service, adapter=adapter, manager=manager, sessions=sessions, index=index,
-        sink=sink, audit=audit, clock=clock, transports=transports, delays=delays,
+        sink=sink, audit=audit, clock=clock, transports=transports, delays=delays, port=port,
+        window=window, relay_service=service_relay,
         root=tmp_path / "relays" / RELAY_ID,
     )
 

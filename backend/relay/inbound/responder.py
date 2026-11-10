@@ -33,6 +33,7 @@ REPLY_TEXTS: dict[str, str] = {
     "not_attached": "Not delivered: that session no longer has this relay attached.",
     "no_token": "Not delivered: the relay has no usable user token.",
     "delivery_failed": "Not delivered: the session could not accept the instruction.",
+    "cancelled": "Not executed: the instruction was cancelled before the session received it.",
 }
 
 
