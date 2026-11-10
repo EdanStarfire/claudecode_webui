@@ -16,6 +16,7 @@ from .slack_policy import (
     SLACK_DISCOVERY_TOOLS,
     SLACK_MONITOR_TOOLS,
     SLACK_POLICY_MODEL,
+    SLACK_SCOPE_TOOLS,
     SLACK_TOOL_ACTIONS,
     SLACK_WRITE_TOOLS,
 )
@@ -30,6 +31,7 @@ class AdapterSpec:
     policy_model: PolicyModel
     discovery_tools: frozenset[str] = frozenset()  # audited minimally (no contents)
     monitor_tools: frozenset[str] = frozenset()  # inbound monitors: audited, never send tools
+    scope_tools: frozenset[str] = frozenset()  # monitors with no channel: one consent prompt (3b-ii)
 
     @property
     def tool_prefix(self) -> str:
@@ -44,6 +46,7 @@ SLACK_SPEC = AdapterSpec(
     policy_model=SLACK_POLICY_MODEL,
     discovery_tools=SLACK_DISCOVERY_TOOLS,
     monitor_tools=SLACK_MONITOR_TOOLS,
+    scope_tools=SLACK_SCOPE_TOOLS,
 )
 
 SPECS: dict[str, AdapterSpec] = {"slack": SLACK_SPEC}

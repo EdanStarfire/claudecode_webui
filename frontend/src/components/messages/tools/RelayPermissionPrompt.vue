@@ -2,7 +2,11 @@
   <div class="relay-prompt" data-testid="relay-permission-prompt">
     <div class="detail-banner detail-banner-warning">
       <strong>{{ title }}</strong>
-      <p>
+      <p v-if="isMonitorScope" class="relay-scope-text" data-testid="relay-scope-text">{{ prompt.text }}</p>
+      <p v-if="isMonitorScope && prompt.filters_summary" class="relay-scope-filters" data-testid="relay-scope-filters">
+        Filters: {{ prompt.filters_summary }}
+      </p>
+      <p v-if="!isMonitorScope">
         <span class="relay-action">{{ actionLabel }}</span>
         <code class="relay-channel" data-testid="relay-channel">{{ channelLabel }}</code>
       </p>
@@ -27,7 +31,15 @@
     </fieldset>
 
     <div class="permission-buttons">
-      <template v-if="isChoosePolicy">
+      <template v-if="isMonitorScope">
+        <button
+          class="btn-timeline btn-approve"
+          :disabled="disabled"
+          data-testid="relay-scope-allow"
+          @click="$emit('decide', { decision: 'allow', relayChoice: null })"
+        >Allow</button>
+      </template>
+      <template v-else-if="isChoosePolicy">
         <button
           class="btn-timeline btn-primary"
           :disabled="disabled || !selectedPolicy"
@@ -62,10 +74,11 @@
 <script setup>
 import { computed, ref } from 'vue'
 
-// Issue #2103 (outbound-1b): relay permission prompt. Two kinds from the backend permission
-// pre-hook: `ask_send` (send on an `ask` channel) and `choose_policy` (first touch of an
-// unlisted channel). Emits `decide` with the REST `relay_choice` shape (camelCase here,
-// forwarded by the polling store).
+// Issue #2103 (outbound-1b): relay permission prompt. Kinds from the backend permission
+// pre-hook: `ask_send` (send on an `ask` channel), `choose_policy` (first touch of an
+// unlisted channel) and `monitor_scope` (stage 3b-ii: consent to read all mentions / direct
+// messages; Allow / Deny only, never a policy choice). Emits `decide` with the REST
+// `relay_choice` shape (camelCase here, forwarded by the polling store).
 const props = defineProps({
   prompt: { type: Object, required: true },
   disabled: { type: Boolean, default: false }
@@ -89,9 +102,15 @@ const ACTION_LABELS = {
 }
 
 const isChoosePolicy = computed(() => props.prompt.kind === 'choose_policy')
-const title = computed(() =>
-  isChoosePolicy.value ? 'Choose a policy for a Slack channel' : 'Slack send needs approval'
-)
+const isMonitorScope = computed(() => props.prompt.kind === 'monitor_scope')
+const title = computed(() => {
+  if (isMonitorScope.value) {
+    return props.prompt.scope === 'dms'
+      ? 'Allow reading your direct messages'
+      : 'Allow reading all mentions of you'
+  }
+  return isChoosePolicy.value ? 'Choose a policy for a Slack channel' : 'Slack send needs approval'
+})
 const actionLabel = computed(() => ACTION_LABELS[props.prompt.tool] || 'Use')
 // Plain text only (Vue escapes it): the backend resolves "#name", "DM with <name>" or
 // "your self-DM", falling back to the raw ID when a lookup failed.
@@ -146,6 +165,7 @@ const saveLabel = computed(() =>
 .btn-primary { background: #3b82f6; border-color: #3b82f6; color: white; }
 .btn-primary:hover:not(:disabled) { background: #2563eb; }
 .relay-action { margin-right: 4px; }
+.relay-scope-text { opacity: 1 !important; margin-top: 4px; }
 .relay-channel { font-size: 12px; }
 .relay-preview {
   margin: 6px 0;

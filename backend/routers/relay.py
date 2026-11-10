@@ -16,6 +16,7 @@ from ..relay.adapter import RelayError
 from ..relay.adapters import get_spec
 from ..relay.directory import DEFAULT_PAGE, DirectoryLookupError, entry_label
 from ..relay.handles import HandleConflictError
+from ..relay.inbound.constants import MONITOR_KINDS
 from ..relay.safety import safe_error_code
 from ..relay.service import RelayNotAttachedError, SessionNotFoundError
 from ..relay.slack_scopes import build_manifest_response
@@ -28,6 +29,7 @@ from ..relay_manager import (
 from ._models import (
     RelayCreateRequest,
     RelayHandleRequest,
+    RelayMonitorPatchRequest,
     RelayOAuthInitiateRequest,
     RelayPolicyRequest,
     RelaySecretsRequest,
@@ -319,5 +321,99 @@ def build_router(webui) -> APIRouter:
         except (SessionNotFoundError, RelayNotFoundError, RelayNotAttachedError) as e:
             raise _policy_errors(e) from e
         return await service().get_session_relay(session_id)
+
+    # ---- Monitors (inbound 3b-ii): owner list / pause / resume / delete ----
+
+    monitor_states = ("active", "paused", "suspended")
+
+    async def _monitor_service(relay_id: str):
+        if await manager().get_relay(relay_id) is None:
+            raise HTTPException(status_code=404, detail="Relay not found")
+        inbound = webui.service.relay_inbound.service_for(relay_id)
+        if inbound is None:
+            raise HTTPException(status_code=409, detail="Inbound is not running for this relay")
+        return inbound
+
+    async def _require_session_relay(session_id: str, relay_id: str) -> None:
+        try:
+            await service().require_attached(session_id, relay_id)
+        except (SessionNotFoundError, RelayNotFoundError, RelayNotAttachedError) as e:
+            raise _policy_errors(e) from e
+
+    def _check_filters(status: str | None, kind: str | None) -> None:
+        if status is not None and status not in monitor_states:
+            raise HTTPException(status_code=422, detail="status must be active, paused or suspended")
+        if kind is not None and kind not in MONITOR_KINDS:
+            raise HTTPException(status_code=422, detail="unknown monitor kind")
+
+    async def _list_monitors(
+        relay_id: str, session_id: str | None, status: str | None, kind: str | None,
+        limit: int, offset: int,
+    ) -> dict:
+        _check_filters(status, kind)
+        inbound = await _monitor_service(relay_id)
+        rows, total = await inbound.public_monitors(
+            session_id, status=status, kind=kind, limit=limit, offset=max(0, offset)
+        )
+        return {"relay_id": relay_id, "monitors": rows, "total": total}
+
+    async def _patch_monitor(
+        relay_id: str, monitor_id: str, session_id: str | None, request: RelayMonitorPatchRequest
+    ) -> dict:
+        inbound = await _monitor_service(relay_id)
+        rec = inbound.store.get_monitor(monitor_id)
+        if rec is None or (session_id is not None and rec.get("session_id") != session_id):
+            raise HTTPException(status_code=404, detail="Monitor not found")
+        await inbound.set_paused(monitor_id, request.paused, source="owner")
+        return await inbound.public_one(monitor_id) or {}
+
+    async def _delete_monitor(relay_id: str, monitor_id: str, session_id: str | None) -> dict:
+        inbound = await _monitor_service(relay_id)
+        rec = inbound.store.get_monitor(monitor_id)
+        if rec is None or (session_id is not None and rec.get("session_id") != session_id):
+            raise HTTPException(status_code=404, detail="Monitor not found")
+        await inbound.delete_monitor(monitor_id, source="owner")
+        return {"deleted": True, "monitor_id": monitor_id}
+
+    @router.get("/api/relays/{relay_id}/monitors")
+    @handle_exceptions("list relay monitors")
+    async def list_relay_monitors(
+        relay_id: str, session_id: str | None = None, status: str | None = None,
+        kind: str | None = None, limit: int = 100, offset: int = 0,
+    ):
+        return await _list_monitors(relay_id, session_id, status, kind, limit, offset)
+
+    @router.get("/api/sessions/{session_id}/relays/{relay_id}/monitors")
+    @handle_exceptions("list session monitors")
+    async def list_session_monitors(
+        session_id: str, relay_id: str, status: str | None = None, kind: str | None = None,
+        limit: int = 100, offset: int = 0,
+    ):
+        await _require_session_relay(session_id, relay_id)
+        return await _list_monitors(relay_id, session_id, status, kind, limit, offset)
+
+    @router.patch("/api/relays/{relay_id}/monitors/{monitor_id}")
+    @handle_exceptions("update relay monitor")
+    async def patch_relay_monitor(relay_id: str, monitor_id: str, request: RelayMonitorPatchRequest):
+        return await _patch_monitor(relay_id, monitor_id, None, request)
+
+    @router.patch("/api/sessions/{session_id}/relays/{relay_id}/monitors/{monitor_id}")
+    @handle_exceptions("update session monitor")
+    async def patch_session_monitor(
+        session_id: str, relay_id: str, monitor_id: str, request: RelayMonitorPatchRequest
+    ):
+        await _require_session_relay(session_id, relay_id)
+        return await _patch_monitor(relay_id, monitor_id, session_id, request)
+
+    @router.delete("/api/relays/{relay_id}/monitors/{monitor_id}")
+    @handle_exceptions("delete relay monitor")
+    async def delete_relay_monitor(relay_id: str, monitor_id: str):
+        return await _delete_monitor(relay_id, monitor_id, None)
+
+    @router.delete("/api/sessions/{session_id}/relays/{relay_id}/monitors/{monitor_id}")
+    @handle_exceptions("delete session monitor")
+    async def delete_session_monitor(session_id: str, relay_id: str, monitor_id: str):
+        await _require_session_relay(session_id, relay_id)
+        return await _delete_monitor(relay_id, monitor_id, session_id)
 
     return router

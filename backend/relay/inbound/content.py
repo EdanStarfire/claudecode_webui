@@ -8,6 +8,7 @@ instruction or close the fence.
 
 from __future__ import annotations
 
+from datetime import UTC, datetime
 from typing import Any
 
 from ..safety import wrap_untrusted
@@ -70,13 +71,26 @@ def entry(
     }
 
 
+def gap_line(gap: tuple[float, float]) -> str:
+    """Backfill was incomplete (capped / rate limited): times only, our own data."""
+    def fmt(epoch: float) -> str:
+        return datetime.fromtimestamp(epoch, UTC).strftime("%Y-%m-%d %H:%M UTC")
+    return (
+        f"Slack backfill was incomplete for the period {fmt(gap[0])}–{fmt(gap[1])}: some mentions / "
+        "direct messages may be missing."
+    )
+
+
 def build_dispatch(
     entries: list[dict[str, Any]], *, monitor_count: int, minutes: int,
     omitted_by_channel: dict[str, int] | None = None, older_omitted: bool = False,
-    nonce: str | None = None,
+    nonce: str | None = None, gap: tuple[float, float] | None = None,
 ) -> str:
     header = HEADER_TEMPLATE.format(n=len(entries), k=monitor_count, minutes=max(1, minutes))
-    parts = [header, FRAMING, wrap_untrusted(entries, nonce)]
+    parts = [header]
+    if gap:
+        parts.append(gap_line(gap))
+    parts += [FRAMING, wrap_untrusted(entries, nonce)]
     tail = [t for t in (
         tally_line(omitted_by_channel or {}),
         "older content omitted (backfill limit)" if older_omitted else None,

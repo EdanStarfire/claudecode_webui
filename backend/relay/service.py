@@ -246,6 +246,10 @@ class RelayService:
             raise ValueError(f"Unsupported adapter_type '{record.adapter_type}'")
         return spec
 
+    async def require_attached(self, session_id: str, relay_id: str) -> None:
+        """404 session / relay, 409 not the session's attached relay (monitor REST, 3b-ii)."""
+        await self._require_attached_relay(session_id, relay_id)
+
     # ---------------------------------------------------------- policy audit
 
     def attach_policy_audit(self, session_manager: SessionManager) -> None:

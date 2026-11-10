@@ -32,6 +32,8 @@ from ..events import RelayEvent
 from ..safety import safe_error_code
 from . import constants as const
 from . import content as monitor_content
+from . import public as monitor_public
+from .backfill import BackfillRun, backfill_dms, backfill_mentions
 from .coalescer import BufferedMessage, Coalescer, SessionBuffer
 from .dispatch import format_instruction, instruction_summary
 from .matcher import MatchContext, matches_monitor, never_content
@@ -40,6 +42,7 @@ from .normalize import Drop, event_from_message, normalize_event
 from .ratelimit import KeyedBuckets, TokenBucket
 from .responder import InboundResponder
 from .router import KIND_IGNORE, KIND_INSTRUCTION, KIND_REPLY, classify
+from .search_limiter import SearchLimiter
 from .state import InboundState, ts_key
 from .store import ACTIVE, SUSPENDED, JsonSubscriptionStore
 from .transport import (
@@ -120,6 +123,8 @@ class InboundService:
         names: Any = None,
         window_sleep: Callable[[float], Awaitable[None]] | None = None,
         watch_sleep: Callable[[float], Awaitable[None]] | None = None,
+        search_sleep: Callable[[float], Awaitable[None]] | None = None,
+        rerun_sleep: Callable[[float], Awaitable[None]] | None = None,
     ) -> None:
         self.relay_id = relay_id
         self._manager = relay_manager
@@ -162,6 +167,12 @@ class InboundService:
         self._policy_lock = asyncio.Lock()  # one policy evaluation at a time (suspend/resume do not interleave)
         self._replied: set[str] = set()  # instruction comm ids that already got a failure reply
         self._flush_audits: set[asyncio.Task] = set()
+        # --- scope monitors (stage 3b-ii)
+        self.search_limiter = SearchLimiter(mono, search_sleep or asyncio.sleep)
+        self._rerun_sleep = rerun_sleep or asyncio.sleep
+        self._rerun_task: asyncio.Task | None = None
+        self._rerun_sessions: set[str | None] = set()
+        self._gaps: dict[str, tuple[float, float]] = {}  # session -> incomplete backfill period
 
     # ------------------------------------------------------------- lifecycle
 
@@ -177,6 +188,9 @@ class InboundService:
         self._high_water = {
             m["id"]: m["last_seen_ts"] for m in self.store.monitors() if m.get("last_seen_ts")
         }  # restart: high water = durable cursor, so enqueued-but-lost content is re-fetched
+        for m in self.store.monitors():  # delivered keys survive a restart: the 60 s margin never repeats them
+            if m.get("recent_keys"):
+                self._recent_keys[m["id"]] = OrderedDict((k, None) for k in m["recent_keys"])
         self.watcher.start()
         if not self.state.existed:
             self.state.initialize_first_start(self._now())
@@ -207,6 +221,8 @@ class InboundService:
         tasks = list(self._tasks)
         if self._backfill_task is not None:
             tasks.append(self._backfill_task)
+        if self._rerun_task is not None:
+            tasks.append(self._rerun_task)
         for t in tasks:
             t.cancel()
         await asyncio.gather(*tasks, return_exceptions=True)
@@ -214,6 +230,7 @@ class InboundService:
         await self.watcher.stop()
         self._tasks = []
         self._backfill_task = None
+        self._rerun_task = None
         transport, self._transport = self._transport, None
         if transport is not None:
             try:
@@ -451,7 +468,7 @@ class InboundService:
 
     def _monitor_match(self, event: RelayEvent) -> list[dict[str, Any]]:
         """Monitors this event feeds; local and index-based (no scan, no I/O)."""
-        candidates = self.store.monitors_for_channel(event.channel)
+        candidates = [*self.store.monitors_for_channel(event.channel), *self.store.scope_monitors()]
         if not candidates:
             return []
         ctx = self._match_context()
@@ -975,11 +992,13 @@ class InboundService:
         return f"{now:.6f}"
 
     async def create_monitor(
-        self, session_id: str, kind: str, channel: str, *, thread_ts: str | None,
-        filters: dict[str, Any], expires_at: float | None,
+        self, session_id: str, kind: str, channel: str | None, *, thread_ts: str | None,
+        filters: dict[str, Any], expires_at: float | None, consent: dict[str, Any] | None = None,
+        approval: str | None = None, prompt_via: str | None = None,
     ) -> tuple[dict[str, Any], str]:
         record, outcome = await self.store.create_monitor(
             session_id, kind, channel, thread_ts=thread_ts, filters=filters, expires_at=expires_at,
+            consent=consent,
         )
         self._high_water[record["id"]] = record["last_seen_ts"]
         if outcome in ("created", "resumed"):
@@ -989,7 +1008,7 @@ class InboundService:
                 outcome="ok", session_id=session_id, monitor_id=record["id"], monitor_kind=kind,
                 channel_id=channel, thread_ts=thread_ts, count=len(keywords),
                 query_sha256=hashlib.sha256("\n".join(keywords).encode()).hexdigest() if keywords else None,
-                source="agent",
+                source="agent", approval=approval, prompt_via=prompt_via,
             )
         return record, outcome
 
@@ -1017,6 +1036,93 @@ class InboundService:
     def list_monitors(self, session_id: str) -> list[dict[str, Any]]:
         return [dict(m) for m in self.store.monitors(session_id)]
 
+    # ------------------------------------------------ owner actions (REST, stage 3b-ii)
+
+    async def public_monitors(
+        self, session_id: str | None = None, *, status: str | None = None, kind: str | None = None,
+        limit: int = 100, offset: int = 0,
+    ) -> tuple[list[dict[str, Any]], int]:
+        """Owner-facing rows (sorted by ``created_at``) and the total before paging."""
+        rows = [
+            m for m in self.store.monitors(session_id)
+            if (kind is None or m["kind"] == kind)
+            and (status is None or monitor_public.effective_state(m) == status)
+        ]
+        rows.sort(key=lambda m: (float(m.get("created_at") or 0), m["id"]))
+        total = len(rows)
+        page = rows[max(0, offset): max(0, offset) + max(1, min(limit, 200))]
+        return await self._public_rows(page), total
+
+    async def public_one(self, monitor_id: str) -> dict[str, Any] | None:
+        rec = self.store.get_monitor(monitor_id)
+        return (await self._public_rows([rec]))[0] if rec is not None else None
+
+    async def _public_rows(self, page: list[dict[str, Any]]) -> list[dict[str, Any]]:
+        labels = await self._owner_labels(page)
+        out = []
+        for m in page:
+            info = await self._sessions.get_session_info(m["session_id"])
+            cfg = (getattr(info, "config", None) or {}) if info is not None else {}
+            out.append(monitor_public.public_monitor(
+                m, session_name=getattr(info, "name", None), handle=cfg.get("relay_handle"),
+                channel_label=labels["channels"].get(m.get("channel")), user_labels=labels["users"],
+            ))
+        return out
+
+    async def _owner_labels(self, rows: list[dict[str, Any]]) -> dict[str, dict]:
+        """Plain-text labels for the owner (IDs when a lookup fails; never blocks)."""
+        channels: dict[str, str] = {}
+        users: dict[str, str | None] = {}
+        names = self._names
+        if names is None or not rows:
+            return {"channels": channels, "users": users}
+        record = self.record
+        owner = record.owner_user_id if record else None
+        adapter = self._manager.adapter_for(self.relay_id)
+
+        async def resolve() -> None:
+            for c in dict.fromkeys(m["channel"] for m in rows if m.get("channel")):
+                channels[c] = await names.channel_label(adapter, self.relay_id, c, owner)
+            ids = [u for m in rows for u in (m.get("filters") or {}).get("users") or []]
+            if ids:
+                users.update(await names.user_names(adapter, self.relay_id, ids))
+
+        try:
+            await asyncio.wait_for(resolve(), const.LABEL_TIMEOUT_SECONDS)
+        except Exception:
+            logger.debug("Monitor label resolution failed", exc_info=True)
+        return {"channels": channels, "users": users}
+
+    async def set_paused(self, monitor_id: str, paused: bool, *, source: str = "owner") -> dict[str, Any] | None:
+        """Owner pause / resume. Pausing stops matching and drops buffered messages at the next flush;
+        resuming restarts the cursor from NOW (the paused period is not backfilled) and does NOT lift a
+        system suspension (``suspended_reason`` stays)."""
+        rec = self.store.get_monitor(monitor_id)
+        if rec is None:
+            return None
+        was_paused = bool(rec.get("paused"))
+        now = self._now()
+        rec = await self.store.set_paused(monitor_id, paused, resume_from=None if paused or not was_paused else now)
+        if rec is None:
+            return None
+        if not paused and was_paused:
+            self._high_water[monitor_id] = self._ts_str(now)
+            self._hold.discard(monitor_id)
+            self._recent_keys.pop(monitor_id, None)
+        if paused != was_paused:
+            await self._rec(
+                event="monitor_paused" if paused else "monitor_resumed", outcome="ok",
+                session_id=rec["session_id"], monitor_id=monitor_id, monitor_kind=rec["kind"],
+                channel_id=rec.get("channel"), source=source,
+            )
+        return rec
+
+    async def delete_monitor(self, monitor_id: str, *, source: str = "owner") -> bool:
+        rec = self.store.get_monitor(monitor_id)
+        if rec is None:
+            return False
+        return await self.remove_monitor(rec["session_id"], monitor_id, source=source)
+
     # ---------------------------------------------------------- policy at delivery
 
     async def _session_problem(self, session_id: str) -> str | None:
@@ -1041,6 +1147,8 @@ class InboundService:
         """None = the monitor may be active, else the suspension reason."""
         if problem:
             return const.SUSPEND_SESSION_INACTIVE
+        if monitor.get("kind") in const.SCOPE_KINDS:
+            return None  # no channel: blocked channels are filtered per message at the flush
         eff = policies.get(monitor.get("channel"))
         policy = eff.policy if eff else None
         if policy == "blocked":
@@ -1051,19 +1159,21 @@ class InboundService:
 
     async def apply_policy(
         self, session_id: str, *, resume: bool, only: set[str] | None = None
-    ) -> set[str]:
+    ) -> tuple[set[str], dict[str, Any]]:
         async with self._policy_lock:
             return await self._apply_policy(session_id, resume=resume, only=only)
 
     async def _apply_policy(
         self, session_id: str, *, resume: bool, only: set[str] | None = None
-    ) -> set[str]:
+    ) -> tuple[set[str], dict[str, Any]]:
         """Fresh policy + session check of the session's monitors (never cached). Suspends monitors
         whose channel is now blocked / unset or whose session cannot receive content; with
-        ``resume`` also lifts those suspensions (from now, D4). Returns the ids that are active."""
+        ``resume`` also lifts those suspensions (from now, D4). Returns the ids that are active and
+        the session's effective channel policies (the flush filters blocked channels of scope
+        monitors with them)."""
         monitors = [m for m in self.store.monitors(session_id) if only is None or m["id"] in only]
         if not monitors:
-            return set()
+            return set(), {}
         problem = await self._session_problem(session_id)
         policies: dict[str, Any] = {}
         if problem is None:
@@ -1091,7 +1201,7 @@ class InboundService:
                     valid.add(m["id"])
             elif m["status"] == ACTIVE:
                 await self._suspend(m, desired)
-        return valid
+        return valid, policies
 
     async def _suspend(self, monitor: dict[str, Any], reason: str) -> None:
         await self.store.set_monitor_status(monitor["id"], SUSPENDED, reason)
@@ -1135,14 +1245,32 @@ class InboundService:
         """Build and enqueue ONE envelope from a detached buffer (see ``Coalescer``)."""
         session_id = buf.session_id
         mids = {mid for m in buf.messages.values() for mid in m.monitor_ids} | set(buf.cover)
-        valid = await self.apply_policy(session_id, resume=False, only=mids)
+        valid, policies = await self.apply_policy(session_id, resume=False, only=mids)
+        blocked = {c for c, eff in policies.items() if eff is not None and eff.policy == "blocked"}
         kept: list[BufferedMessage] = []
+        blocked_cover: dict[str, str] = {}
         for m in sorted(buf.messages.values(), key=lambda x: _tsf(x.event.ts)):
-            ids = [i for i in m.monitor_ids if i in valid]
+            ids = []
+            for i in m.monitor_ids:
+                if i not in valid:
+                    continue
+                if m.event.channel in blocked and (rec := self.store.get_monitor(i)) is not None \
+                        and rec["kind"] in const.SCOPE_KINDS:
+                    # an explicitly blocked channel stays excluded from scope monitors: the message is
+                    # dropped here (fresh policy), its ts still moves the cursor, the monitor stays active
+                    self._drop("monitor_blocked_channel")
+                    self.store.bump_counters(i, dropped=1)
+                    if _tsf(m.event.ts) > _tsf(blocked_cover.get(i)):
+                        blocked_cover[i] = m.event.ts
+                    continue
+                ids.append(i)
             if ids:
                 kept.append(BufferedMessage(m.event, ids))
         included, omitted = monitor_content.select_for_envelope(kept)
         cover = {k: v for k, v in buf.cover.items() if k in valid}
+        for mid, ts in blocked_cover.items():
+            if _tsf(ts) > _tsf(cover.get(mid)):
+                cover[mid] = ts
         for m in kept:
             for mid in m.monitor_ids:
                 if _tsf(m.event.ts) > _tsf(cover.get(mid)):
@@ -1157,9 +1285,10 @@ class InboundService:
         entries = await self._build_entries(included)
         monitor_ids = sorted({mid for m in included for mid in m.monitor_ids})
         minutes = round((self._now() - buf.opened_at) / 60) or 1
+        gap = self._gaps.pop(session_id, None)  # an incomplete backfill is announced once, on the next envelope
         dispatch = monitor_content.build_dispatch(
             entries, monitor_count=len(monitor_ids), minutes=minutes,
-            omitted_by_channel=dict(omitted_by_channel), older_omitted=buf.older_omitted,
+            omitted_by_channel=dict(omitted_by_channel), older_omitted=buf.older_omitted, gap=gap,
         )
         summary = monitor_content.monitor_summary(len(included))
         keys = [f"{m.event.channel}:{m.event.ts}" for m in included]
@@ -1180,14 +1309,17 @@ class InboundService:
             },
         }
         counts: dict[str, int] = {}
+        keys_by_monitor: dict[str, list[str]] = {}
         for m in included:
             for mid in m.monitor_ids:
                 counts[mid] = counts.get(mid, 0) + 1
+                keys_by_monitor.setdefault(mid, []).append(f"{m.event.channel}:{m.event.ts}")
         # Watched BEFORE the enqueue so a block / unmonitor that lands meanwhile can cancel it; the
         # watcher skips the entry until the enqueue has finished.
         entry = WatchEntry(
             "monitor", session_id, comm_id, self._now(), cover=cover,
-            info={"counts": counts, "count": len(included), "omitted": omitted_total, "enqueuing": True},
+            info={"counts": counts, "count": len(included), "omitted": omitted_total, "enqueuing": True,
+                  "keys": keys_by_monitor},
         )
         self.watcher.watch(entry)
         try:
@@ -1199,6 +1331,8 @@ class InboundService:
             logger.exception("Monitor delivery failed")
             outcome = DeliveryOutcome("failed", "exception")
         if outcome.status == "failed":
+            if gap:
+                self._gaps.setdefault(session_id, gap)
             self.watcher.entries.pop(comm_id, None)
             await self._monitor_failed(
                 list(cover), comm_id, outcome.error or "enqueue_failed", len(included)
@@ -1290,6 +1424,7 @@ class InboundService:
                     mid, last_delivered_at=now, last_error=None, failures=0, last_activity_at=now,
                 )
                 self.store.bump_counters(mid, delivered=int(entry.info.get("counts", {}).get(mid, 0)))
+                self.store.note_delivered_keys(mid, (entry.info.get("keys") or {}).get(mid) or [])
             await self._rec(
                 event="monitor_delivered", outcome="ok", session_id=entry.session_id,
                 envelope_id=entry.comm_id, count=entry.info.get("count"),
@@ -1357,15 +1492,26 @@ class InboundService:
 
     # ------------------------------------------------------------ monitor backfill
 
-    async def backfill_monitors(self, session_id: str | None = None) -> None:
+    async def backfill_monitors(self, session_id: str | None = None, *, rerun: bool = False) -> None:
         """Re-fetch content each active monitor missed (reconnect / session restore). Matches ONLY
-        the monitor being filled; the per-monitor high water (not the ring) is the idempotence."""
+        the monitor being filled; the per-monitor high water (not the ring) is the idempotence.
+        Scope monitors (mentions / DMs) share one run (``backfill.py``); ``rerun`` is the delayed
+        second pass for search-index lag (mentions only)."""
         if self.monitor_eligibility() is not None:
             return
         adapter = self._manager.adapter_for(self.relay_id)
         now = self._now()
+        run = BackfillRun(now)
+        mentions: list[dict[str, Any]] = []
+        dms: list[dict[str, Any]] = []
         for m in list(self.store.monitors(session_id)):
             if m["status"] != ACTIVE or m.get("paused"):
+                continue
+            if m["kind"] in const.SCOPE_KINDS:
+                self._reset_hold(m)
+                (mentions if m["kind"] == const.KIND_MONITOR_MENTIONS else dms).append(m)
+                continue
+            if rerun:
                 continue
             try:
                 await self._backfill_monitor(adapter, m, now)
@@ -1375,14 +1521,81 @@ class InboundService:
                 raise
             except Exception:
                 logger.exception("Monitor backfill failed")
+        try:
+            if dms and not rerun:
+                await backfill_dms(self, adapter, dms, run)
+            if mentions:
+                await backfill_mentions(self, adapter, mentions, run)
+        except asyncio.CancelledError:
+            raise
+        except RelayError as e:
+            run.counts["rate_limited" if e.code == "ratelimited" else "error"] += 1
+            run.note_gap(now - const.BACKFILL_MARGIN_SECONDS)
+        except Exception:
+            logger.exception("Scope monitor backfill failed")
+            run.counts["error"] += 1
+            run.note_gap(now - const.BACKFILL_MARGIN_SECONDS)
+        await self._finish_scope_run(run, [*dms, *mentions], rerun)
+        if mentions and not rerun:
+            self._schedule_mention_rerun(session_id)
+
+    def _reset_hold(self, monitor: dict[str, Any]) -> None:
+        """A failed / lost / cancelled envelope: re-collect from the durable cursor. The keys that were
+        CONFIRMED delivered (persisted) stay known, so the re-read never repeats them."""
+        mid = monitor["id"]
+        if mid in self._hold:
+            self._high_water[mid] = monitor.get("last_seen_ts") or self._ts_str(self._now())
+            persisted = monitor.get("recent_keys") or []
+            self._recent_keys[mid] = OrderedDict((k, None) for k in persisted)
+        self._hold.discard(mid)
+
+    async def _finish_scope_run(
+        self, run: BackfillRun, monitors: list[dict[str, Any]], rerun: bool
+    ) -> None:
+        for reason, n in run.counts.items():
+            self._drops[f"monitor_{reason}"] += n
+        if not run.counts and not run.gap:
+            return
+        if run.gap:
+            for sid in {m["session_id"] for m in monitors}:
+                prior = self._gaps.get(sid)
+                start = min(run.gap_from if run.gap_from is not None else run.now, prior[0] if prior else run.now)
+                self._gaps[sid] = (start, run.now)
+        await self._rec(
+            event="monitor_backfill", outcome="truncated" if run.gap else "ok",
+            code="gap_notice" if run.gap else ("rerun" if rerun else "scope"),
+            count=run.hydrations, reason_counts=dict(run.counts),
+        )
+
+    def _schedule_mention_rerun(self, session_id: str | None) -> None:
+        """One delayed second pass (the search index lags): at most one pending at a time."""
+        if self._stopping:
+            return
+        self._rerun_sessions.add(session_id)
+        if self._rerun_task is not None and not self._rerun_task.done():
+            return
+        try:
+            self._rerun_task = asyncio.get_running_loop().create_task(
+                self._mention_rerun(), name=f"inbound-mention-rerun-{self.relay_id}"
+            )
+        except RuntimeError:
+            pass
+
+    async def _mention_rerun(self) -> None:
+        try:
+            await self._rerun_sleep(const.MENTION_RERUN_DELAY_SECONDS)
+            sessions, self._rerun_sessions = self._rerun_sessions, set()
+            for sid in (None,) if None in sessions else sorted(sessions):
+                await self.backfill_monitors(sid, rerun=True)
+        except asyncio.CancelledError:
+            raise
+        except Exception:
+            logger.exception("Mentions backfill re-run failed")
 
     async def _backfill_monitor(self, adapter, m: dict[str, Any], now: float) -> None:
         mid = m["id"]
         durable = m.get("last_seen_ts") or self._ts_str(now)
-        if mid in self._hold:  # a failed / lost / cancelled envelope: re-collect from the durable cursor
-            self._high_water[mid] = durable
-            self._recent_keys.pop(mid, None)
-        self._hold.discard(mid)  # this pass re-collects everything after the durable cursor
+        self._reset_hold(m)  # a failed / lost / cancelled envelope: re-collect from the durable cursor
         high = self._high_water.get(mid) or durable
         floor = now - const.MONITOR_BACKFILL_MAX_AGE_SECONDS
         older_omitted = _tsf(durable) < floor
@@ -1420,7 +1633,7 @@ class InboundService:
                 continue
             if event.thread_ts is None and m["kind"] == const.KIND_MONITOR_THREAD:
                 event.thread_ts = m["thread_ts"]
-            if never_content(event, ctx) or not matches_monitor(event, m):
+            if never_content(event, ctx) or not matches_monitor(event, m, ctx.owner_user_id):
                 continue
             self.coalescer.add(event, [m], older_omitted=older_omitted)  # per-monitor key dedupe
             older_omitted = False

@@ -89,7 +89,8 @@ def body(result) -> dict:
 class TestRegistration:
     async def test_tools_are_in_the_spec(self, h):
         from backend.relay.adapters import SLACK_SPEC
-        assert SLACK_SPEC.monitor_tools == {"monitor_thread", "monitor_channel", "unmonitor", "list_monitors"}
+        assert SLACK_SPEC.monitor_tools == {"monitor_thread", "monitor_channel", "unmonitor", "list_monitors",
+                                            "monitor_mentions", "monitor_dms"}
         assert not (SLACK_SPEC.monitor_tools & SLACK_SPEC.write_tools)  # never send tools
         assert SLACK_SPEC.tool_actions["monitor_thread"] == SLACK_SPEC.tool_actions["monitor_channel"] == "read"
         assert SLACK_SPEC.tool_actions["unmonitor"] is None and SLACK_SPEC.tool_actions["list_monitors"] is None

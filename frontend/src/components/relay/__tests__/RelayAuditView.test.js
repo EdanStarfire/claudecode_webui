@@ -111,12 +111,30 @@ describe('RelayAuditView', () => {
     expect(details[5]).toBe('cancelled')
     expect(details[6]).toBe('thread monitor · idle')
     expect(details[7]).toBe('channel monitor · over the flood limit, messages dropped')
-    expect(details[8]).toBe('300 messages')
+    expect(details[8]).toBe('older content omitted · 300 messages')
     const rows = wrapper.findAll('[data-testid="audit-record"]')
     expect(rows[5].classes()).toContain('outcome-error')
     expect(rows[7].classes()).toContain('outcome-dropped')
     expect(rows[9].classes()).toContain('outcome-delivery_failed')
     expect(rows[10].classes()).toContain('outcome-cancelled')
+  })
+
+  it('humanizes scope monitor rows: mentions / DMs, consent, owner actions, gap notice (3b-ii)', async () => {
+    const E = (over) => REC({ tool: undefined, ...over })
+    apiMock.get.mockResolvedValue({ records: [
+      E({ event: 'monitor_created', outcome: 'ok', monitor_kind: 'monitor_mentions', approval: 'prompt_allow', source: 'agent' }),
+      E({ event: 'monitor_paused', outcome: 'ok', monitor_kind: 'monitor_dms', source: 'owner' }),
+      E({ event: 'monitor_removed', outcome: 'ok', monitor_kind: 'monitor_dms', source: 'owner' }),
+      E({ event: 'monitor_backfill', outcome: 'truncated', code: 'gap_notice', reason_counts: { hydration_cap: 5, non_member: 2 } }),
+    ] })
+    const { wrapper } = await mountView()
+    const actions = wrapper.findAll('[data-testid="audit-action"]').map(a => a.text())
+    expect(actions).toEqual(['Monitor created', 'Monitor paused', 'Monitor removed', 'Monitor backfill'])
+    const details = wrapper.findAll('[data-testid="audit-detail"]').map(d => d.text())
+    expect(details[0]).toBe('mentions monitor · owner consented · by agent')
+    expect(details[1]).toBe('DMs monitor · by owner')
+    expect(details[2]).toBe('DMs monitor · by owner')
+    expect(details[3]).toBe('backfill incomplete, gap notice sent with the next envelope · hydration_cap 5 · non_member 2')
   })
 
   it('humanizes the received-reaction events (#2364)', async () => {

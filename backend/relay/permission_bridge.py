@@ -83,6 +83,13 @@ class RelayPermissionBridge:
             }
         model = ctx.spec.policy_model
 
+        if prompt.get("kind") == "monitor_scope":
+            # Consent for a scope monitor: allow / deny only. Never a policy write, whatever a
+            # (hand-made) answer carries.
+            if mint_grant:
+                self.gate.grants.add(session_id, short, args, "prompt_allow")
+            return {**response, "relay_approval": "prompt_allow"}
+
         if chosen is not None and chosen not in model.values:
             return {
                 "behavior": "deny", "message": "Invalid relay policy choice.",
