@@ -176,6 +176,12 @@ class RelayMonitorTools:
                 f"Could not verify that the user is a member of {channel_id} "
                 f"({safe_error_code(e.code)}); not monitored.", channel_id,
             )
+        if info.is_im or info.is_mpim:
+            return await self._refuse(
+                ctx, session_id, tool_name, args, "dm_not_monitorable_here",
+                f"Conversation {channel_id} is a direct or group message; it cannot be monitored "
+                "with this tool.", channel_id,
+            )
         if info.is_member is False:
             return await self._refuse(
                 ctx, session_id, tool_name, args, "not_a_member",

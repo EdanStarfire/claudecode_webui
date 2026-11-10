@@ -67,6 +67,7 @@ MAX_ENVELOPES_PER_HOUR = 12
 FLOOD_SUSPEND_WINDOWS = 3  # consecutive flooded windows suspend the monitor
 POSTPONE_STEP_SECONDS = 60.0
 POSTPONE_MAX_SECONDS = 600.0
+MAX_PENDING_ENVELOPES = 3  # un-dispatched monitor envelopes per session; beyond it the flush keeps waiting
 
 # Backfill, caps, expiry
 MONITOR_BACKFILL_MAX_AGE_SECONDS = 24 * 3600
@@ -77,6 +78,7 @@ MONITOR_MAX_EXPIRY_SECONDS = 90 * 24 * 3600
 MAX_KEYWORDS = 10
 MAX_KEYWORD_CHARS = 100
 MAX_FILTER_USERS = 10
+MONITOR_RECENT_KEYS = 1000  # per monitor: message keys remembered for per-monitor dedupe
 
 # Delivery watcher
 WATCH_POLL_SECONDS = 5.0

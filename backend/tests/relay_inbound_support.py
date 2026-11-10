@@ -245,12 +245,15 @@ class FakePort:
         self.calls: list[dict[str, Any]] = []
         self.statuses: dict[tuple[str, str], str] = {}
         self.fail_enqueue = False
-        self.pending_monitor = False
+        self.pending_monitor: bool | int = False
+        self.on_enqueue = None  # async hook awaited inside enqueue (tests interleave work there)
 
     async def enqueue(self, session_id, **kwargs):
         if self.fail_enqueue:
             return DeliveryOutcome("failed", "boom")
         self.calls.append({"session_id": session_id, **kwargs})
+        if self.on_enqueue is not None:
+            await self.on_enqueue()
         key = (session_id, kwargs["comm_id"])
         if key in self.statuses:
             return DeliveryOutcome("already_delivered")
@@ -260,14 +263,19 @@ class FakePort:
     def item_status(self, session_id, comm_id):
         return self.statuses.get((session_id, comm_id))
 
-    def has_pending_monitor(self, session_id, relay_id):
-        if self.pending_monitor:
-            return True
+    def pending_monitor_count(self, session_id, relay_id):
         monitor_ids = {c["comm_id"] for c in self.calls}
-        return any(
-            st == "pending" and sid == session_id and cid in monitor_ids
-            for (sid, cid), st in self.statuses.items()
+        n = sum(
+            1 for (sid, cid), st in self.statuses.items()
+            if st == "pending" and sid == session_id and cid in monitor_ids
         )
+        return max(n, int(self.pending_monitor))
+
+    async def cancel(self, session_id, comm_id):
+        if self.statuses.get((session_id, comm_id)) != "pending":
+            return False
+        self.statuses[(session_id, comm_id)] = "cancelled"
+        return True
 
     def set_status(self, comm_id, status, session_id=SESSION):
         self.statuses[(session_id, comm_id)] = status

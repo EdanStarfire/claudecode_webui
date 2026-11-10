@@ -32,13 +32,21 @@ def fold(text: str | None) -> str:
     return unicodedata.normalize("NFKC", text or "").casefold()
 
 
-def echo_reason(event: RelayEvent, own_app_id: str | None) -> str | None:
-    """Why the event is the relay's / an agent's own post (never delivered as content)."""
+def echo_reason(
+    event: RelayEvent, own_app_id: str | None, owner_user_id: str | None = None
+) -> str | None:
+    """Why the event is the relay's / an agent's own post (never delivered as content).
+
+    Our app acts with the owner's own user token, so a message FROM THE OWNER that carries an
+    ``app_id`` / ``bot_id`` is one of ours even before the app id has been learned (the owner's own
+    typing never has either)."""
     metadata = event.metadata
     if isinstance(metadata, dict) and metadata.get("event_type") == RELAY_EVENT_TYPE:
         return "echo_metadata"
     if own_app_id and event.app_id == own_app_id:
         return "echo_app"
+    if owner_user_id and event.user == owner_user_id and (event.app_id or event.bot_id):
+        return "echo_owner_app"
     if has_agent_marker(event.text):
         return "echo_marker"
     return None
@@ -49,7 +57,7 @@ def never_content(event: RelayEvent, ctx: MatchContext) -> str | None:
         return "self_dm"  # the self-DM, any thread, is the instruction channel: never content
     if not event.user and not (event.bot_id or event.app_id):
         return "no_sender"
-    reason = echo_reason(event, ctx.own_app_id)
+    reason = echo_reason(event, ctx.own_app_id, ctx.owner_user_id)
     if reason:
         return reason
     if event.thread_ts and event.thread_ts != event.ts and ctx.is_instruction_thread(

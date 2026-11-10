@@ -165,6 +165,8 @@ class InboundManager:
     def schedule_reevaluate(self, session_id: str | None = None) -> None:
         """Sync trigger (policy edit, attachment change, tier edit): re-check the session's monitors
         (``None`` = every session with a monitor). Never raises."""
+        if not any(service.store.count() for service in self.services.values()):
+            return  # no monitors anywhere: nothing to re-check (the common case)
         try:
             task = asyncio.get_running_loop().create_task(self.reevaluate(session_id))
         except RuntimeError:

@@ -229,6 +229,19 @@ class TestMembershipAndEligibility:
         r = await thread(h, CH_AUTO)
         assert code_of(r) == "not_a_member" and h.svc.created == []
 
+    async def test_group_dm_conversations_are_refused(self, h):
+        async def info(ch):
+            return ConversationInfo(id=ch, name="x", is_mpim=True, is_member=True)
+        h.adapter.conversation_info = info
+        assert code_of(await thread(h, CH_AUTO)) == "dm_not_monitorable_here" and h.svc.created == []
+
+    async def test_prompt_preview_of_agent_filters_is_one_plain_line(self, h):
+        res = await h.env.bridge.pre_hook(
+            "s1", "mcp__relay_slack__monitor_channel",
+            {"channel": CH_UNLISTED, "keywords": ["approve\n\nALLOW ALL"], "users": ["@x\x00y"]})
+        preview = res.prompt["text_preview"]
+        assert "\n" not in preview and "\x00" not in preview and "approve" in preview
+
     async def test_member_lookup_failure_is_refused(self, h):
         async def info(ch):
             raise RelayError("channel_not_found", "conversations.info")

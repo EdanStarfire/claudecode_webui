@@ -644,6 +644,16 @@ Code: `relay/inbound/{matcher,coalescer,flood,content,watcher,monitor_delivery}.
   monitor, 600 / 10 min per relay (dropped messages are counted, audited once per window and covered by the cursor); 3 consecutive flooded
   windows suspend the monitor (`flood`). A session with a pending monitor envelope or 12 envelopes in the last hour has the flush
   postponed in 60 s steps up to 10 min. Stopping discards buffers without enqueue.
+- **Review hardening**: the echo rule also drops a message FROM THE OWNER carrying an `app_id`/`bot_id` (our app acts with the owner's token), so
+  it holds before `api_app_id` is learned (a post without any of these, e.g. an `upload_file` share, cannot be recognised outside the self-DM). Per-monitor
+  recent-key dedupe (1000 keys) replaces ring marking for backfilled messages, so a backfill of one monitor never hides a message from
+  another. One flush per session at a time; with >= 3 queued undispatched envelopes (stuck/paused session) the flush keeps waiting. Envelopes are
+  watched from before the enqueue: **blocking the channel (or removing the monitor) cancels a queued, not yet dispatched envelope** carrying its
+  content (ledger `cancelled`; not a failure; the other monitors of that envelope re-collect from their cursor); an envelope already dispatched
+  cannot be recalled. A retry of an envelope whose earlier comm ended (failed/cancelled) gets a new comm id (`attempt` suffix). The relay-wide
+  flood budget (600/10 min) drops messages but never counts toward one monitor's flood suspension. `dm`/group-DM conversations are refused
+  (`dm_not_monitorable_here`). `InboundManager.refresh` (credential / relay change) restarts the service: envelopes then in flight are no longer
+  watched and the next backfill may repeat them (at-least-once).
 - **Envelope text** (`content.py`): outside the fence only our own data (fixed framing, counts, IDs); entries (text, names, labels, permalink) are
   inside `wrap_untrusted`; `comm.content`/queue label is counts only (`Slack monitor: N messages`).
 - **Comm shape**: `Comm(from_minion_id=SYSTEM_MINION_ID, from_user=False, sender_type=EXTERNAL, sender_id=relay_id, comm_type=INFO, WHEN_IDLE,

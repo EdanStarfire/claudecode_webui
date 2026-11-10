@@ -149,11 +149,11 @@ class TestDeliverySemantics:
     async def test_port_reports_status_and_pending_monitors(self, tmp_path):
         coord, _, _ = live_coordinator(tmp_path, processing=True)
         port = CoordinatorPort(coord)
-        assert port.item_status("s1", "m1") is None and not port.has_pending_monitor("s1", "relay1")
+        assert port.item_status("s1", "m1") is None and port.pending_monitor_count("s1", "relay1") == 0
         await enqueue_monitor(coord)
         await enqueue_instruction(coord)
-        assert port.item_status("s1", "m1") == "pending" and port.has_pending_monitor("s1", "relay1")
-        assert not port.has_pending_monitor("s1", "other-relay")
+        assert port.item_status("s1", "m1") == "pending" and port.pending_monitor_count("s1", "relay1") == 1
+        assert port.pending_monitor_count("s1", "other-relay") == 0
         coord.delivery_gate.stop_when_idle("s1")
 
 

@@ -86,6 +86,8 @@ class DeliveryWatcher:
 
     async def poll_once(self) -> None:
         for comm_id, entry in list(self.entries.items()):
+            if entry.info.get("enqueuing"):
+                continue  # the enqueue has not finished: the ledger item may not exist yet
             status = self._probe.item_status(entry.session_id, comm_id)
             if status == "pending":
                 if self._now() - entry.registered_at > self._max_age:

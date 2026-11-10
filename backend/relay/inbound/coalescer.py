@@ -50,7 +50,8 @@ class SessionBuffer:
     chars: int = 0
     cover: dict[str, str] = field(default_factory=dict)  # monitor id -> newest ts consumed
     overflow: Counter = field(default_factory=Counter)  # channel -> messages beyond the buffer caps
-    flooded: set[str] = field(default_factory=set)  # monitors that dropped a message this window
+    flooded: set[str] = field(default_factory=set)  # monitors over their OWN limit this window
+    audited_flood: set[str] = field(default_factory=set)  # monitors whose flood audit row was written
     older_omitted: bool = False
     task: asyncio.Task | None = None
 
@@ -69,6 +70,7 @@ class Coalescer:
         self._monitor_limits = KeyedLimiters(const.FLOOD_PER_MONITOR, const.FLOOD_WINDOW_SECONDS, mono)
         self._relay_limit = RollingLimiter(const.FLOOD_PER_RELAY, const.FLOOD_WINDOW_SECONDS, mono)
         self.envelopes = SessionEnvelopeLimiter(const.MAX_ENVELOPES_PER_HOUR, 3600.0, mono)
+        self._flushing: dict[str, asyncio.Task] = {}  # session -> its running flush (one at a time)
 
     # ---------------------------------------------------------------- ingress
 
@@ -93,12 +95,18 @@ class Coalescer:
         admitted: list[str] = []
         for m in monitors:
             mid = m["id"]
+            if self._svc.monitor_key_seen(mid, key):
+                continue  # the same (monitor, message) pair twice (live twin of a backfill, redelivery)
+            self._svc.note_monitor_key(mid, key)
             self._svc.note_high_water(mid, event.ts)
             existing = buf.messages.get(key)
             if existing is not None and mid in existing.monitor_ids:
-                continue  # the same (monitor, message) pair twice: one delivery
-            if not relay_ok or not self._monitor_limits.allow(mid):
-                self._drop_flooded(buf, m, event)
+                continue
+            if not self._monitor_limits.allow(mid):
+                self._drop_flooded(buf, m, event, counts_toward_suspension=True)
+                continue
+            if not relay_ok:  # the relay-wide budget is shared: it never counts against one monitor
+                self._drop_flooded(buf, m, event, counts_toward_suspension=False)
                 continue
             admitted.append(mid)
         if older_omitted:
@@ -108,12 +116,16 @@ class Coalescer:
         if buf.messages or buf.overflow or buf.cover:
             self._ensure_task(buf)
 
-    def _drop_flooded(self, buf: SessionBuffer, monitor: dict, event: RelayEvent) -> None:
+    def _drop_flooded(
+        self, buf: SessionBuffer, monitor: dict, event: RelayEvent, *, counts_toward_suspension: bool
+    ) -> None:
         mid = monitor["id"]
         self._cover(buf, mid, event.ts)
         self._svc.store.bump_counters(mid, dropped=1)
-        if mid not in buf.flooded:
+        if counts_toward_suspension:
             buf.flooded.add(mid)
+        if mid not in buf.audited_flood:
+            buf.audited_flood.add(mid)
             self._svc.spawn_audit(
                 event="monitor_flood", outcome="dropped", code="flood_limit", monitor_id=mid,
                 monitor_kind=monitor.get("kind"), session_id=monitor["session_id"],
@@ -157,44 +169,64 @@ class Coalescer:
     # ------------------------------------------------------------------ flush
 
     async def _run(self, buf: SessionBuffer) -> None:
+        svc = self._svc
         try:
             await self._sleep(self._window)
             waited = 0.0
-            svc = self._svc
-            while waited < const.POSTPONE_MAX_SECONDS and (
-                svc.port.has_pending_monitor(buf.session_id, svc.relay_id)
-                or not self.envelopes.allowed(buf.session_id)
-            ):
+            while True:
+                pending = svc.port.pending_monitor_count(buf.session_id, svc.relay_id)
+                busy = buf.session_id in self._flushing  # one flush per session at a time
+                held = (
+                    (pending >= 1 or not self.envelopes.allowed(buf.session_id))
+                    and waited < const.POSTPONE_MAX_SECONDS
+                ) or pending >= const.MAX_PENDING_ENVELOPES  # a stuck session never accumulates more
+                if not (busy or held):
+                    break
                 await self._sleep(const.POSTPONE_STEP_SECONDS)
                 waited += const.POSTPONE_STEP_SECONDS
             if self._buffers.get(buf.session_id) is buf:
                 del self._buffers[buf.session_id]  # later messages open a new window
-            await svc.flush_buffer(buf)
+            self._flushing[buf.session_id] = asyncio.current_task()
+            try:
+                await svc.flush_buffer(buf)
+            finally:
+                if self._flushing.get(buf.session_id) is asyncio.current_task():
+                    del self._flushing[buf.session_id]
         except asyncio.CancelledError:
+            svc.buffer_lost(buf)
             raise
         except Exception:
             logger.exception("Monitor flush failed")
             if self._buffers.get(buf.session_id) is buf:
                 del self._buffers[buf.session_id]
+            svc.buffer_lost(buf)
 
     # --------------------------------------------------------------- lifecycle
 
     def discard_session(self, session_id: str) -> None:
         buf = self._buffers.pop(session_id, None)
-        if buf is not None and buf.task is not None:
-            buf.task.cancel()
+        if buf is not None:
+            if buf.task is not None:
+                buf.task.cancel()
+            self._svc.buffer_lost(buf)  # synchronous: a task cancelled before it started runs no code
+        running = self._flushing.pop(session_id, None)
+        if running is not None:
+            running.cancel()
         self.envelopes.discard(session_id)
 
     def discard_monitor(self, monitor_id: str) -> None:
-        """Remove a removed / suspended monitor's pending messages (flush re-checks anyway)."""
+        """A removed monitor's limiter state goes away (flush re-checks existence anyway)."""
         self._monitor_limits.discard(monitor_id)
 
     async def stop(self) -> None:
-        """Graceful stop: buffers are discarded WITHOUT enqueue; durable cursors stay so the next
-        start re-fetches whatever was buffered."""
+        """Graceful stop: buffers (and a flush in progress) are discarded WITHOUT enqueue; durable
+        cursors stay so the next start re-fetches whatever was buffered."""
         bufs = list(self._buffers.values())
         self._buffers.clear()
-        tasks = [b.task for b in bufs if b.task is not None]
+        for b in bufs:
+            self._svc.buffer_lost(b)
+        tasks = [b.task for b in bufs if b.task is not None] + list(self._flushing.values())
+        self._flushing.clear()
         for t in tasks:
             t.cancel()
         await asyncio.gather(*tasks, return_exceptions=True)

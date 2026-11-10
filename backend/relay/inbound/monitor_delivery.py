@@ -42,8 +42,9 @@ async def enqueue_monitor_comm(
 ) -> DeliveryOutcome:
     """Deliver one monitor envelope through ``DeliveryGate.deliver``. ``content`` is the counts-only
     ledger text; ``dispatch_content`` (the fenced envelope) is what the session receives."""
-    if coordinator.pending_store.get_item(session_id, comm_id) is not None:
-        return DeliveryOutcome("already_delivered")
+    existing = coordinator.pending_store.get_item(session_id, comm_id)
+    if existing is not None and existing.status == "pending":
+        return DeliveryOutcome("already_delivered")  # the same envelope is already queued
     comm = Comm(
         comm_id=comm_id, from_minion_id=SYSTEM_MINION_ID, from_user=False,
         from_minion_name=MONITOR_SENDER_NAME, sender_type=SenderType.EXTERNAL, sender_id=relay_id,
@@ -71,9 +72,19 @@ class CoordinatorPort:
         item = self._coordinator.pending_store.get_item(session_id, comm_id)
         return item.status if item is not None else None
 
-    def has_pending_monitor(self, session_id: str, relay_id: str) -> bool:
-        for item in self._coordinator.pending_store.get_pending(session_id):
-            rel = (item.comm.metadata or {}).get("relay_inbound") or {}
-            if rel.get("kind") == "monitor" and item.comm.sender_id == relay_id:
-                return True
-        return False
+    def pending_monitor_count(self, session_id: str, relay_id: str) -> int:
+        """Monitor envelopes of this relay that are queued and not yet dispatched."""
+        return sum(
+            1 for item in self._coordinator.pending_store.get_pending(session_id)
+            if ((item.comm.metadata or {}).get("relay_inbound") or {}).get("kind") == "monitor"
+            and item.comm.sender_id == relay_id
+        )
+
+    async def cancel(self, session_id: str, comm_id: str) -> bool:
+        """Cancel a still-pending envelope (content from a blocked channel / removed monitor must
+        not reach the session). The ledger status becomes ``cancelled`` (pending-only guard)."""
+        coordinator = self._coordinator
+        session_dir = await coordinator.session_manager.get_session_directory(session_id)
+        if not session_dir:
+            return False
+        return await coordinator.pending_store.cancel(session_id, session_dir, comm_id) is not None

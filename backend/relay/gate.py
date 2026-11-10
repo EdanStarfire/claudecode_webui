@@ -41,6 +41,7 @@ _PERSON_NAME_RE = re.compile(r"^@\s*(\S.{0,79})\Z")
 # Name-resolution failures the permission pre-hook lets through, so the (authoritative) handler
 # can return the full structured refusal, including the fenced candidate list.
 NAME_LOOKUP_CODES = frozenset({"name_ambiguous", "name_not_found"})
+_PLAIN_RE = re.compile(r"[\x00-\x1f\x7f]+")  # agent-supplied filter text shown in a prompt: one line
 PREVIEW_LEN = 40000  # the prompt shows everything that will be sent (bodies are capped at 35000)
 
 
@@ -279,8 +280,10 @@ class RelayPolicyGate:
         if tool == "monitor_thread":
             return f"monitor thread {args.get('thread_ts')}: new replies will be delivered to the session"
         if tool == "monitor_channel":
-            keywords = args.get("keywords") if isinstance(args.get("keywords"), list) else []
-            users = args.get("users") if isinstance(args.get("users"), list) else []
+            keywords = [_PLAIN_RE.sub(" ", str(k)) for k in (
+                args.get("keywords") if isinstance(args.get("keywords"), list) else [])]
+            users = [_PLAIN_RE.sub(" ", str(u)) for u in (
+                args.get("users") if isinstance(args.get("users"), list) else [])]
             filters = "; ".join(p for p in (
                 f"keywords: {', '.join(map(str, keywords))}"[:300] if keywords else "",
                 f"users: {', '.join(map(str, users))}"[:300] if users else "",

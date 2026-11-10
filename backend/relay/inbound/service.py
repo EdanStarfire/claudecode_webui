@@ -18,7 +18,7 @@ import logging
 import random
 import time
 import uuid
-from collections import Counter
+from collections import Counter, OrderedDict
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 from pathlib import Path
@@ -83,14 +83,21 @@ class _NullPort:
     def item_status(self, session_id: str, comm_id: str) -> str | None:
         return None
 
-    def has_pending_monitor(self, session_id: str, relay_id: str) -> bool:
+    def pending_monitor_count(self, session_id: str, relay_id: str) -> int:
+        return 0
+
+    async def cancel(self, session_id: str, comm_id: str) -> bool:
         return False
 
 
-def monitor_comm_id(relay_id: str, session_id: str, keys: list[str]) -> str:
-    """Deterministic over the envelope's message keys: re-flushing the same buffer is the same comm."""
+def monitor_comm_id(relay_id: str, session_id: str, keys: list[str], attempt: int = 0) -> str:
+    """Deterministic over the envelope's message keys: re-flushing the same buffer while the first
+    attempt is still queued is the same comm (the queue dedupes it). A new ``attempt`` is used when
+    the earlier comm already reached a terminal status (failed / cancelled / delivered), so a retry
+    is never swallowed by the old ledger item."""
     digest = hashlib.sha256("|".join(keys).encode()).hexdigest()
-    return str(uuid.uuid5(const.MONITOR_COMM_NAMESPACE, f"{relay_id}:{session_id}:{digest}"))
+    suffix = f":{attempt}" if attempt else ""
+    return str(uuid.uuid5(const.MONITOR_COMM_NAMESPACE, f"{relay_id}:{session_id}:{digest}{suffix}"))
 
 
 class InboundService:
@@ -151,6 +158,8 @@ class InboundService:
         )
         self._high_water: dict[str, str] = {}  # monitor id -> newest ts buffered (in memory)
         self._hold: set[str] = set()  # monitors whose durable cursor is frozen after a failed envelope
+        self._recent_keys: dict[str, OrderedDict[str, None]] = {}  # monitor id -> recent message keys
+        self._policy_lock = asyncio.Lock()  # one policy evaluation at a time (suspend/resume do not interleave)
         self._replied: set[str] = set()  # instruction comm ids that already got a failure reply
         self._flush_audits: set[asyncio.Task] = set()
 
@@ -401,9 +410,15 @@ class InboundService:
                 if matched:
                     self.state.mark_seen(event.channel, event.ts)
                     self.coalescer.add(event, matched)
+                    self.state.schedule_flush()
                 else:
                     self._drop(decision.reason or "ignored")
-                self.state.schedule_flush()
+                    if decision.reason in _CANDIDATE_IGNORES:
+                        # an owner self-DM message that passed the trust rule but is not an
+                        # instruction: remembered, like in 3a, so it is never re-classified later
+                        self.state.mark_seen(event.channel, event.ts)
+                    if self_dm and event.channel == self_dm:
+                        self.state.schedule_flush()  # the self-DM cursor moved; nothing else needs a write
                 return False
             self.state.mark_seen(event.channel, event.ts)
             self.state.inflight[key] = {
@@ -445,6 +460,31 @@ class InboundService:
             self._drop(f"monitor_{reason}")
             return []
         return match_monitors(event, candidates, ctx)
+
+    def monitor_key_seen(self, monitor_id: str, key: str) -> bool:
+        return key in self._recent_keys.get(monitor_id, ())
+
+    def note_monitor_key(self, monitor_id: str, key: str) -> None:
+        """Remember a message handled for one monitor (bounded): a live twin of a backfilled message,
+        or a redelivery, is then one delivery per monitor, without touching the shared ring."""
+        keys = self._recent_keys.setdefault(monitor_id, OrderedDict())
+        keys[key] = None
+        keys.move_to_end(key)
+        while len(keys) > const.MONITOR_RECENT_KEYS:
+            keys.popitem(last=False)
+
+    def buffer_lost(self, buf: SessionBuffer) -> None:
+        """A buffer was dropped without being delivered (stop, dispose, flush failure): the in-memory
+        high water falls back to the durable cursor so the next backfill re-fetches its content."""
+        for mid in {mid for m in buf.messages.values() for mid in m.monitor_ids} | set(buf.cover):
+            rec = self.store.get_monitor(mid)
+            if rec is not None:
+                self._high_water[mid] = rec.get("last_seen_ts") or self._ts_str(self._now())
+                self._hold.add(mid)
+                keys = self._recent_keys.get(mid)
+                if keys:
+                    for key in [f"{m.event.channel}:{m.event.ts}" for m in buf.messages.values()]:
+                        keys.pop(key, None)
 
     def note_high_water(self, monitor_id: str, ts: str) -> None:
         if _tsf(ts) > _tsf(self._high_water.get(monitor_id)):
@@ -960,6 +1000,7 @@ class InboundService:
             return False
         await self.store.remove_monitor(monitor_id)
         self._forget_monitor(monitor_id)
+        await self._cancel_pending_for({monitor_id})
         await self._rec(
             event="monitor_removed", outcome="ok", session_id=session_id,
             monitor_id=monitor_id, monitor_kind=rec["kind"], channel_id=rec.get("channel"),
@@ -970,6 +1011,7 @@ class InboundService:
     def _forget_monitor(self, monitor_id: str) -> None:
         self._high_water.pop(monitor_id, None)
         self._hold.discard(monitor_id)
+        self._recent_keys.pop(monitor_id, None)
         self.coalescer.discard_monitor(monitor_id)
 
     def list_monitors(self, session_id: str) -> list[dict[str, Any]]:
@@ -1010,6 +1052,12 @@ class InboundService:
     async def apply_policy(
         self, session_id: str, *, resume: bool, only: set[str] | None = None
     ) -> set[str]:
+        async with self._policy_lock:
+            return await self._apply_policy(session_id, resume=resume, only=only)
+
+    async def _apply_policy(
+        self, session_id: str, *, resume: bool, only: set[str] | None = None
+    ) -> set[str]:
         """Fresh policy + session check of the session's monitors (never cached). Suspends monitors
         whose channel is now blocked / unset or whose session cannot receive content; with
         ``resume`` also lifts those suspensions (from now, D4). Returns the ids that are active."""
@@ -1047,6 +1095,8 @@ class InboundService:
 
     async def _suspend(self, monitor: dict[str, Any], reason: str) -> None:
         await self.store.set_monitor_status(monitor["id"], SUSPENDED, reason)
+        if reason in _CANCELLING_REASONS:  # content already queued for this monitor must not arrive
+            await self._cancel_pending_for({monitor["id"]})
         await self._rec(
             event="monitor_suspended", outcome="ok", code=reason,
             session_id=monitor["session_id"], monitor_id=monitor["id"], monitor_kind=monitor["kind"],
@@ -1062,6 +1112,22 @@ class InboundService:
                 await self.reevaluate(session_id)
             except Exception:
                 logger.exception("Monitor policy re-evaluation failed")
+
+    async def _cancel_pending_for(self, monitor_ids: set[str]) -> None:
+        """Cancel queued, not yet dispatched envelopes that carry content of these monitors. The
+        watcher then reports them ``cancelled``; because we caused it, that neither counts as a
+        delivery failure nor suspends anything, and the remaining monitors' content is re-fetched."""
+        for entry in list(self.watcher.entries.values()):
+            if entry.kind != "monitor" or not monitor_ids & set(entry.cover):
+                continue
+            entry.info["self_cancel"] = True
+            try:
+                cancelled = await self.port.cancel(entry.session_id, entry.comm_id)
+            except Exception:
+                logger.exception("Monitor envelope cancel failed")
+                cancelled = False
+            if not cancelled:
+                entry.info.pop("self_cancel", None)  # already dispatched or gone: nothing to undo
 
     # ---------------------------------------------------------------- flush
 
@@ -1086,6 +1152,7 @@ class InboundService:
         for m in omitted:
             omitted_by_channel[m.event.channel] += 1
         if not included:
+            self._advance_unqueued_cover(cover)
             return
         entries = await self._build_entries(included)
         monitor_ids = sorted({mid for m in included for mid in m.monitor_ids})
@@ -1095,9 +1162,12 @@ class InboundService:
             omitted_by_channel=dict(omitted_by_channel), older_omitted=buf.older_omitted,
         )
         summary = monitor_content.monitor_summary(len(included))
-        comm_id = monitor_comm_id(
-            self.relay_id, session_id, [f"{m.event.channel}:{m.event.ts}" for m in included]
-        )
+        keys = [f"{m.event.channel}:{m.event.ts}" for m in included]
+        attempt = 0
+        comm_id = monitor_comm_id(self.relay_id, session_id, keys)
+        while self.port.item_status(session_id, comm_id) not in (None, "pending") and attempt < 50:
+            attempt += 1  # the earlier comm of this exact content already ended: a retry is a new comm
+            comm_id = monitor_comm_id(self.relay_id, session_id, keys, attempt)
         omitted_total = sum(omitted_by_channel.values())
         metadata = {
             "comm": {
@@ -1109,6 +1179,17 @@ class InboundService:
                 "count": len(included), "omitted": omitted_total,
             },
         }
+        counts: dict[str, int] = {}
+        for m in included:
+            for mid in m.monitor_ids:
+                counts[mid] = counts.get(mid, 0) + 1
+        # Watched BEFORE the enqueue so a block / unmonitor that lands meanwhile can cancel it; the
+        # watcher skips the entry until the enqueue has finished.
+        entry = WatchEntry(
+            "monitor", session_id, comm_id, self._now(), cover=cover,
+            info={"counts": counts, "count": len(included), "omitted": omitted_total, "enqueuing": True},
+        )
+        self.watcher.watch(entry)
         try:
             outcome = await self.port.enqueue(
                 session_id, comm_id=comm_id, summary=summary, content=summary,
@@ -1117,20 +1198,32 @@ class InboundService:
         except Exception:
             logger.exception("Monitor delivery failed")
             outcome = DeliveryOutcome("failed", "exception")
-        counts: dict[str, int] = {}
-        for m in included:
-            for mid in m.monitor_ids:
-                counts[mid] = counts.get(mid, 0) + 1
         if outcome.status == "failed":
+            self.watcher.entries.pop(comm_id, None)
             await self._monitor_failed(
                 list(cover), comm_id, outcome.error or "enqueue_failed", len(included)
             )
             return
         self.coalescer.envelopes.record(session_id)
-        self.watcher.watch(WatchEntry(
-            "monitor", session_id, comm_id, self._now(), cover=cover,
-            info={"counts": counts, "count": len(included), "omitted": omitted_total},
-        ))
+        entry.info.pop("enqueuing", None)
+        # a monitor removed / suspended while we were building and enqueueing: undo, do not deliver
+        stale = {
+            mid for mid in cover
+            if (rec := self.store.get_monitor(mid)) is None or rec["status"] != ACTIVE
+        }
+        if stale:
+            await self._cancel_pending_for(stale)
+
+    def _advance_unqueued_cover(self, cover: dict[str, str]) -> None:
+        """Nothing was delivered but messages were consumed (flood-dropped / tallied): move the
+        durable cursor past them, unless an earlier envelope of the monitor is still unconfirmed
+        (its failure must not skip its content)."""
+        outstanding = {
+            mid for e in self.watcher.entries.values() if e.kind == "monitor" for mid in e.cover
+        }
+        for mid, ts in cover.items():
+            if mid not in outstanding and mid not in self._hold:
+                self.store.advance_cursor(mid, ts)
 
     async def _flood_windows(self, buf: SessionBuffer, monitor_ids: set[str]) -> None:
         for mid in monitor_ids:
@@ -1205,6 +1298,15 @@ class InboundService:
         elif status == STATUS_GONE:
             for mid in entry.cover:
                 self.store.touch_monitor(mid, last_error="delivery_unknown")
+        elif status == "cancelled" and entry.info.get("self_cancel"):
+            # we cancelled it (block / unmonitor): not a failure. The cursor stays, the monitors that
+            # are still active re-collect their content from it.
+            for mid in entry.cover:
+                rec = self.store.get_monitor(mid)
+                if rec is not None:
+                    self._hold.add(mid)
+                    self._high_water[mid] = rec.get("last_seen_ts") or self._ts_str(self._now())
+            self._spawn(self.backfill_monitors(entry.session_id))
         else:  # failed | cancelled
             await self._monitor_failed(
                 list(entry.cover), entry.comm_id, status, int(entry.info.get("count") or 0),
@@ -1276,8 +1378,11 @@ class InboundService:
 
     async def _backfill_monitor(self, adapter, m: dict[str, Any], now: float) -> None:
         mid = m["id"]
-        self._hold.discard(mid)  # this pass re-collects everything after the durable cursor
         durable = m.get("last_seen_ts") or self._ts_str(now)
+        if mid in self._hold:  # a failed / lost / cancelled envelope: re-collect from the durable cursor
+            self._high_water[mid] = durable
+            self._recent_keys.pop(mid, None)
+        self._hold.discard(mid)  # this pass re-collects everything after the durable cursor
         high = self._high_water.get(mid) or durable
         floor = now - const.MONITOR_BACKFILL_MAX_AGE_SECONDS
         older_omitted = _tsf(durable) < floor
@@ -1317,9 +1422,18 @@ class InboundService:
                 event.thread_ts = m["thread_ts"]
             if never_content(event, ctx) or not matches_monitor(event, m):
                 continue
-            self.state.mark_seen(event.channel, event.ts)  # a live twin is now a duplicate
-            self.coalescer.add(event, [m], older_omitted=older_omitted)
+            self.coalescer.add(event, [m], older_omitted=older_omitted)  # per-monitor key dedupe
             older_omitted = False
+
+
+# Suspensions that also cancel envelopes of the monitor that are queued but not yet dispatched.
+_CANCELLING_REASONS = frozenset({
+    const.SUSPEND_CHANNEL_BLOCKED, const.SUSPEND_POLICY_UNSET, const.SUSPEND_SESSION_INACTIVE,
+})
+
+# Ignore reasons of events that DID pass the instruction trust rule (owner, self-DM, no agent marker):
+# these are remembered in the dedupe ring (3a behavior); everything else is not (stage 3b-i, M2).
+_CANDIDATE_IGNORES = frozenset({"no_handle", "unowned_thread", "empty"})
 
 
 def _tsf(ts: str | None) -> float:
