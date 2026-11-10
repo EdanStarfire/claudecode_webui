@@ -613,6 +613,61 @@ digests / unread (3c) and the inbound UI / audit view (3d) are later stages. Cod
 - **Lifecycle**: `InboundManager` (`RelayRuntime.inbound`) starts last in coordinator `initialize()` and stops first in `cleanup()`
   (before sessions terminate, state flushed). Dependencies: `slack-sdk>=3.33,<4` (MIT), `aiohttp>=3.9` (Apache-2.0).
 
+### Relay inbound: monitors (3b-i)
+
+Stage 3b-i lets a session watch Slack threads and channels. Mentions, DMs, the consent prompt and the REST/panel surface
+are later stages (3b-ii, 3d); digests/unread are 3c. All monitored content is **untrusted**, never an instruction.
+Code: `relay/inbound/{matcher,coalescer,flood,content,watcher,monitor_delivery}.py`, `mcp/relay_monitor_tools.py`.
+
+- **Tools** (`mcp__relay_slack__*`, `AdapterSpec.monitor_tools`, audited, not send tools): `monitor_thread(channel, thread_ts, expires_at?)`,
+  `monitor_channel(channel, keywords?[], users?[], expires_at?)` (>= 1 filter; keywords OR, users OR, both groups AND; NFKC + casefold
+  substring), `unmonitor(monitor_id)`, `list_monitors()` (own monitors only). Creation is a **read** of the channel for the policy
+  engine (blocked refused, unlisted -> choose-policy prompt, `dontAsk`/unattended -> `policy_unset(_dont_ask)`), then: self-DM (any spelling)
+  -> `self_dm_not_monitorable`, other DMs -> `dm_not_monitorable_here` (both before any prompt), owner not a member -> `not_a_member`
+  (`conversations.info.is_member`; unknown -> allowed with a note), inbound off / no app token -> `inbound_unavailable`,
+  caps 20 per session / 100 per relay -> `monitor_limit`, no filter -> `filter_required`, bad filters -> `invalid_filter`, an identical
+  monitor returns the existing one (a flood/delivery-failed one is resumed). `expires_at` <= 90 days. Sessions started before the
+  upgrade lack the tools (static tool list): **restart them**.
+- **Store**: records of kind `monitor_thread` / `monitor_channel` in `subscriptions.json` (same file as 3a threads, version 1):
+  `status active|suspended`, `suspended_reason` (`channel_blocked|policy_unset|disposed|session_inactive|flood|delivery_failed`), owner
+  `paused` (a separate flag, never touched by dispose/start), durable `last_seen_ts`, counters. Index by channel (the event handler never scans).
+  Thread monitors expire after 14 days without activity.
+- **Matching** (`matcher.py`, pure): never content = the self-DM in any thread, no sender, replies in an instruction thread, the **echo rule**
+  (own metadata marker `cc_webui_agent_message`, `app_id == own api_app_id`, text agent marker). `api_app_id` is learned from the first live
+  event's `event_callback.api_app_id` and persisted in `inbound_state.json`; **until learned only the metadata and text markers apply** (not
+  confirmed against a recorded real event in this stage). Other bots are delivered flagged `bot: true`. Edits/deletes/other subtypes never
+  reach monitors, so an edit is not redelivered. Backfill of a channel monitor covers top-level messages (`conversations.history`).
+- **Dedupe ring (changed from 3a)**: the ring is marked only for instruction candidates and monitor-matched events; an unmatched event
+  is never remembered, so unrelated traffic cannot evict instruction keys.
+- **Coalescer** (`coalescer.py`): per-session in-memory buffer, 60 s window from the first message, one envelope: <= 50 messages /
+  24 000 characters (each message cut at 2 000), the rest `+N more (by channel IDs)`. Ingress limits: 120 matched messages / 10 min per
+  monitor, 600 / 10 min per relay (dropped messages are counted, audited once per window and covered by the cursor); 3 consecutive flooded
+  windows suspend the monitor (`flood`). A session with a pending monitor envelope or 12 envelopes in the last hour has the flush
+  postponed in 60 s steps up to 10 min. Stopping discards buffers without enqueue.
+- **Envelope text** (`content.py`): outside the fence only our own data (fixed framing, counts, IDs); entries (text, names, labels, permalink) are
+  inside `wrap_untrusted`; `comm.content`/queue label is counts only (`Slack monitor: N messages`).
+- **Comm shape**: `Comm(from_minion_id=SYSTEM_MINION_ID, from_user=False, sender_type=EXTERNAL, sender_id=relay_id, comm_type=INFO, WHEN_IDLE,
+  auto_start=True)`, created only when there is content, addressed to the monitoring session only (never a parent/overseer). Consequences
+  (pinned in `test_relay_monitor_integration.py`): a user PIVOT/HALT does **not** cancel pending monitor content (it still cancels a pending 3a
+  instruction, which is a user comm); SYSTEM is nobody's ancestor so it can never HALT/PIVOT or resume a paused queue; the timeline shows a
+  collapsed CommCard ("Slack monitor", no jump link) and the queue panel `Slack monitor: N messages`. `PendingStore`/`DeliveryGate` are unchanged.
+- **Cursor-on-confirm** (`watcher.py`): the in-memory `high_water` advances at buffering, the durable cursor only when the watcher (5 s poll of
+  the pending ledger) sees the envelope `delivered`. After a failed/cancelled envelope the cursor is frozen for that monitor until a backfill
+  re-collects it; 3 consecutive failures suspend (`delivery_failed`); a vanished ledger item is "unknown" (cursor stays, no failure count).
+  A Backend restart resets `high_water` to the durable cursor and the reconnect backfill (24 h cap, 3 pages x 100, `older_omitted` notice)
+  re-delivers lost content: **at-least-once, a repeat is possible** (messages carry `ts`). The queue gap of #2362 is unchanged.
+- **Policy at delivery**: triggers (`RelayService.change_listeners`: session policy edits, tier edits, attachment/config sync, plus
+  session start and service start) re-evaluate; the **flush re-checks fresh**. Blocked -> suspended `channel_blocked`, no policy ->
+  `policy_unset`, relay detached/session errored/ephemeral -> `session_inactive`; becoming readable again resumes **from now** (no backfill
+  of the gap). Dispose suspends only ACTIVE records (`disposed`), start restores only those, re-checks policy and backfills the disposal period;
+  delete drops monitors, threads, buffers and watches; reparenting changes nothing.
+- **Instruction failure replies**: the same watcher follows 3a instructions: `failed` -> one marked `delivery_failed` reply, `cancelled`
+  (queue cleared) -> one marked `cancelled` reply, in-memory once-guard, the received reaction stays, none after a Backend restart
+  (nothing is watched; #2362). Monitored content never produces a reaction or a Slack post.
+- **Audit**: `monitor_created|removed|suspended|resumed|delivered|delivery_failed|expired|flood|backfill`, instruction outcomes
+  `delivery_failed|cancelled`; new fields `monitor_id, monitor_kind, envelope_id, omitted`. No message text, ever; keyword filters
+  are stored as sha256 (`query_sha256`) + count only. Unmatched-event drops join the 5-minute `inbound_drop_summary` (`monitor_*` reasons).
+
 #### Relay setup (owner walkthrough)
 
 1. Settings -> Library -> Relays -> **Create Slack relay**.
