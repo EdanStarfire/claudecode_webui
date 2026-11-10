@@ -276,6 +276,16 @@ class RelayPolicyGate:
             return f":{str(args.get('name') or '').strip(':')}: on message {args.get('ts')}"
         if tool == "mark_read":
             return f"mark read up to {args.get('ts') or 'latest'}"
+        if tool == "monitor_thread":
+            return f"monitor thread {args.get('thread_ts')}: new replies will be delivered to the session"
+        if tool == "monitor_channel":
+            keywords = args.get("keywords") if isinstance(args.get("keywords"), list) else []
+            users = args.get("users") if isinstance(args.get("users"), list) else []
+            filters = "; ".join(p for p in (
+                f"keywords: {', '.join(map(str, keywords))}"[:300] if keywords else "",
+                f"users: {', '.join(map(str, users))}"[:300] if users else "",
+            ) if p)
+            return f"monitor channel ({filters or 'no filter'}): matching messages will be delivered to the session"
         return ""
 
     async def evaluate(
@@ -322,6 +332,19 @@ class RelayPolicyGate:
             channel_id = await self.resolve_channel(ctx, args.get("channel"))
         except GateError as e:
             return GateResult(DENY, tool, action, e.code, e.message, candidates=e.candidates)
+
+        if tool in ctx.spec.monitor_tools and channel_id.startswith("D"):
+            # Monitors are never created on DMs here (DMs are a later stage); the self-DM is the
+            # instruction channel and is never monitorable, in any thread. Refused before any prompt.
+            self_dm = await self.selfdm.resolve(ctx)
+            code = "self_dm_not_monitorable" if self_dm == channel_id else "dm_not_monitorable_here"
+            msg = (
+                f"Conversation {channel_id} cannot be monitored: "
+                + ("the user's own self-DM is the instruction channel and is never monitored."
+                   if code == "self_dm_not_monitorable"
+                   else "direct messages cannot be monitored with this tool.")
+            )
+            return GateResult(DENY, tool, action, code, msg, channel_id)
 
         policies = await self.service.effective_relay_policies(ctx.session_info, ctx.relay_id)
         eff = policies.get(channel_id)

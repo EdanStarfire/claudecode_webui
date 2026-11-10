@@ -158,7 +158,7 @@ class TestBackfill:
             await env2.service.stop()
 
     async def test_reconnect_backfill_skips_what_is_already_buffered(self, env):
-        rec = await monitor(env)
+        await monitor(env)
         ts = await emit(env, env.t, "deploy live", seq=1)
         env.adapter.histories[CHANNEL] = [history_msg(ts, "deploy live")]
         await env.t.hello()
@@ -167,7 +167,7 @@ class TestBackfill:
         assert len(envelope_entries(env.port.calls[0])) == 1
 
     async def test_live_twin_of_a_backfilled_message_is_a_duplicate(self, env):
-        rec = await monitor(env)
+        await monitor(env)
         ts = env.clock.ts(seq=1)
         env.adapter.histories[CHANNEL] = [history_msg(ts, "deploy it")]
         await env.service.backfill_monitors()
@@ -185,7 +185,7 @@ class TestBackfill:
         assert len(env.port.calls) == 2  # cursor never moved: the same message is re-fetched
 
     async def test_thread_monitor_backfill_uses_the_thread_and_skips_the_root(self, env):
-        rec = await monitor(env, kind=const.KIND_MONITOR_THREAD, thread_ts=ROOT, keywords=())
+        await monitor(env, kind=const.KIND_MONITOR_THREAD, thread_ts=ROOT, keywords=())
         reply = env.clock.ts(seq=1)
         env.adapter.threads[ROOT] = [history_msg(ROOT, "root"), history_msg(reply, "a reply")]
         await env.service.backfill_monitors()
@@ -208,7 +208,7 @@ class TestBackfill:
         assert [e["text"] for e in envelope_entries(env.port.calls[0])] == ["deploy fine"]
 
     async def test_old_cursor_is_capped_at_24h_with_older_omitted(self, env):
-        rec = await monitor(env)
+        await monitor(env)
         env.clock.advance(3 * 24 * 3600)
         env.adapter.histories[CHANNEL] = [history_msg(env.clock.ts(seq=1), "deploy recent")]
         await env.service.backfill_monitors()

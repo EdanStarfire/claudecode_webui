@@ -189,8 +189,9 @@ def build_core_managers(
     relay_broker = RelayPromptBroker(relay_registry, relay_bridge)
     relay_inbound = InboundManager(
         relay_manager=relay_manager, relay_service=relay_service, session_manager=session_manager,
-        audit=relay_audit, relays_root=data_dir / "relays",
+        audit=relay_audit, relays_root=data_dir / "relays", names=relay_gate.names,
     )
+    relay_service.change_listeners.append(relay_inbound.schedule_reevaluate)  # monitors (3b-i)
     relay_manager.change_listeners.append(relay_inbound.schedule_refresh)
     relay_manager.inbound_status_provider = relay_inbound.status_for
     relay_gate.thread_grants = relay_inbound.has_thread_grant
@@ -201,7 +202,9 @@ def build_core_managers(
         audit=relay_audit,
         gate=relay_gate,
         bridge=relay_bridge,
-        mcp_tools=RelayMCPTools(relay_gate, relay_audit, relay_broker),
+        mcp_tools=RelayMCPTools(
+            relay_gate, relay_audit, relay_broker, inbound_lookup=relay_inbound.service_for,
+        ),
         call_registry=relay_registry,
         broker=relay_broker,
     )

@@ -45,7 +45,7 @@ class RelayPermissionBridge:
             return GateResult(ALLOW, result.tool, result.action)
         if result.kind == DENY and short is not None:
             ctx = await self.gate.context(session_id)
-            if ctx is not None and short in ctx.spec.write_tools:
+            if ctx is not None and short in (ctx.spec.write_tools | ctx.spec.monitor_tools):
                 await self.audit.record(
                     ctx.relay_id, session_id=session_id, handle=ctx.handle,
                     session_name=ctx.session_info.name, tool=short, channel_id=result.channel_id,

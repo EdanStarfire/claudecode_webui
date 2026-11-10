@@ -209,7 +209,8 @@ class TestFlood:
     def test_envelope_limiter(self):
         t = [0.0]
         e = SessionEnvelopeLimiter(2, 3600.0, lambda: t[0])
-        e.record("s"); e.record("s")
+        e.record("s")
+        e.record("s")
         assert not e.allowed("s") and e.allowed("other")
         t[0] = 3600.0
         assert e.allowed("s")

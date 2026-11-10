@@ -29,7 +29,6 @@ from backend.tests.relay_monitor_support import (
     fire_window,
     monitor,
     started,
-    wait_for,
 )
 
 
@@ -162,7 +161,7 @@ class TestCoalescing:
 
     async def test_postponed_at_twelve_envelopes_per_hour(self, env):
         await monitor(env)
-        for i in range(const.MAX_ENVELOPES_PER_HOUR):
+        for _ in range(const.MAX_ENVELOPES_PER_HOUR):
             env.service.coalescer.envelopes.record(SESSION)
         await emit(env, env.t, "deploy", seq=1)
         await env.window.fire()
