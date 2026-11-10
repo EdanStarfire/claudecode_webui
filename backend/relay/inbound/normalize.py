@@ -57,6 +57,7 @@ def normalize_event(
         bot_id=event.get("bot_id") if isinstance(event.get("bot_id"), str) else None,
         metadata=metadata if isinstance(metadata, dict) else None,
         subtype=subtype, file_count=len(files) if isinstance(files, list) else 0,
+        api_app_id=payload.get("api_app_id") if isinstance(payload.get("api_app_id"), str) else None,
     )
     event_obj.is_agent = is_agent_message(
         {"app_id": event_obj.app_id, "bot_id": event_obj.bot_id, "metadata": event_obj.metadata}
@@ -64,14 +65,19 @@ def normalize_event(
     return event_obj
 
 
-def event_from_message(relay_id: str, msg: RelayMessage, channel: str) -> RelayEvent | Drop:
-    """A backfilled history/thread message in the same shape as a live one (the self-DM is an IM)."""
+def event_from_message(
+    relay_id: str, msg: RelayMessage, channel: str, channel_type: str | None = "im"
+) -> RelayEvent | Drop:
+    """A backfilled history/thread message in the same shape as a live one (the self-DM is an IM;
+    monitor backfill passes ``channel_type=None``). Subtypes are filtered like live events."""
     if not msg.ts:
         return Drop("malformed")
+    if msg.subtype not in ALLOWED_SUBTYPES:
+        return Drop("subtype")
     event = RelayEvent(
         relay_id=relay_id, channel=channel, ts=msg.ts, user=msg.user, text=msg.text or "",
-        thread_ts=msg.thread_ts, channel_type="im", app_id=msg.app_id, bot_id=msg.bot_id,
-        metadata=msg.metadata,
+        thread_ts=msg.thread_ts, channel_type=channel_type, app_id=msg.app_id, bot_id=msg.bot_id,
+        metadata=msg.metadata, subtype=msg.subtype, file_count=msg.file_count,
     )
     event.is_agent = is_agent_message(msg)
     return event

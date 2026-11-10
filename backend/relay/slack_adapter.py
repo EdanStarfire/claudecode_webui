@@ -78,6 +78,8 @@ def _parse_message(raw: dict, channel: str | None = None) -> RelayMessage:
         bot_id=raw.get("bot_id"),
         metadata=raw.get("metadata"),
         permalink=raw.get("permalink"),
+        subtype=raw.get("subtype") if isinstance(raw.get("subtype"), str) else None,
+        file_count=len(raw["files"]) if isinstance(raw.get("files"), list) else 0,
     )
 
 
@@ -92,6 +94,7 @@ def _parse_conversation(raw: dict) -> ConversationInfo:
         user=raw.get("user"),
         last_read=raw.get("last_read"),
         unread_count=raw.get("unread_count_display", raw.get("unread_count")),
+        is_member=raw.get("is_member") if isinstance(raw.get("is_member"), bool) else None,
     )
 
 
@@ -225,11 +228,13 @@ class SlackAdapter:
         return PostResult(channel=data.get("channel", channel), ts=data.get("ts", ""))
 
     async def read_thread(
-        self, channel: str, thread_ts: str, limit: int = 100, cursor: str | None = None
+        self, channel: str, thread_ts: str, limit: int = 100, cursor: str | None = None,
+        oldest: str | None = None,
     ) -> ThreadPage:
         items, next_cursor = await self._paginate(
             "conversations.replies",
-            {"channel": channel, "ts": thread_ts, "include_all_metadata": "true", "cursor": cursor},
+            {"channel": channel, "ts": thread_ts, "include_all_metadata": "true", "cursor": cursor,
+             "oldest": oldest},
             "messages",
             limit,
         )

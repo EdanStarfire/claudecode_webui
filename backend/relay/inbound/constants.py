@@ -47,3 +47,51 @@ STATUS_CONNECTED = "connected"
 STATUS_BACKOFF = "backoff"
 STATUS_AUTH_FAILED = "auth_failed"
 STATUS_STOPPED = "stopped"
+
+# ---------------------------------------------------------------- monitors (stage 3b-i)
+KIND_MONITOR_THREAD = "monitor_thread"
+KIND_MONITOR_CHANNEL = "monitor_channel"
+MONITOR_KINDS = frozenset({KIND_MONITOR_THREAD, KIND_MONITOR_CHANNEL})  # 3b-ii adds mentions / dms
+
+# Coalescing window and envelope caps
+MONITOR_WINDOW_SECONDS = 60.0
+ENVELOPE_MAX_MESSAGES = 50
+ENVELOPE_MAX_CHARS = 24_000
+MESSAGE_MAX_CHARS = 2_000
+
+# Flood limits (matched messages per rolling window) and per-session envelope rate
+FLOOD_WINDOW_SECONDS = 600.0
+FLOOD_PER_MONITOR = 120
+FLOOD_PER_RELAY = 600
+MAX_ENVELOPES_PER_HOUR = 12
+FLOOD_SUSPEND_WINDOWS = 3  # consecutive flooded windows suspend the monitor
+POSTPONE_STEP_SECONDS = 60.0
+POSTPONE_MAX_SECONDS = 600.0
+
+# Backfill, caps, expiry
+MONITOR_BACKFILL_MAX_AGE_SECONDS = 24 * 3600
+MAX_MONITORS_PER_SESSION = 20
+MAX_MONITORS_PER_RELAY = 100
+MONITOR_THREAD_IDLE_SECONDS = 14 * 24 * 3600
+MONITOR_MAX_EXPIRY_SECONDS = 90 * 24 * 3600
+MAX_KEYWORDS = 10
+MAX_KEYWORD_CHARS = 100
+MAX_FILTER_USERS = 10
+
+# Delivery watcher
+WATCH_POLL_SECONDS = 5.0
+WATCH_MAX_AGE_SECONDS = 24 * 3600
+DELIVERY_FAILURES_TO_SUSPEND = 3
+LABEL_TIMEOUT_SECONDS = 3.0
+MONITOR_COMM_NAMESPACE = uuid.UUID("a3b7c9e2-6d41-4f0b-8a52-2103b0a17b3b")
+
+# Monitor status / suspension reasons
+SUSPEND_CHANNEL_BLOCKED = "channel_blocked"
+SUSPEND_POLICY_UNSET = "policy_unset"
+SUSPEND_DISPOSED = "disposed"
+SUSPEND_SESSION_INACTIVE = "session_inactive"
+SUSPEND_FLOOD = "flood"
+SUSPEND_DELIVERY_FAILED = "delivery_failed"
+# Reasons the policy / eligibility re-check may lift on its own (flood / delivery_failed need the
+# agent to re-create the monitor; disposed is lifted by a session start).
+AUTO_RESUME_REASONS = frozenset({SUSPEND_CHANNEL_BLOCKED, SUSPEND_POLICY_UNSET, SUSPEND_SESSION_INACTIVE})

@@ -30,6 +30,7 @@ class InboundState:
         self._path = relay_dir / STATE_FILE
         self._ring_size = ring_size
         self.started_at: float | None = None
+        self.own_app_id: str | None = None  # our Slack app id, learned from event_callback.api_app_id
         self.was_disabled = False  # the owner switched inbound off since the last enabled run
         self.cursors: dict[str, str] = {}
         self._dedupe: OrderedDict[str, None] = OrderedDict()
@@ -49,6 +50,8 @@ class InboundState:
             return
         self.started_at = data.get("started_at")
         self.was_disabled = bool(data.get("was_disabled"))
+        app_id = data.get("own_app_id")
+        self.own_app_id = app_id if isinstance(app_id, str) and app_id else None
         self.cursors = {str(k): str(v) for k, v in (data.get("cursors") or {}).items()}
         for pair in data.get("dedupe") or []:
             if isinstance(pair, list) and len(pair) == 2:
@@ -93,6 +96,7 @@ class InboundState:
             "version": 1,
             "started_at": self.started_at,
             "was_disabled": self.was_disabled,
+            "own_app_id": self.own_app_id,
             "cursors": dict(self.cursors),
             "dedupe": [k.split(":", 1) for k in self._dedupe],
             "inflight": list(self.inflight.values()),
