@@ -273,7 +273,7 @@ defineExpose({ reload: () => load(), rows })
   line-height: 20px; color: var(--bs-secondary-color); cursor: pointer;
 }
 .filter-chip.on { color: var(--bs-body-color); border-color: var(--bs-secondary-color); }
-.mon-load-error { color: #f87171; font-size: 12px; }
+.mon-load-error { color: var(--tool-error-text); font-size: 12px; }
 .muted { color: var(--bs-secondary-color); font-size: 12px; }
 .foot { margin-top: 8px; }
 .more { align-self: flex-start; margin-top: 6px; }

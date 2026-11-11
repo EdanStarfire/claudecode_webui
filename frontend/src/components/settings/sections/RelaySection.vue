@@ -415,16 +415,16 @@ onMounted(() => {
 .section-na strong { color: var(--bs-emphasis-color); }
 
 .save-error {
-  color: #f87171;
+  color: var(--tool-error-text);
   font-size: 12px;
   padding: 6px 10px;
   margin-bottom: 10px;
   border-radius: 6px;
-  background: rgba(248, 113, 113, 0.08);
-  border: 1px solid rgba(248, 113, 113, 0.25);
+  background: var(--tool-error-bg);
+  border: 1px solid var(--tool-error-border);
 }
 
-.restart-note { font-size: 12px; color: #d29922; margin: 8px 0 0; }
+.restart-note { font-size: 12px; color: var(--perm-amber-suggestion-strong); margin: 8px 0 0; }
 .handle-block { margin-top: 8px; }
 .monitors-block { margin-top: 14px; padding-top: 12px; border-top: 1px solid var(--bs-border-color); }
 .monitors-head { font-size: 13px; font-weight: 600; margin-bottom: 4px; }
@@ -438,9 +438,9 @@ onMounted(() => {
   font-size: 11px;
   font-weight: 600;
   cursor: pointer;
-  background: rgba(210, 153, 34, 0.15);
-  border: 1px solid rgba(210, 153, 34, 0.5);
-  color: #d29922;
+  background: var(--perm-amber-suggestion-bg);
+  border: 1px solid var(--perm-amber-suggestion-border);
+  color: var(--perm-amber-suggestion-strong);
 }
 
 .section-body {

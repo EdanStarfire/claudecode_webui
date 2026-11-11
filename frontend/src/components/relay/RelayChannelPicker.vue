@@ -271,7 +271,7 @@ onBeforeUnmount(() => {
 .row-status.is-set { color: var(--bs-body-color); font-weight: 600; }
 .picker-more { width: 100%; padding: 6px; background: none; border: 0; border-top: 1px solid var(--bs-border-color); font-size: 12px; color: var(--bs-link-color); }
 .picker-empty, .picker-error { padding: 8px 10px; font-size: 12px; color: var(--bs-secondary-color); }
-.picker-error { color: #f87171; }
+.picker-error { color: var(--tool-error-text); }
 @media (max-width: 600px) {
   .row-id { display: none; }
   .picker-row { padding: 4px 6px; font-size: 12px; }

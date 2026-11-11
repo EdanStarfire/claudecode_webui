@@ -22,7 +22,7 @@
       <span v-if="!compact && hasSchedules" class="chip-schedule" title="Has active schedules">
         <svg width="9" height="9" viewBox="0 0 16 16" fill="currentColor"><path d="M8 0a8 8 0 1 0 0 16A8 8 0 0 0 8 0zm0 14.5A6.5 6.5 0 1 1 8 1.5a6.5 6.5 0 0 1 0 13zM8.5 4H7v5l4.25 2.55.75-1.23L8.5 8.25V4z"/></svg>
       </span>
-      <RelaySessionChip v-if="!compact" :summary="session.relay_summary" />
+      <RelaySessionChip v-if="!compact" :summary="session.relay_summary" :slug="session.slug" />
       <span v-if="!compact && effectiveDockerEnabled" class="chip-docker" title="Running with Docker isolation">
         <svg width="9" height="9" viewBox="0 0 16 16" fill="currentColor">
           <rect x="1" y="4" width="5" height="4" rx="0.5" stroke="currentColor" stroke-width="0.8" fill="none"/>

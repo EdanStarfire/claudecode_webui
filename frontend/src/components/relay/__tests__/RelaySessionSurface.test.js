@@ -102,4 +102,31 @@ describe('RelaySessionChip', () => {
     expect(lit.attributes('title')).toContain('needs attention (monitors)')
     expect(mount(RelaySessionChip, { props: { summary: SUMMARY } }).find('[data-testid="relay-chip-dot"]').exists()).toBe(false)
   })
+
+  it('shows only the icon when the handle equals the session slug, keeping the full handle in title and aria-label', () => {
+    const w = mount(RelaySessionChip, { props: { summary: { ...SUMMARY, handle: 'release-watcher' }, slug: 'release-watcher' } })
+    expect(w.find('.relay-chip-handle').exists()).toBe(false)
+    expect(w.classes()).toContain('icon-only')
+    expect(w.attributes('title')).toContain('!release-watcher')
+    expect(w.attributes('aria-label')).toContain('!release-watcher')
+  })
+
+  it('shows icon + !handle when the handle differs from the slug (or the slug is unknown)', () => {
+    const differs = mount(RelaySessionChip, { props: { summary: { ...SUMMARY, handle: 'rw' }, slug: 'release-watcher' } })
+    expect(differs.find('.relay-chip-handle').text()).toBe('!rw')
+    expect(differs.classes()).not.toContain('icon-only')
+    expect(mount(RelaySessionChip, { props: { summary: { ...SUMMARY, handle: 'rw' } } }).find('.relay-chip-handle').exists()).toBe(true)
+    // exact comparison: a case / suffix difference is a different handle
+    expect(mount(RelaySessionChip, { props: { summary: { ...SUMMARY, handle: 'rw-2' }, slug: 'rw' } }).find('.relay-chip-handle').exists()).toBe(true)
+  })
+
+  it('renders nothing without a summary and no handle text without a handle; the attention dot survives icon-only', () => {
+    expect(mount(RelaySessionChip, { props: { summary: null, slug: 'x' } }).find('[data-testid="relay-session-chip"]').exists()).toBe(false)
+    const noHandle = mount(RelaySessionChip, { props: { summary: { ...SUMMARY, handle: null }, slug: 'x' } })
+    expect(noHandle.find('.relay-chip-handle').exists()).toBe(false)
+    expect(noHandle.classes()).not.toContain('icon-only') // nothing was folded away: plain icon chip
+    const lit = mount(RelaySessionChip, { props: { summary: { ...SUMMARY, handle: 'x', attention: true }, slug: 'x' } })
+    expect(lit.find('[data-testid="relay-chip-dot"]').exists()).toBe(true)
+    expect(lit.attributes('title')).toContain('needs attention')
+  })
 })

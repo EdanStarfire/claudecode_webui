@@ -121,7 +121,7 @@ defineExpose({ reload: () => load(true) })
 .feed-time { flex: 0 0 auto; color: var(--bs-secondary-color); font-variant-numeric: tabular-nums; }
 .feed-who { flex: 0 1 140px; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--bs-secondary-color); }
 .feed-text { flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.feed-error { color: #f87171; font-size: 12px; }
+.feed-error { color: var(--tool-error-text); font-size: 12px; }
 .muted { color: var(--bs-secondary-color); font-size: 12px; }
 .older { align-self: flex-start; margin-top: 8px; }
 @media (max-width: 600px) {

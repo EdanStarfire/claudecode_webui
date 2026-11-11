@@ -61,6 +61,6 @@ function restart() {
 <style scoped>
 .info-line, .restart-line { display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 12px; font-size: 14px; }
 .mon-summary { display: inline-flex; align-items: center; gap: 4px; }
-.attn-dot { width: 6px; height: 6px; border-radius: 50%; background: #d29922; display: inline-block; }
-.restart-line { margin-top: 4px; font-size: 12px; color: #d29922; }
+.attn-dot { width: 6px; height: 6px; border-radius: 50%; background: var(--bs-warning); display: inline-block; }
+.restart-line { margin-top: 4px; font-size: 12px; color: var(--perm-amber-suggestion-strong); }
 </style>

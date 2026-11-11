@@ -122,6 +122,6 @@ onMounted(reload)
 .scope-group ul { padding-left: 18px; margin: 4px 0; }
 .scope-reason { color: var(--bs-secondary-color); font-size: 12px; }
 .scope-note { color: var(--bs-secondary-color); font-size: 12px; margin-top: 10px; }
-.guide-error { color: #f87171; font-size: 12px; }
+.guide-error { color: var(--tool-error-text); font-size: 12px; }
 .guide-loading { color: var(--bs-secondary-color); font-size: 12px; padding: 8px 0; }
 </style>

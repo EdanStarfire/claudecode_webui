@@ -61,7 +61,7 @@
     </div>
 
     <!-- Relay (issue #2103): attached relay handle -->
-    <RelaySessionChip v-if="!isGhost && session.relay_summary" class="ac-relay-chip" :summary="session.relay_summary" />
+    <RelaySessionChip v-if="!isGhost && session.relay_summary" class="ac-relay-chip" :summary="session.relay_summary" :slug="session.slug" />
 
     <!-- Proxy badge -->
     <div

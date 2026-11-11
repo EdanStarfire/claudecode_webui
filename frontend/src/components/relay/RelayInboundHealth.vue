@@ -69,9 +69,9 @@ const windowTitle = computed(() => {
 .ellipsis { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .soft { color: var(--bs-secondary-color); }
 .chip { font-size: 11px; padding: 1px 8px; border-radius: 10px; border: 1px solid var(--bs-border-color); }
-.chip--ok { color: #3fb950; border-color: #3fb95066; }
-.chip--missing { color: #d29922; border-color: #d2992266; }
-.chip--bad { color: #f87171; border-color: #f8717166; }
+.chip--ok { color: var(--tool-success-text); border-color: var(--tool-success-border); }
+.chip--missing { color: var(--perm-amber-suggestion-strong); border-color: var(--perm-amber-suggestion-border); }
+.chip--bad { color: var(--tool-error-text); border-color: var(--tool-error-border); }
 .chip--muted { color: var(--bs-secondary-color); }
 .tags { display: flex; flex-wrap: wrap; gap: 4px 10px; margin-top: 2px; }
 .attn { display: inline-flex; gap: 4px; align-items: baseline; }

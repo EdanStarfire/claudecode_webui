@@ -260,14 +260,14 @@ defineExpose({ reload: loadLive })
 .editor-head { display: flex; align-items: baseline; gap: 10px; }
 .editor-title { font-weight: 600; }
 .editor-note, .editor-muted { color: var(--bs-secondary-color); font-size: 12px; }
-.editor-error { color: #f87171; font-size: 12px; }
+.editor-error { color: var(--tool-error-text); font-size: 12px; }
 .policy-rows { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 4px; }
 .add-row { position: relative; }
 .policy-row, .add-row { display: flex; align-items: center; gap: 6px; flex-wrap: nowrap; min-width: 0; }
 .row-label { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .reset-slot { flex: none; width: 14px; }
-.field-reset-btn { flex: none; width: 14px; background: none; border: none; padding: 0; font-size: 0.85rem; color: #6c757d; cursor: pointer; line-height: 1; }
-.field-reset-btn:hover { color: #dc3545; }
+.field-reset-btn { flex: none; width: 14px; background: none; border: none; padding: 0; font-size: 0.85rem; color: var(--bs-secondary-color); cursor: pointer; line-height: 1; }
+.field-reset-btn:hover { color: var(--bs-danger); }
 .explain { font-size: 12px; color: var(--bs-secondary-color); }
 .explain summary { cursor: pointer; }
 .explain ul { margin: 6px 0 4px; padding-left: 18px; }
