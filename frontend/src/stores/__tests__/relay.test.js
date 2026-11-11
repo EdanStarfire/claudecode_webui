@@ -130,7 +130,9 @@ describe('relay store: policy editor / picker / audit helpers', () => {
     apiMock.get.mockResolvedValue({ records: [{ ts: 't' }] })
     expect(await store.loadAudit('r1', { sessionId: 's1', channel: 'c', limit: 100, before: 't0' })).toEqual([{ ts: 't' }])
     expect(apiMock.get).toHaveBeenCalledWith('/api/relays/r1/audit',
-      { params: { session_id: 's1', channel: 'c', limit: 100, before: 't0' } })
+      { params: { session_id: 's1', channel: 'c', limit: 100, before: 't0', events: null, outcome: null, since: null } })
+    await store.loadAudit('r1', { events: 'inbound_*', outcome: 'refused', since: 's' })
+    expect(apiMock.get.mock.calls.at(-1)[1].params).toMatchObject({ events: 'inbound_*', outcome: 'refused', since: 's' })
   })
 
   it('getPolicyModel is cached', async () => {

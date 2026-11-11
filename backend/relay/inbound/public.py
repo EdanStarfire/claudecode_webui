@@ -1,6 +1,7 @@
 """Public (owner-facing) shape of a monitor record for the REST surface (issue #2103 3b-ii; the
 monitors panel is 3d). Labels are plain text resolved through ``NameResolver`` for the OWNER; never
-message content, never the persisted delivered-key list."""
+message content, never the persisted delivered-key list. ``last_seen_ts`` is where the monitor has
+caught up to (a Slack ts); ``failures`` / ``flood_windows`` are plain counters."""
 
 from __future__ import annotations
 
@@ -35,4 +36,6 @@ def public_monitor(
         },
         "consent": record.get("consent"), "last_delivered_at": record.get("last_delivered_at"),
         "last_error": record.get("last_error"), "counters": dict(record.get("counters") or {}),
+        "last_seen_ts": record.get("last_seen_ts"), "last_activity_at": record.get("last_activity_at"),
+        "failures": int(record.get("failures") or 0), "flood_windows": int(record.get("flood_windows") or 0),
     }

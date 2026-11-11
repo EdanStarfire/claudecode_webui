@@ -8,16 +8,20 @@ cleanup BEFORE sessions are terminated. Credential / relay changes restart the r
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
+import time
 from functools import partial
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 from . import constants as const
+from .health import collect_health
 from .monitor_delivery import CoordinatorPort
 from .service import InboundService, InstructionSink, TransportFactory
 from .sink import enqueue_external_comm
 from .slack_socket import SlackSocketTransport
+from .store import STORE_FILE
 
 if TYPE_CHECKING:
     from backend.relay.audit import RelayAuditLog
@@ -150,6 +154,34 @@ class InboundManager:
         if service is None:
             return {"status": const.STATUS_STOPPED, "detail": None, "connected_at": None, "inflight": 0}
         return service.status_dict()
+
+    async def health_for(self, relay_id: str) -> dict[str, Any]:
+        """Health payload. Answers in every state: with no running service the monitors come from a
+        read-only load of the store and the status from ``status_for`` (no Slack calls anywhere)."""
+        record = self._manager.relays.get(relay_id)
+        enabled = bool(record and record.inbound_enabled)
+        service = self.services.get(relay_id)
+        if service is not None:
+            return await service.health()
+        return await collect_health(
+            self._audit, relay_id, enabled=enabled, status=self.status_for(relay_id), live_since=None,
+            started_at=time.time(), monitors=await asyncio.to_thread(self._read_monitors, relay_id),
+            last_backfill=None, now=time.time(),
+        )
+
+    def _read_monitors(self, relay_id: str) -> list[dict[str, Any]]:
+        """Monitor records straight from ``subscriptions.json``: a plain read that never moves a
+        corrupt file aside (that is the running service's job), unlike ``JsonSubscriptionStore.load``."""
+        try:
+            data = json.loads((self._root / relay_id / STORE_FILE).read_text())
+        except (OSError, ValueError):
+            return []
+        if not isinstance(data, dict) or data.get("version") != 1:
+            return []
+        return [
+            r for r in data.get("subscriptions") or []
+            if isinstance(r, dict) and r.get("id") and r.get("kind") in const.MONITOR_KINDS
+        ]
 
     def has_thread_grant(
         self, session_id: str, relay_id: str, channel: str, thread_ts: str

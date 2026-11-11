@@ -237,3 +237,26 @@ describe('RelayAuditView', () => {
     expect(second.wrapper.find('[data-testid="audit-empty"]').exists()).toBe(true)
   })
 })
+
+describe('RelayAuditView event filter (3d-i)', () => {
+  it('reads ?events= into the server query, shows it as a tag and clears it', async () => {
+    const { wrapper } = await mountView('?events=monitor_flood,monitor_suspended')
+    await new Promise(r => setTimeout(r, 300)) // the route lands after mount in tests: the filter watcher reloads
+    await flushPromises()
+    expect(apiMock.get.mock.calls.at(-1)[1].params.events).toBe('monitor_flood,monitor_suspended')
+    expect(wrapper.find('[data-testid="audit-events-filter"]').text()).toContain('monitor_flood')
+    apiMock.get.mockClear()
+    await wrapper.find('[data-testid="audit-events-clear"]').trigger('click')
+    await new Promise(r => setTimeout(r, 300))
+    await flushPromises()
+    expect(apiMock.get.mock.calls.at(-1)[1].params.events).toBeNull()
+    expect(wrapper.find('[data-testid="audit-events-filter"]').exists()).toBe(false)
+  })
+
+  it('humanizes monitor rows with the shared labels', async () => {
+    apiMock.get.mockResolvedValue({ records: [REC({ event: 'monitor_delivered', tool: undefined, count: 2, omitted: 1, monitor_kind: 'monitor_channel' })] })
+    const { wrapper } = await mountView()
+    expect(wrapper.find('[data-testid="audit-action"]').text()).toBe('Monitor delivered')
+    expect(wrapper.find('[data-testid="audit-detail"]').text()).toBe('channel monitor · 2 messages · +1 omitted')
+  })
+})

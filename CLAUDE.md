@@ -730,6 +730,29 @@ public,search_limiter}.py`, `mcp/relay_monitor_tools.py::handle_scope_monitor`.
   monitors by cursor-on-confirm). Sessions started before the upgrade lack the two tools (static tool list): restart them. `api_app_id`
   placement on a real event is confirmed only by the live validation recorded in the PR.
 
+### Relay inbound: Inbound tab (3d-i)
+
+Library -> Relays (`/settings/relays`) has tabs `Setup | Inbound | Audit` (`?tab=`; a legacy link with only `session` / `channel` /
+`events` opens Audit). Panels stay mounted (`v-show`), so the credentials form and its dirty guard survive a switch. The Inbound tab
+shows **Health** (connection, monitors, last 24 h, attention tags), a relay-wide **Monitors** table (pause / resume / delete are
+immediate, "Applies immediately", optimistic with rollback; resume never lifts a system suspension) and **Recent activity** (last 50
+inbound / monitor audit rows). The per-session surface is 3d-ii. Code: `relay/inbound/health.py`, `components/relay/RelayInbound*.vue`.
+
+- **Health** (`GET /api/relays/{id}/inbound/health`): connection facts + monitor counts + audit-derived 24 h counters + `attention[]`.
+  Never a Slack call, never message text. The 24 h counters come from the AUDIT (`RelayAuditLog.scan_since`: newest first, early exit at
+  the window start, <= 5000 rows read -> `truncated` means "at least", cached 30 s per relay with single flight, JSON parsed OUTSIDE the
+  audit lock so writes are never blocked), so they survive a restart; only live-only facts stay in memory (connection state, in-flight,
+  `last_backfill` detail, labelled "since restart"). `status_since` is seeded from the audit after a restart. `GET .../audit` gained
+  `events` (exact names, trailing `*` prefix), `since` and `outcome`.
+- **Attention rules** (constants in `health.py`, one unit test per rule): attention level (amber dot on the Inbound tab) = `auth_failed`,
+  `transport_unavailable`, `reconnecting_long` (> 2 min), `inbound_off_with_monitors`, `monitors_flood`, `monitors_delivery_failed`,
+  `monitors_policy_unset`, `monitor_error`, `backfill_gap_24h`, `backfill_cap_24h`, `instruction_delivery_failed_24h`; info level (plain
+  tag, no dot, owner-caused or self-healing) = `monitors_channel_blocked`, `monitors_disposed`, `monitors_session_inactive`,
+  `monitors_paused`, `monitors_expiring`. A monitor already suspended for `delivery_failed` is not also reported as `monitor_error`.
+- **Public monitor rows** gained `last_seen_ts` ("caught up to"), `last_activity_at`, `failures`, `flood_windows`.
+- Everything Slack-controlled (labels, keywords, names) is rendered with text interpolation only; polling (health + monitors, 10 s) runs
+  only while the Inbound tab is visible and the document is not hidden; the activity feed loads on show / Refresh and never polls.
+
 #### Relay setup (owner walkthrough)
 
 1. Settings -> Library -> Relays -> **Create Slack relay**.

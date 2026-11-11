@@ -36,6 +36,7 @@ from . import public as monitor_public
 from .backfill import BackfillRun, backfill_dms, backfill_mentions
 from .coalescer import BufferedMessage, Coalescer, SessionBuffer
 from .dispatch import format_instruction, instruction_summary
+from .health import collect_health
 from .matcher import MatchContext, matches_monitor, never_content
 from .matcher import match as match_monitors
 from .normalize import Drop, event_from_message, normalize_event
@@ -152,6 +153,9 @@ class InboundService:
         self.status = const.STATUS_STOPPED
         self.detail: str | None = None
         self.connected_at: float | None = None
+        self.started_at = now()
+        self.status_changed_at: float | None = None  # last status change in THIS process (health)
+        self.last_backfill: dict[str, Any] | None = None  # live only: lost on restart (health)
         # --- monitors (stage 3b-i)
         self.port = port or _NullPort()
         self._names = names
@@ -246,6 +250,11 @@ class InboundService:
 
     def _set_status(self, status: str, detail: str | None, *, audit: bool = True) -> None:
         changed = status != self.status or detail != self.detail
+        # connecting <-> backoff is one continuous "reconnecting" spell (the supervisor flips between
+        # them on every attempt): health measures how long it has lasted, not the last flip
+        spell = {const.STATUS_CONNECTING, const.STATUS_BACKOFF}
+        if status != self.status and not (status in spell and self.status in spell):
+            self.status_changed_at = self._now()
         self.status, self.detail = status, detail
         if status == const.STATUS_CONNECTED:
             if self.connected_at is None:
@@ -272,6 +281,14 @@ class InboundService:
             "status": self.status, "detail": self.detail, "connected_at": self.connected_at,
             "inflight": len(self.state.inflight),
         }
+
+    async def health(self) -> dict[str, Any]:
+        """Owner-facing health (``health.py``): live facts + monitors + the cached 24 h audit aggregate."""
+        return await collect_health(
+            self._audit, self.relay_id, enabled=bool(self.record and self.record.inbound_enabled),
+            status=self.status_dict(), live_since=self.status_changed_at, started_at=self.started_at,
+            monitors=self.store.monitors(), last_backfill=self.last_backfill, now=self._now(),
+        )
 
     async def _eligibility(self) -> str | None:
         """None when the service may connect, else a sanitised reason (status ``disabled``)."""
@@ -1557,6 +1574,11 @@ class InboundService:
     ) -> None:
         for reason, n in run.counts.items():
             self._drops[f"monitor_{reason}"] += n
+        if not rerun:
+            self.last_backfill = {
+                "at": run.now, "gap": run.gap, "gap_from": run.gap_from,
+                "truncated": bool(run.counts.get("truncated")), "counts": dict(run.counts),
+            }
         if not run.counts and not run.gap:
             return
         if run.gap:
