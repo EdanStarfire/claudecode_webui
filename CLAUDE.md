@@ -521,7 +521,7 @@ secret is deleted, `has_*_token` turns false and `*_secret_missing` true (tools 
 
 - **Policy editor** at every tier (`RelayPolicyEditor.vue`): live at session tier through the relay-qualified policy REST (no restart), own-tier-only nested emit into the whole-config form at profile/template/schedule tier. Inherited profile/template entries are shown with a tier marker and overridden per target; the UI never sends inherited keys (template/profile policies are inherited live, not copied; `_compute_initial_session_overrides` would otherwise freeze them). Rendered from `policy_model` (incl. adapter-owned `value_help`).
 - **Picker route** `GET /api/relays/{id}/conversations` (`backend/routers/relay.py`): wraps `RelayDirectory.search` through a session-less `RelayPolicyGate.relay_context()` (`DirectoryContext` protocol) with **no policies applied** (blocked and unlisted entries both appear; the agent's `find_channels` still hides blocked); `?ids=` returns `{labels}` through `NameResolver.channel_label`. Slack is called only on snapshot refresh, never per keystroke. There is no route to open a DM: a person without a known DM is shown disabled, the first agent message opens it and prompts for a policy.
-- **`SessionInfo.relay_summary`** (runtime-only, never persisted, like `restart_required`): `{relay_id, adapter_type, handle, policy_count}` or null, computed in memory by `RelayService.refresh_summary` (no Slack calls) after policy/handle edits, session create/config write/start, template/profile saves (iterating dependent sessions), relay delete and at startup; broadcast only on change.
+- **`SessionInfo.relay_summary`** (runtime-only, never persisted, like `restart_required`): `{relay_id, adapter_type, handle, policy_count, monitors: {active, paused, suspended}, attention}` or null (`monitors` / `attention`: 3d-ii, below), computed in memory by `RelayService.refresh_summary` (no Slack calls) after policy/handle edits, session create/config write/start, template/profile saves (iterating dependent sessions), relay delete and at startup; broadcast only on change.
 - **Audit viewer** on Library -> Relays reads `GET /api/relays/{id}/audit`; deep link `/settings/relays?session=<id>`.
 
 ### Relay inbound: Socket Mode self-DM instructions (inbound stage 3a)
@@ -752,6 +752,34 @@ inbound / monitor audit rows). The per-session surface is 3d-ii. Code: `relay/in
 - **Public monitor rows** gained `last_seen_ts` ("caught up to"), `last_activity_at`, `failures`, `flood_windows`.
 - Everything Slack-controlled (labels, keywords, names) is rendered with text interpolation only; polling (health + monitors, 10 s) runs
   only while the Inbound tab is visible and the document is not hidden; the activity feed loads on show / Refresh and never polls.
+
+### Relay inbound: session surface (3d-ii)
+
+Stage 3d-ii puts the monitors on the session. Code: `relay/inbound/health.py` (shared rules), `relay/service.py`, `relay/inbound/{service,manager,store}.py`;
+frontend in `frontend/CLAUDE.md`.
+
+- **`relay_summary` gained `monitors: {active, paused, suspended}` and `attention: bool`**, in memory (no Slack call, no audit scan).
+  `RelayService.monitor_summary` is an injected sync callable (`InboundManager.session_monitor_summary`, wired in `coordinator_builder`;
+  default zeros) so `relay/service.py` imports nothing from `relay.inbound`. `attention` comes from `health.attention_for_session`, which
+  uses the SAME primitives as `build_health` (`connection_codes`, `monitor_needs_attention` / `SUSPENSION_RULES` severities,
+  `monitor_is_erroring`), so the session chip and the Inbound tab cannot disagree (a parity test runs every connection x monitor-state
+  combination through both). A session is lit only if it HAS monitors and one of its monitors is suspended for `flood` / `delivery_failed` /
+  `policy_unset`, or is active with `failures > 0` and a `last_error`, or the connection is attention-level (`auth_failed`,
+  `transport_unavailable`, reconnecting > 2 min, inbound off / missing token while it has active or paused monitors). Instruction-only
+  sessions, owner-paused monitors and info-level suspensions (`channel_blocked`, `disposed`, `session_inactive`) stay quiet. The 24 h audit
+  items (`backfill_gap_24h`, ...) are audit-derived and Library-only. Residual: after a restart "reconnecting too long" is measured from
+  the service start, not from the audit-seeded time the Library health uses.
+- **Refresh triggers** (each calls `RelayService.refresh_summary`, which broadcasts only when the summary changed): every monitor mutation
+  through `JsonSubscriptionStore.on_monitors_changed` (create / resume-by-agent, pause / resume, remove, suspend / policy resume, session
+  dispose / start / delete, expiry, and `touch_monitor` writes of `failures` / `last_error`; plain cursor / counter writes do not),
+  an inbound status change (only the sessions that hold monitors, at most the 100-per-relay cap), a one-shot timer when a reconnecting
+  spell starts (`attention_sleep`, fires at the 2 min threshold), service start (the startup summaries were computed before the store
+  loaded). Fake relay services in tests need `refresh_summary`.
+- **`envelope_id`** (the comm id) is in `metadata.relay_inbound` of monitor envelopes AND instructions, and in the instruction audit rows
+  (monitor audit rows already had it). No UI link yet.
+- **Test-only seeding** (`backend/tests/relay_inbound_demo.py`) also appends genuine `relay_inbound` user messages (instructions + a monitor
+  envelope, produced by a real `InboundService` through the real `DeliveryGate`, stored with `MessageRecord.from_user_input`) to the seeded
+  sessions' `messages.jsonl`.
 
 #### Relay setup (owner walkthrough)
 

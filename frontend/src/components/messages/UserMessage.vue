@@ -19,11 +19,39 @@
       <div class="msg-meta">
         <span class="msg-role">user</span>
         <span class="msg-time">{{ formattedTimestamp }}</span>
+        <RelayTag v-if="instruction" title="Sent from your Slack self-DM" data-testid="relay-instruction-tag">Slack</RelayTag>
         <CopyLinkButton v-if="messageId" :message-id="messageId" />
       </div>
 
       <!-- Content (attachment section stripped from rendered markdown) -->
-      <div class="msg-content-row">
+      <div v-if="instruction" class="msg-content-row">
+        <div class="msg-text relay-instruction-text" data-testid="relay-instruction-text">{{ instruction.text }}</div>
+        <button
+          class="copy-markdown-btn"
+          @click.stop="copyMarkdown"
+          :title="copyFeedback ? 'Copied!' : 'Copy markdown'"
+          aria-label="Copy raw markdown"
+        >
+          <svg v-if="copyFeedback" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <polyline points="20 6 9 17 4 12"></polyline>
+          </svg>
+          <svg v-else width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <rect x="9" y="9" width="13" height="13" rx="2" ry="2"></rect>
+            <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path>
+          </svg>
+        </button>
+      </div>
+      <details
+        v-if="instruction"
+        class="relay-fold"
+        :open="foldOpen"
+        data-testid="relay-instruction-fold"
+        @toggle="onFoldToggle"
+      >
+        <summary>What the agent received</summary>
+        <pre class="relay-fold-body" data-testid="relay-instruction-received">{{ message.content }}</pre>
+      </details>
+      <div v-else class="msg-content-row">
         <MarkdownView class="msg-text" ref="contentRef" :content="cleanContent" :self-agent-id="commSenderId" />
         <button
           class="copy-markdown-btn"
@@ -96,6 +124,8 @@ import CommCard from '@/components/common/CommCard.vue'
 import MarkdownView from '@/components/common/MarkdownView.vue'
 import HookPillStrip from './HookPillStrip.vue'
 import CopyLinkButton from './CopyLinkButton.vue'
+import RelayTag from '@/components/relay/RelayTag.vue'
+import { parseInstruction } from '@/utils/relayInstruction'
 
 const props = defineProps({
   message: {
@@ -129,6 +159,18 @@ const commContent = computed(() => {
   if (!comm) return ''
   return 'content' in comm ? comm.content : props.message.content
 })
+
+// Slack instruction (issue #2103 3d-ii): the owner's own text plus a collapsed fold with what the agent
+// received. Only for messages the backend tagged `relay_inbound.kind === "instruction"` whose content parses
+// strictly; anything else keeps the unchanged bubble. Display only: `message.content` is untouched.
+const instruction = computed(() => (
+  props.message.metadata?.relay_inbound?.kind === 'instruction' ? parseInstruction(props.message.content) : null
+))
+const foldKey = computed(() => `relay-fold:${commScopeKey.value}`)
+const foldOpen = computed(() => messageStore.isCommExpanded(foldKey.value))
+function onFoldToggle(e) { // survives a virtualized-list remount: the state lives in the message store
+  if (e.target.open !== foldOpen.value) messageStore.toggleCommExpanded(foldKey.value)
+}
 
 // Slack monitor envelope (issue #2103 3b-i): its fenced JSON entries are not valid markdown (the
 // renderer swallows them), so the expanded card shows the delivered text verbatim in a code block.
@@ -236,6 +278,7 @@ function parseAttachmentsFromContent(content) {
  * Tier 2: regex parse of content block (fallback for old messages)
  */
 const attachmentItems = computed(() => {
+  if (instruction.value) return [] // the content is the delivered wrapper: its text is not an attachment list
   const meta = props.message?.metadata?.attachments
   if (meta && meta.length > 0) {
     return meta.map(a => ({
@@ -345,6 +388,14 @@ function truncate(text, maxLength) {
   color: var(--bs-body-color);
   white-space: pre-wrap;
   word-wrap: break-word;
+}
+
+.relay-instruction-text { white-space: pre-wrap; overflow-wrap: anywhere; }
+.relay-fold { margin-top: 4px; font-size: 12px; color: var(--bs-secondary-color); }
+.relay-fold summary { cursor: pointer; width: fit-content; }
+.relay-fold-body {
+  margin: 4px 0 0; padding: 6px 8px; max-height: 320px; overflow: auto; white-space: pre-wrap;
+  overflow-wrap: anywhere; font-size: 11px; background: var(--bs-tertiary-bg); border-radius: 4px; color: var(--bs-body-color);
 }
 
 /* Markdown styling */

@@ -91,5 +91,5 @@ defineExpose({ reload: loadHealth })
 .inbound { display: flex; flex-direction: column; gap: 16px; }
 h4 { font-size: 12px; font-weight: 600; color: var(--bs-secondary-color); margin: 0 0 6px; text-transform: none; }
 .muted { color: var(--bs-secondary-color); font-size: 12px; }
-.err { color: #f87171; font-size: 12px; }
+.err { color: var(--tool-error-text); font-size: 12px; }
 </style>

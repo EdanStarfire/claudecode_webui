@@ -192,7 +192,7 @@ defineExpose({ reload: () => load(true) })
 .audit { display: flex; flex-direction: column; gap: 10px; }
 .audit-filters { display: flex; gap: 8px; flex-wrap: wrap; }
 .audit-filters > * { flex: 1; min-width: 140px; max-width: 260px; }
-.audit-error { color: #f87171; font-size: 12px; }
+.audit-error { color: var(--tool-error-text); font-size: 12px; }
 .audit-empty { color: var(--bs-secondary-color); font-size: 13px; }
 .audit-table { width: 100%; border-collapse: collapse; font-size: 12px; }
 .audit-table th { text-align: left; color: var(--bs-secondary-color); font-weight: 500; padding: 4px 8px; border-bottom: 1px solid var(--bs-border-color); }
@@ -203,8 +203,8 @@ defineExpose({ reload: () => load(true) })
   color: var(--bs-tertiary-color, #6b7280); border: 1px solid var(--bs-border-color, rgba(0,0,0,0.12));
   vertical-align: baseline; white-space: nowrap; user-select: none;
 }
-.outcome-denied .outcome, .outcome-refused .outcome, .outcome-late .outcome, .outcome-rate_limited .outcome, .outcome-removed .outcome, .outcome-dropped .outcome, .outcome-truncated .outcome, .outcome-cancelled .outcome { color: #d29922; }
-.outcome-error .outcome, .outcome-delivery_failed .outcome { color: #f87171; }
+.outcome-denied .outcome, .outcome-refused .outcome, .outcome-late .outcome, .outcome-rate_limited .outcome, .outcome-removed .outcome, .outcome-dropped .outcome, .outcome-truncated .outcome, .outcome-cancelled .outcome { color: var(--perm-amber-suggestion-strong); }
+.outcome-error .outcome, .outcome-delivery_failed .outcome { color: var(--tool-error-text); }
 .older { align-self: flex-start; }
 .audit-events { display: flex; align-items: center; gap: 4px; max-width: 100%; }
 .audit-events .audit-tag { margin-left: 0; overflow: hidden; text-overflow: ellipsis; max-width: 80%; }

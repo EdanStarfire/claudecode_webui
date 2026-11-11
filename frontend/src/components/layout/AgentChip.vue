@@ -23,7 +23,16 @@
 
     <!-- Info stack — width driven by name; description truncates within it -->
     <div class="ac-info">
-      <div class="ac-name">{{ displayName }}</div>
+      <div class="ac-name-row">
+        <div class="ac-name">{{ displayName }}</div>
+        <!-- a relay chip WITH text lives on the name line (own space, never over the role text); phones keep the corner icon -->
+        <RelaySessionChip
+          v-if="relayText"
+          class="ac-relay-inline"
+          :summary="session.relay_summary"
+          :slug="session.slug"
+        />
+      </div>
       <div v-if="sdkTitle" class="ac-sdk-title">{{ sdkTitle }}</div>
       <div v-if="isGhost" class="ac-desc-line">Deleted</div>
       <div v-else-if="roleDescription" class="ac-desc-line">{{ roleDescription }}</div>
@@ -61,7 +70,13 @@
     </div>
 
     <!-- Relay (issue #2103): attached relay handle -->
-    <RelaySessionChip v-if="!isGhost && session.relay_summary" class="ac-relay-chip" :summary="session.relay_summary" />
+    <RelaySessionChip
+      v-if="!isGhost && session.relay_summary"
+      class="ac-relay-chip"
+      :class="{ 'ac-relay-corner-phone': relayText }"
+      :summary="session.relay_summary"
+      :slug="session.slug"
+    />
 
     <!-- Proxy badge -->
     <div
@@ -85,6 +100,7 @@ import { useUIStore } from '@/stores/ui'
 import { useLongPress } from '@/composables/useLongPress'
 import { useSessionState } from '@/composables/useSessionState'
 import RelaySessionChip from '../relay/RelaySessionChip.vue'
+import { relayChipShowsText } from '@/utils/relayInbound'
 
 const props = defineProps({
   session: { type: Object, required: true },
@@ -133,6 +149,7 @@ const proxyMode = computed(() => {
   return 'restricted'
 })
 
+const relayText = computed(() => !props.isGhost && relayChipShowsText(props.session.relay_summary, props.session.slug))
 const displayName = computed(() =>
   props.session.name || props.session.role || 'Agent'
 )
@@ -268,6 +285,14 @@ function handleClick() {
   flex-direction: column;
   overflow: hidden;
   min-width: 0;
+}
+
+.ac-name-row { display: flex; align-items: center; gap: 6px; min-width: 0; }
+.ac-relay-inline { flex: 0 1 auto; min-width: 0; }
+.ac-relay-corner-phone { display: none; }
+@media (max-width: 600px) {
+  .ac-relay-inline { display: none; }
+  .ac-relay-corner-phone { display: inline-flex; }
 }
 
 .ac-name {

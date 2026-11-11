@@ -134,9 +134,9 @@ const saveLabel = computed(() =>
 .detail-banner strong { display: block; margin-bottom: 2px; }
 .detail-banner p { margin: 2px 0 0; opacity: 0.8; }
 .detail-banner-warning {
-  background: #fef3c7;
-  border: 1px solid #fbbf24;
-  color: #92400e;
+  background: var(--perm-amber-suggestion-bg);
+  border: 1px solid var(--perm-amber-suggestion-border);
+  color: var(--perm-amber-suggestion-strong);
 }
 .permission-buttons {
   display: flex;
@@ -147,23 +147,23 @@ const saveLabel = computed(() =>
 .btn-timeline {
   padding: 4px 12px;
   border-radius: 4px;
-  border: 1px solid #e2e8f0;
+  border: 1px solid var(--bs-border-color);
   font-size: 12px;
   font-weight: 500;
   cursor: pointer;
   transition: all 0.15s;
-  background: white;
-  color: #334155;
+  background: var(--bs-body-bg);
+  color: var(--bs-body-color);
 }
 .btn-timeline:disabled { opacity: 0.5; cursor: not-allowed; }
-.btn-approve { background: #22c55e; border-color: #22c55e; color: white; }
-.btn-approve:hover:not(:disabled) { background: #16a34a; }
-.btn-approve-outline { border-color: #22c55e; color: #16a34a; }
-.btn-approve-outline:hover:not(:disabled) { background: #f0fdf4; }
-.btn-deny { background: #ef4444; border-color: #ef4444; color: white; }
-.btn-deny:hover:not(:disabled) { background: #dc2626; }
-.btn-primary { background: #3b82f6; border-color: #3b82f6; color: white; }
-.btn-primary:hover:not(:disabled) { background: #2563eb; }
+.btn-approve { background: var(--hook-badge-success-bg); border-color: var(--hook-badge-success-bg); color: var(--hook-badge-text); }
+.btn-approve:hover:not(:disabled) { filter: brightness(0.82); }
+.btn-approve-outline { background: var(--bs-body-bg); border-color: var(--hook-badge-success-bg); color: var(--tool-success-text); }
+.btn-approve-outline:hover:not(:disabled) { background: var(--tool-success-bg); }
+.btn-deny { background: var(--hook-badge-failure-bg); border-color: var(--hook-badge-failure-bg); color: var(--hook-badge-text); }
+.btn-deny:hover:not(:disabled) { filter: brightness(0.82); }
+.btn-primary { background: var(--tool-badge-bg); border-color: var(--tool-badge-bg); color: var(--tool-badge-text); }
+.btn-primary:hover:not(:disabled) { filter: brightness(0.82); }
 .relay-action { margin-right: 4px; }
 .relay-scope-text { opacity: 1 !important; margin-top: 4px; }
 .relay-channel { font-size: 12px; }

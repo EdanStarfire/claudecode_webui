@@ -66,6 +66,63 @@ ATTENTION_CODES: dict[str, str] = {
 }
 
 
+def connection_codes(
+    status: str, detail: str | None, status_since: float | None, now: float, *,
+    has_live_monitors: bool,
+) -> list[str]:
+    """Attention-level connection codes (shared by ``build_health`` and the per-session summary, so the
+    Library tab and the session chip cannot disagree)."""
+    codes: list[str] = []
+    if status == const.STATUS_AUTH_FAILED:
+        codes.append("auth_failed")
+    if status == const.STATUS_TRANSPORT_UNAVAILABLE:
+        codes.append("transport_unavailable")
+    if (
+        status in (const.STATUS_BACKOFF, const.STATUS_CONNECTING) and status_since is not None
+        and now - status_since > RECONNECTING_LONG_SECONDS
+    ):
+        codes.append("reconnecting_long")
+    if status == const.STATUS_DISABLED and detail in OFF_DETAILS and has_live_monitors:
+        codes.append("inbound_off_with_monitors")
+    return codes
+
+
+def monitor_is_erroring(monitor: dict[str, Any]) -> bool:
+    """An ACTIVE monitor whose deliveries keep failing (not yet suspended)."""
+    return (
+        effective_state(monitor) == "active" and int(monitor.get("failures") or 0) > 0
+        and bool(monitor.get("last_error"))
+    )
+
+
+def monitor_needs_attention(monitor: dict[str, Any]) -> bool:
+    """Suspended for an attention-level reason, or erroring. Paused and info-level suspensions are
+    owner-caused / self-healing and stay quiet."""
+    if effective_state(monitor) == "suspended":
+        rule = SUSPENSION_RULES.get(monitor.get("suspended_reason") or "")
+        return bool(rule and rule[1] == ATTENTION)
+    return monitor_is_erroring(monitor)
+
+
+def monitor_summary_counts(monitors: list[dict[str, Any]]) -> dict[str, int]:
+    states = Counter(effective_state(m) for m in monitors)
+    return {"active": states["active"], "paused": states["paused"], "suspended": states["suspended"]}
+
+
+def attention_for_session(
+    monitors: list[dict[str, Any]], *, status: str, detail: str | None,
+    status_since: float | None, now: float,
+) -> bool:
+    """The session chip's dot: only a session WITH monitors can be lit, by one of its own monitors or
+    by an attention-level connection (same rules as the Inbound tab)."""
+    if not monitors:
+        return False
+    if any(monitor_needs_attention(m) for m in monitors):
+        return True
+    live = any(effective_state(m) in ("active", "paused") for m in monitors)
+    return bool(connection_codes(status, detail, status_since, now, has_live_monitors=live))
+
+
 def window_start_iso(now: float) -> str:
     return iso(now - WINDOW_SECONDS) or ""
 
@@ -152,18 +209,11 @@ def build_health(
     since_iso = iso(status_since)
 
     # ---- connection
-    if status == const.STATUS_AUTH_FAILED:
-        attention.append(_item("auth_failed", since_iso, 1, ["inbound_connection"]))
-    if status == const.STATUS_TRANSPORT_UNAVAILABLE:
-        attention.append(_item("transport_unavailable", since_iso, 1, ["inbound_connection"]))
-    if (
-        status in (const.STATUS_BACKOFF, const.STATUS_CONNECTING) and status_since is not None
-        and now - status_since > RECONNECTING_LONG_SECONDS
-    ):
-        attention.append(_item("reconnecting_long", since_iso, 1, ["inbound_connection"]))
     live = counts["active"] + counts["paused"]
-    if status == const.STATUS_DISABLED and detail in OFF_DETAILS and live:
-        attention.append(_item("inbound_off_with_monitors", since_iso, live, ["inbound_connection"]))
+    for code in connection_codes(status, detail, status_since, now, has_live_monitors=bool(live)):
+        attention.append(_item(
+            code, since_iso, live if code == "inbound_off_with_monitors" else 1, ["inbound_connection"],
+        ))
 
     # ---- suspended monitors, by reason
     by_reason: dict[str, list[dict[str, Any]]] = {}
@@ -180,8 +230,7 @@ def build_health(
 
     # ---- a monitor whose deliveries keep failing (not yet suspended)
     erroring = [  # active monitors only: suspended / paused ones are already reported by their own tag
-        m for m in monitors
-        if effective_state(m) == "active" and int(m.get("failures") or 0) > 0 and m.get("last_error")
+        m for m in monitors if monitor_is_erroring(m)
     ]
     if erroring:
         attention.append(_item(

@@ -17,5 +17,5 @@ defineProps({
   white-space: nowrap; user-select: none; vertical-align: baseline;
 }
 .relay-tag--muted { opacity: 0.8; }
-.relay-tag--amber { color: #d29922; border-color: #d2992266; }
+.relay-tag--amber { color: var(--perm-amber-suggestion-strong); border-color: var(--perm-amber-suggestion-border); }
 </style>

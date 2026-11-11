@@ -49,6 +49,17 @@ class JsonSubscriptionStore:
         self._by_channel: dict[str, list[str]] = {}  # channel monitors only: channel -> record ids
         self._scope_ids: list[str] = []  # mentions / DMs monitors (no channel)
         self._flush_task: asyncio.Task | None = None
+        # sync ``(session_id) -> None``: a session's monitors changed (3d-ii summary refresh); never raises
+        self.on_monitors_changed = None
+
+    def _changed(self, *session_ids: str | None) -> None:
+        if self.on_monitors_changed is None:
+            return
+        for sid in dict.fromkeys(i for i in session_ids if i):
+            try:
+                self.on_monitors_changed(sid)
+            except Exception:
+                logger.exception("Monitor change callback failed")
 
     def load(self) -> None:
         data = load_json(self._path)
@@ -154,10 +165,13 @@ class JsonSubscriptionStore:
     async def remove_by_session(self, session_id: str) -> int:
         async with self._lock:
             ids = [i for i, r in self._records.items() if r.get("session_id") == session_id]
+            removed = [self._records[i] for i in ids]
             for i in ids:
                 del self._records[i]
+            sessions = {r.get("session_id") for r in removed}
             if ids:
                 await self._persist()
+                self._changed(*sessions)
             return len(ids)
 
     async def set_status_by_session(
@@ -187,6 +201,7 @@ class JsonSubscriptionStore:
                 n += 1
             if n:
                 await self._persist()
+                self._changed(session_id)
             return n
 
     def find_thread(self, channel: str, thread_ts: str) -> dict[str, Any] | None:
@@ -328,6 +343,7 @@ class JsonSubscriptionStore:
                         last_error=None, failures=0, flood_windows=0,
                     )
                     await self._persist()
+                    self._changed(session_id)
                     return existing, "resumed"
                 return existing, "existing"
             if self.count(session_id) >= const.MAX_MONITORS_PER_SESSION or (
@@ -348,6 +364,7 @@ class JsonSubscriptionStore:
                 rec["consent"] = consent  # written only after an approved scope prompt
             self._records[rec["id"]] = rec
             await self._persist()
+            self._changed(session_id)
             return rec, "created"
 
     async def set_monitor_status(
@@ -367,6 +384,7 @@ class JsonSubscriptionStore:
                 if resume_from is not None:
                     rec["last_seen_ts"] = self._ts(resume_from)
             await self._persist()
+            self._changed(rec.get("session_id"))
             return rec
 
     async def set_paused(
@@ -383,6 +401,7 @@ class JsonSubscriptionStore:
                 rec["last_seen_ts"] = self._ts(resume_from)
                 rec["recent_keys"] = []
             await self._persist()
+            self._changed(rec.get("session_id"))
             return rec
 
     def advance_cursor(self, monitor_id: str, ts: str) -> bool:
@@ -419,8 +438,11 @@ class JsonSubscriptionStore:
         rec = self.get_monitor(monitor_id)
         if rec is None:
             return
+        erroring_before = (rec.get("failures"), rec.get("last_error"))
         rec.update(fields)
         self._persist_soon()
+        if (rec.get("failures"), rec.get("last_error")) != erroring_before:  # the "erroring" attention rule reads these
+            self._changed(rec.get("session_id"))
 
     async def remove_monitor(self, monitor_id: str) -> dict[str, Any] | None:
         async with self._lock:
@@ -428,6 +450,7 @@ class JsonSubscriptionStore:
                 return None
             rec = self._records.pop(monitor_id)
             await self._persist()
+            self._changed(rec.get("session_id"))
             return rec
 
     async def expire_monitors(self) -> list[dict[str, Any]]:
@@ -443,6 +466,7 @@ class JsonSubscriptionStore:
                     gone.append({**self._records.pop(r["id"]), "_expired_reason": "expired" if expired else "idle"})
             if gone:
                 await self._persist()
+                self._changed(*(g.get("session_id") for g in gone))
             return gone
 
 

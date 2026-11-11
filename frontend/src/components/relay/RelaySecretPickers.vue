@@ -125,10 +125,10 @@ onMounted(() => secretsStore.fetchSecrets())
 .picker-field label { font-size: 12px; font-weight: 600; color: var(--bs-emphasis-color); }
 .optional { font-weight: 400; color: var(--bs-secondary-color); }
 .picker-hint { color: var(--bs-secondary-color); font-size: 11px; }
-.picker-missing { color: #d29922; font-size: 12px; }
+.picker-missing { color: var(--perm-amber-suggestion-strong); font-size: 12px; }
 .picker-error {
-  color: #f87171; font-size: 12px; padding: 6px 10px; border-radius: 6px;
-  background: rgba(248, 113, 113, 0.08); border: 1px solid rgba(248, 113, 113, 0.25);
+  color: var(--tool-error-text); font-size: 12px; padding: 6px 10px; border-radius: 6px;
+  background: var(--tool-error-bg); border: 1px solid var(--tool-error-border);
 }
 .inbound-toggle { display: flex; align-items: center; gap: 8px; font-size: 13px; margin: 0; white-space: nowrap; flex-wrap: wrap; }
 .picker-actions { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }

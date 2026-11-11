@@ -1922,7 +1922,7 @@ export const useMessageStore = defineStore('message', () => {
     if (knownIds.size === 0) return
     let changed = false
     for (const key of expandedComms.value.keys()) {
-      if (knownIds.has(key)) {
+      if (knownIds.has(key) || (typeof key === 'string' && key.startsWith('relay-fold:') && knownIds.has(key.slice(11)))) {
         expandedComms.value.delete(key)
         changed = true
       }

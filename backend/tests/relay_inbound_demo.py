@@ -13,6 +13,11 @@ What it does, writing only inside ``--data-dir``:
      late, rate limited, delivery failed), monitor deliveries, a flood, delivery failures, suspensions
      and a backfill gap with cap reasons;
   3. creates monitors of every kind and state for the sessions found under ``<data-dir>/sessions``.
+  4. (3d-ii) appends genuine user-message records to the first sessions' ``messages.jsonl``: an owner
+     instruction, a multi-line instruction with markup, and a monitor envelope, each produced by a real
+     ``InboundService`` and delivered through the REAL ``DeliveryGate`` / ``PendingStore`` against a mock
+     coordinator, then stored with ``MessageRecord.from_user_input`` (the production record builder), so the
+     timeline shows real ``relay_inbound`` metadata. The sessions' relay summary comes from the app itself.
 No Slack token is read or needed. After the run, start the app: the endpoints read the seeded files.
 """
 
@@ -23,6 +28,7 @@ import asyncio
 import json
 import sys
 import time
+import types
 from datetime import UTC, datetime
 from pathlib import Path
 
@@ -36,6 +42,7 @@ from backend.tests.relay_inbound_support import (  # noqa: E402
     OTHER_USER,
     OWNER,
     SELF_DM,
+    audit_events,
     envelope,
     make_inbound,
     message_payload,
@@ -115,7 +122,13 @@ async def drive(data_dir: Path, relay_id: str, sessions, real_now: float) -> Non
     handles = [env.sessions.infos[s[0]].config["relay_handle"] for s in sessions]
     for channel in CHANNELS:
         env.relay_service.policies[channel] = "read_only"
+    # 3d-ii: with >= 4 sessions the first two hold the monitors (lit: attention-level states), the third only
+    # an owner-caused suspension (monitors, but quiet) and the fourth none (instruction-only)
+    many = len(sessions) >= 4
     s1, s2, s3 = (sessions[i % len(sessions)][0] for i in range(3))
+    if many:
+        s3 = s1
+    quiet_session = sessions[2][0] if many else None
 
     env.t = await started(env)  # connecting -> connected rows
     await advance(env, 600)
@@ -151,6 +164,10 @@ async def drive(data_dir: Path, relay_id: str, sessions, real_now: float) -> Non
     disposed = await monitor(env, channel=CHANNELS[0], keywords=("rollback",), session=s2)
     inactive = await monitor(env, channel=CHANNELS[1], keywords=("handover",), session=s3)
     paused = await monitor(env, channel=CHANNELS[0], keywords=("standup",), session=s1)
+    quiet = (
+        await monitor(env, channel=CHANNELS[2], keywords=("billing",), session=quiet_session)
+        if quiet_session else None
+    )
 
     # ---- deliveries (real coalescer + watcher); one monitor keeps failing
     for seq, text in enumerate(["deploy finished", "release 1.2 is out", "hotfix merged"], start=100):
@@ -187,6 +204,8 @@ async def drive(data_dir: Path, relay_id: str, sessions, real_now: float) -> Non
     ):
         await env.service._suspend(env.service.store.get_monitor(rec["id"]), reason)
         await advance(env, 60)
+    if quiet is not None:
+        await env.service._suspend(env.service.store.get_monitor(quiet["id"]), const.SUSPEND_CHANNEL_BLOCKED)
     # a connection blip near the end: genuine status changes through the service
     env.service._set_status(const.STATUS_BACKOFF, "transport_error")
     await advance(env, 90)
@@ -195,6 +214,68 @@ async def drive(data_dir: Path, relay_id: str, sessions, real_now: float) -> Non
     await settle(env)
     _ = (thread, channel, users, expiring)
     await env.service.stop()
+
+
+async def seed_timeline(data_dir: Path, relay_id: str, sessions) -> None:
+    """Genuine instruction + monitor-envelope user messages through the real delivery gate (3d-ii)."""
+    import tempfile
+    from functools import partial
+    from unittest.mock import AsyncMock, patch
+
+    from backend.models.messages import MessageRecord
+    from backend.relay.inbound.monitor_delivery import CoordinatorPort
+    from backend.relay.inbound.sink import enqueue_external_comm
+    from backend.tests.test_relay_inbound_integration import (
+        _fast_sleep,
+        _wait_for,
+        live_coordinator,
+    )
+
+    support.RELAY_ID = relay_id
+    plans = [
+        (sessions[0], ["!my-agent run the nightly report",
+                       "!my-agent summarise *this week*:\n- <@U0DEMO0002> asked about <https://example.com|the doc>\n- <b>not html</b> & `code`"],
+         True),
+        (sessions[min(1, len(sessions) - 1)], ["!my-agent check the staging deploy"], False),
+    ]
+    for (sid, _name, _handle), texts, with_monitor in plans:
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp = Path(tmp)
+            (tmp / "coord").mkdir()
+            env = make_inbound(tmp)
+            env.sessions.infos[support.SESSION].config["relay_id"] = relay_id
+            env.relay_service.policies[CHANNELS[0]] = "read_only"
+            coord, _info, sent = live_coordinator(tmp / "coord")
+            port = CoordinatorPort(coord)
+            env.service._sink = partial(enqueue_external_comm, coord)
+            env.service.port = port
+            env.service.watcher._probe = port
+            env.t = await started(env)
+            # only the delivery gate's own waits are shortened (a global asyncio.sleep patch would also
+            # shorten the real-time waits the file writes need)
+            shim = types.SimpleNamespace(**{k: getattr(asyncio, k) for k in dir(asyncio)})
+            shim.sleep = AsyncMock(side_effect=_fast_sleep)
+            with patch("backend.delivery_gate.asyncio", new=shim):
+                for n, text in enumerate(texts, start=1):
+                    ts = env.clock.ts(seq=n)
+                    await env.t.emit(envelope(message_payload(text, ts, channel=SELF_DM, user=OWNER), f"T{n}"))
+                    await settle(env)
+                    assert await _wait_for(lambda n=n, sent=sent: len(sent) >= n), f"instruction was not delivered: {[(r['event'], r.get('code')) for r in audit_events(env)]}"
+                if with_monitor:
+                    await monitor(env, channel=CHANNELS[0], keywords=("deploy",))
+                    await emit(env, env.t, "deploy finished, all green", seq=10, channel=CHANNELS[0])
+                    await fire_window(env)
+                    assert await _wait_for(lambda texts=texts, sent=sent: len(sent) > len(texts)), "envelope was not delivered"
+            coord.delivery_gate.stop_when_idle("s1")
+            await env.service.stop()
+        path = data_dir / "sessions" / sid / "messages.jsonl"
+        base = time.time() - 60 * (len(sent) + 1)
+        with path.open("a") as fh:
+            for i, (message, metadata, _inject) in enumerate(sent):
+                record = MessageRecord.from_user_input(message, sid, metadata=metadata).to_dict()
+                record["timestamp"] = base + 60 * i
+                fh.write(json.dumps(record) + "\n")
+        print(f"appended {len(sent)} relay_inbound messages to {path}")
 
 
 def support_run(env, real_now):
@@ -211,6 +292,8 @@ def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument("--data-dir", required=True)
     parser.add_argument("--relay-id", required=True)
+    parser.add_argument("--order", default="", help="comma separated session handles: monitors go to the first "
+                        "two, a quiet (owner-suspended only) monitor to the third, the fourth gets none")
     parser.add_argument("--user-secret", default="demo-user-token")
     parser.add_argument("--app-secret", default="demo-app-token")
     args = parser.parse_args()
@@ -218,10 +301,14 @@ def main() -> None:
     sessions = find_sessions(data_dir)
     if not sessions:
         raise SystemExit(f"no sessions under {data_dir / 'sessions'}: create 2-3 in the test instance first")
+    if args.order:
+        rank = {h: i for i, h in enumerate(args.order.split(","))}
+        sessions.sort(key=lambda t: rank.get(t[2], len(rank)))
     patch_relay_record(data_dir, args.relay_id, args.user_secret, args.app_secret)
     for name in ("audit.jsonl", "inbound_state.json", "subscriptions.json"):
         (data_dir / "relays" / args.relay_id / name).unlink(missing_ok=True)
     asyncio.run(drive(data_dir, args.relay_id, sessions, time.time()))
+    asyncio.run(seed_timeline(data_dir, args.relay_id, sessions))
     print(f"seeded {data_dir / 'relays' / args.relay_id}")
 
 

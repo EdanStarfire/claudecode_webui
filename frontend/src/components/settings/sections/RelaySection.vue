@@ -68,6 +68,17 @@
         />
       </div>
 
+      <div
+        v-if="isSessionMode && policyEditorRelayId"
+        id="monitors"
+        ref="monitorsBlock"
+        class="monitors-block"
+        data-testid="relay-monitors-block"
+      >
+        <div class="monitors-head">Monitors</div>
+        <RelayMonitorList :key="`${entityId}:${policyEditorRelayId}`" :relay-id="policyEditorRelayId" :session-id="entityId" />
+      </div>
+
       <div v-if="isSessionMode" class="handle-block" data-testid="relay-handle-block">
         <FieldRenderer
           :field="HANDLE_FIELD"
@@ -82,7 +93,7 @@
 </template>
 
 <script setup>
-import { computed, ref, watch, onMounted } from 'vue'
+import { computed, nextTick, ref, watch, onMounted } from 'vue'
 import { useRoute } from 'vue-router'
 import { useSettingsStore } from '@/stores/settings'
 import { useTemplateStore } from '@/stores/template'
@@ -93,6 +104,7 @@ import FieldSection from '../../configuration/fields/FieldSection.vue'
 import FieldRenderer from '../../configuration/fields/FieldRenderer.vue'
 import { useRelayStore } from '@/stores/relay'
 import RelayPolicyEditor from '../../relay/RelayPolicyEditor.vue'
+import RelayMonitorList from '../../relay/RelayMonitorList.vue'
 import { normalizePolicies } from '@/utils/relayPolicies'
 import { useRestartRequired } from '@/composables/useRestartRequired'
 import { FIELD_SCHEMAS } from '../../configuration/fields/fieldSchemas.js'
@@ -237,6 +249,14 @@ const inheritedPolicies = computed(() => {
   }
   return out
 })
+
+// ── Monitors block (3d-ii): outside the form, immediate actions, `#monitors` anchor ─────────
+const monitorsBlock = ref(null)
+function scrollToMonitors() {
+  if (route.hash !== '#monitors') return
+  nextTick(() => monitorsBlock.value?.scrollIntoView?.({ block: 'start' }))
+}
+watch([() => route.hash, monitorsBlock], scrollToMonitors, { flush: 'post' })
 
 // ── Server-side validation messages ───────────────────────────────────────
 const saveError = ref('')
@@ -395,17 +415,19 @@ onMounted(() => {
 .section-na strong { color: var(--bs-emphasis-color); }
 
 .save-error {
-  color: #f87171;
+  color: var(--tool-error-text);
   font-size: 12px;
   padding: 6px 10px;
   margin-bottom: 10px;
   border-radius: 6px;
-  background: rgba(248, 113, 113, 0.08);
-  border: 1px solid rgba(248, 113, 113, 0.25);
+  background: var(--tool-error-bg);
+  border: 1px solid var(--tool-error-border);
 }
 
-.restart-note { font-size: 12px; color: #d29922; margin: 8px 0 0; }
+.restart-note { font-size: 12px; color: var(--perm-amber-suggestion-strong); margin: 8px 0 0; }
 .handle-block { margin-top: 8px; }
+.monitors-block { margin-top: 14px; padding-top: 12px; border-top: 1px solid var(--bs-border-color); }
+.monitors-head { font-size: 13px; font-weight: 600; margin-bottom: 4px; }
 .policy-block { margin-top: 14px; padding-top: 12px; border-top: 1px solid var(--bs-border-color); }
 
 .restart-chip {
@@ -416,9 +438,9 @@ onMounted(() => {
   font-size: 11px;
   font-weight: 600;
   cursor: pointer;
-  background: rgba(210, 153, 34, 0.15);
-  border: 1px solid rgba(210, 153, 34, 0.5);
-  color: #d29922;
+  background: var(--perm-amber-suggestion-bg);
+  border: 1px solid var(--perm-amber-suggestion-border);
+  color: var(--perm-amber-suggestion-strong);
 }
 
 .section-body {

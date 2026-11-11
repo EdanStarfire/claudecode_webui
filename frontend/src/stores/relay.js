@@ -220,32 +220,37 @@ export const useRelayStore = defineStore('relay', () => {
     return api.get(`${_relayUrl(relayId)}/inbound/health`, { signal })
   }
 
+  const _monitorsUrl = (relayId, sessionId) => (sessionId
+    ? `/api/sessions/${encodeURIComponent(sessionId)}/relays/${encodeURIComponent(relayId)}/monitors`
+    : `${_relayUrl(relayId)}/monitors`)
+
   /** Relay-wide monitor rows `{monitors, total}`; 409 (inbound not running) reads as an empty list. */
-  async function loadMonitors(relayId, { sessionId, status, kind, limit, offset, signal } = {}) {
+  async function loadMonitors(relayId, { sessionId, status, kind, limit, offset, signal, qualified = false } = {}) {
     const params = {
-      session_id: sessionId || null, status: status || null, kind: kind || null,
+      session_id: qualified ? null : (sessionId || null), status: status || null, kind: kind || null,
       limit: limit || null, offset: offset || null,
     }
     try {
-      return await api.get(`${_relayUrl(relayId)}/monitors`, { params, signal })
+      return await api.get(_monitorsUrl(relayId, qualified ? sessionId : null), { params, signal })
     } catch (e) {
       if (e?.status === 409) return { monitors: [], total: 0, notRunning: true }
       throw e
     }
   }
 
-  /** Owner pause / resume (immediate). Resolves the monitor row as the server now has it. */
-  async function setMonitorPaused(relayId, monitorId, paused) {
+  /** Owner pause / resume (immediate). Resolves the monitor row as the server now has it.
+   *  `sessionId` selects the session-qualified route (the session's Monitors block, 3d-ii). */
+  async function setMonitorPaused(relayId, monitorId, paused, sessionId = null) {
     try {
-      return await api.patch(`${_relayUrl(relayId)}/monitors/${encodeURIComponent(monitorId)}`, { paused })
+      return await api.patch(`${_monitorsUrl(relayId, sessionId)}/${encodeURIComponent(monitorId)}`, { paused })
     } catch (e) {
       throw Object.assign(new Error(errorMessage(e)), { status: e?.status })
     }
   }
 
-  async function deleteMonitor(relayId, monitorId) {
+  async function deleteMonitor(relayId, monitorId, sessionId = null) {
     try {
-      return await api.delete(`${_relayUrl(relayId)}/monitors/${encodeURIComponent(monitorId)}`)
+      return await api.delete(`${_monitorsUrl(relayId, sessionId)}/${encodeURIComponent(monitorId)}`)
     } catch (e) {
       throw Object.assign(new Error(errorMessage(e)), { status: e?.status })
     }

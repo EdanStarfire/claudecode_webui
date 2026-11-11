@@ -57,7 +57,7 @@ function onKey(event) {
 }
 .strip-btn:first-child { border-left: 0; }
 .strip-btn:hover:not(:disabled):not(.selected) { background: var(--bs-secondary-bg); }
-.strip-btn.selected { background: rgba(99, 102, 241, 0.18); color: var(--bs-emphasis-color); }
+.strip-btn.selected { background: rgba(var(--bs-primary-rgb), 0.18); color: var(--bs-emphasis-color); }
 .policy-strip.disabled { opacity: 0.6; }
 @media (max-width: 600px) {
   .strip-btn { padding: 2px 6px; }

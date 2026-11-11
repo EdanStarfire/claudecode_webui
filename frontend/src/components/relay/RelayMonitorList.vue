@@ -24,9 +24,9 @@
     </div>
 
     <div v-if="loadError" class="mon-load-error" role="alert" data-testid="monitor-load-error">{{ loadError }}</div>
-    <div v-else-if="notRunning" class="muted" data-testid="monitor-not-running">Inbound is not running, so there is nothing to list.</div>
+    <div v-else-if="notRunning" class="muted" data-testid="monitor-not-running">{{ sessionId ? 'Monitors are unavailable for this relay right now.' : 'Inbound is not running, so there is nothing to list.' }}</div>
     <div v-else-if="loaded && !rows.length" class="muted" data-testid="monitor-empty">
-      {{ hasFilter ? 'No monitors match.' : 'No monitors yet. Agents create them with the monitor tools.' }}
+      {{ hasFilter ? 'No monitors match.' : (sessionId ? 'No monitors. The agent creates them with its monitor tools.' : 'No monitors yet. Agents create them with the monitor tools.') }}
     </div>
 
     <div v-if="removedNote" class="muted" data-testid="monitor-removed-note">A monitor was {{ removedNote }}.</div>
@@ -64,7 +64,7 @@ import RelayMonitorRow from './RelayMonitorRow.vue'
 
 const props = defineProps({
   relayId: { type: String, required: true },
-  sessionId: { type: String, default: '' }, // locks the list to one session (3d-ii reuses this)
+  sessionId: { type: String, default: '' }, // locks the list to one session (session-qualified routes; the session's Monitors block)
   initialSession: { type: String, default: '' },
   active: { type: Boolean, default: true }, // polls only while visible
   pollMs: { type: Number, default: 10000 },
@@ -103,7 +103,7 @@ let reloadAfter = null // a load skipped while an action was in flight: re-run w
 let timer = null
 
 const effectiveSession = computed(() => props.sessionId || sessionFilter.value)
-const hasFilter = computed(() => !!(status.value || kind.value || effectiveSession.value))
+const hasFilter = computed(() => !!(status.value || kind.value || (!props.sessionId && sessionFilter.value)))
 const sessionOptions = computed(() => {
   const list = [...sessionStore.sessions.values()]
     .filter(s => s.session_id)
@@ -116,7 +116,8 @@ const sessionOptions = computed(() => {
 })
 
 function query(extra = {}) {
-  return { sessionId: effectiveSession.value, status: status.value, kind: kind.value, ...extra }
+  // a locked session list uses the session-qualified routes (the session's Monitors block, 3d-ii)
+  return { sessionId: effectiveSession.value, qualified: !!props.sessionId, status: status.value, kind: kind.value, ...extra }
 }
 
 /** Reload the loaded span (a poll, a filter change, after an action). Skipped while an action is in flight. */
@@ -178,7 +179,7 @@ async function togglePause(monitor) {
   // optimistic: the owner's pause flag wins over any suspension in the effective state
   replace(id, { ...before, paused, effective_state: paused ? 'paused' : (before.status === 'active' ? 'active' : 'suspended') })
   try {
-    const next = await store.setMonitorPaused(props.relayId, id, paused)
+    const next = await store.setMonitorPaused(props.relayId, id, paused, props.sessionId || null)
     if (next && next.id) replace(id, { ...before, ...next }) // the server decides (resume never lifts a suspension)
     emit('changed')
   } catch (e) {
@@ -220,7 +221,7 @@ async function remove(monitor) {
   rows.value = rows.value.filter(r => r.id !== id)
   total.value = Math.max(0, total.value - 1)
   try {
-    await store.deleteMonitor(props.relayId, id)
+    await store.deleteMonitor(props.relayId, id, props.sessionId || null)
     emit('changed')
   } catch (e) {
     if (e.status === 404) {
@@ -272,7 +273,7 @@ defineExpose({ reload: () => load(), rows })
   line-height: 20px; color: var(--bs-secondary-color); cursor: pointer;
 }
 .filter-chip.on { color: var(--bs-body-color); border-color: var(--bs-secondary-color); }
-.mon-load-error { color: #f87171; font-size: 12px; }
+.mon-load-error { color: var(--tool-error-text); font-size: 12px; }
 .muted { color: var(--bs-secondary-color); font-size: 12px; }
 .foot { margin-top: 8px; }
 .more { align-self: flex-start; margin-top: 6px; }

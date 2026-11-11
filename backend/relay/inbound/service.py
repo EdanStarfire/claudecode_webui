@@ -36,7 +36,12 @@ from . import public as monitor_public
 from .backfill import BackfillRun, backfill_dms, backfill_mentions
 from .coalescer import BufferedMessage, Coalescer, SessionBuffer
 from .dispatch import format_instruction, instruction_summary
-from .health import collect_health
+from .health import (
+    RECONNECTING_LONG_SECONDS,
+    attention_for_session,
+    collect_health,
+    monitor_summary_counts,
+)
 from .matcher import MatchContext, matches_monitor, never_content
 from .matcher import match as match_monitors
 from .normalize import Drop, event_from_message, normalize_event
@@ -126,6 +131,7 @@ class InboundService:
         watch_sleep: Callable[[float], Awaitable[None]] | None = None,
         search_sleep: Callable[[float], Awaitable[None]] | None = None,
         rerun_sleep: Callable[[float], Awaitable[None]] | None = None,
+        attention_sleep: Callable[[float], Awaitable[None]] | None = None,
     ) -> None:
         self.relay_id = relay_id
         self._manager = relay_manager
@@ -138,6 +144,7 @@ class InboundService:
         relay_dir = relays_root / relay_id
         self.state = InboundState(relay_dir)
         self.store = JsonSubscriptionStore(relay_dir, relay_id, clock=now)
+        self.store.on_monitors_changed = self._monitors_changed
         self._responder = InboundResponder(relay_manager)
         self._relay_bucket = TokenBucket(const.RELAY_RATE_PER_MINUTE, const.RELAY_BURST, mono)
         self._thread_buckets = KeyedBuckets(const.THREAD_RATE_PER_MINUTE, const.THREAD_BURST, mono)
@@ -174,7 +181,9 @@ class InboundService:
         # --- scope monitors (stage 3b-ii)
         self.search_limiter = SearchLimiter(mono, search_sleep or asyncio.sleep)
         self._rerun_sleep = rerun_sleep or asyncio.sleep
+        self._attention_sleep = attention_sleep or asyncio.sleep  # own clock: never the supervisor's
         self._rerun_task: asyncio.Task | None = None
+        self._reconnect_task: asyncio.Task | None = None
         self._rerun_sessions: set[str | None] = set()
         self._gaps: dict[str, tuple[float, float]] = {}  # session -> incomplete backfill period
 
@@ -218,6 +227,7 @@ class InboundService:
         ]
         if self.store.monitors():  # policies / attachments may have changed while the Backend was down
             self._spawn(self.reevaluate_all())
+            self.refresh_monitor_sessions()  # summaries were computed before the store was loaded
 
     async def stop(self) -> None:
         self._stopping = True
@@ -253,6 +263,11 @@ class InboundService:
         # connecting <-> backoff is one continuous "reconnecting" spell (the supervisor flips between
         # them on every attempt): health measures how long it has lasted, not the last flip
         spell = {const.STATUS_CONNECTING, const.STATUS_BACKOFF}
+        new_spell = status in spell and self.status not in spell
+        # attention depends on the status class (a connecting <-> backoff flip is one spell) and, when off, on why
+        relevant = (status != self.status and not (status in spell and self.status in spell)) or (
+            status == const.STATUS_DISABLED and detail != self.detail
+        )
         if status != self.status and not (status in spell and self.status in spell):
             self.status_changed_at = self._now()
         self.status, self.detail = status, detail
@@ -265,6 +280,37 @@ class InboundService:
             self._spawn(self._audit.record(
                 self.relay_id, event="inbound_connection", inbound_status=status, code=detail,
             ))
+        if changed and relevant and not self._stopping:
+            self.refresh_monitor_sessions()  # the session chips' attention follows the connection
+            if new_spell:  # "reconnecting for too long" starts without any further status change
+                if self._reconnect_task is not None:
+                    self._reconnect_task.cancel()  # one timer: a flapping connection never stacks them
+                self._reconnect_task = self._spawn(self._reconnect_check())
+
+    def _monitors_changed(self, session_id: str) -> None:
+        """A session's monitors changed: recompute its ``relay_summary`` (broadcast only on change)."""
+        if not self._stopping:
+            self._spawn(self._relay_service.refresh_summary(session_id))
+
+    def refresh_monitor_sessions(self) -> None:
+        """Sessions that hold monitors (at most the 100-per-relay cap) get their summary recomputed."""
+        for session_id in dict.fromkeys(m["session_id"] for m in self.store.monitors() if m.get("session_id")):
+            self._monitors_changed(session_id)
+
+    async def _reconnect_check(self) -> None:
+        await self._attention_sleep(RECONNECTING_LONG_SECONDS + 1)
+        self.refresh_monitor_sessions()
+
+    def session_monitor_summary(self, session_id: str) -> dict[str, Any]:
+        """``{active, paused, suspended, attention}`` for the session chip: in memory, no I/O."""
+        monitors = self.store.monitors(session_id)
+        since = self.status_changed_at if self.status_changed_at is not None else self.started_at
+        return {
+            **monitor_summary_counts(monitors),
+            "attention": attention_for_session(
+                monitors, status=self.status, detail=self.detail, status_since=since, now=self._now(),
+            ),
+        }
 
     def _spawn(self, coro) -> asyncio.Task | None:
         try:
@@ -601,7 +647,8 @@ class InboundService:
         await self._audit.record(
             self.relay_id, event="inbound_instruction", outcome=outcome, code=code,
             session_id=d.get("session_id"), handle=d.get("handle"), channel_id=event.channel,
-            thread_ts=d.get("thread_ts"), message_ts=event.ts, **text_fields(event.text),
+            thread_ts=d.get("thread_ts"), message_ts=event.ts,
+            envelope_id=comm_id_for(self.relay_id, event.channel, event.ts), **text_fields(event.text),
         )
 
     async def _check_session(self, session_id: str) -> str | None:
@@ -680,6 +727,7 @@ class InboundService:
                 metadata={"relay_inbound": {
                     "relay_id": self.relay_id, "channel": event.channel, "thread_ts": thread_ts,
                     "message_ts": event.ts, "kind": "instruction",
+                    "envelope_id": comm_id_for(self.relay_id, event.channel, event.ts),
                 }},
                 relay_id=self.relay_id,
             )
@@ -1325,7 +1373,7 @@ class InboundService:
             },
             "relay_inbound": {
                 "relay_id": self.relay_id, "kind": "monitor", "monitor_ids": monitor_ids,
-                "count": len(included), "omitted": omitted_total,
+                "count": len(included), "omitted": omitted_total, "envelope_id": comm_id,
             },
         }
         counts: dict[str, int] = {}

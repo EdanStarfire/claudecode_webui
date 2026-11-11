@@ -166,7 +166,7 @@ function confirmDelete() {
 .mon-counts, .mon-when { flex: 0 0 auto; color: var(--bs-secondary-color); white-space: nowrap; }
 .mon-actions { margin-left: auto; display: inline-flex; align-items: center; gap: 2px; flex: 0 0 auto; }
 .mon-confirm { color: var(--bs-secondary-color); }
-.mon-error { color: #f87171; font-size: 11px; padding: 2px 0 0 26px; }
+.mon-error { color: var(--tool-error-text); font-size: 11px; padding: 2px 0 0 26px; }
 .mon-detail { padding: 6px 0 4px 26px; color: var(--bs-body-color); }
 .mon-detail dl { display: grid; grid-template-columns: 80px 1fr; gap: 4px 10px; margin: 0; }
 .mon-detail dt { color: var(--bs-secondary-color); font-weight: 500; }
