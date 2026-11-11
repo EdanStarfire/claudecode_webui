@@ -434,14 +434,21 @@ def make_inbound(tmp_path: Path, *, handles: dict[str, str] | None = None, facto
         search_sleeps.append(seconds)
         clock.advance(seconds)
 
+    api_sleeps: list[float] = []
+
+    async def api_sleep(seconds: float) -> None:  # digest Tier-3 spacing: fake time, no real wait
+        api_sleeps.append(seconds)
+        clock.advance(seconds)
+
     service = InboundService(
         RELAY_ID, relay_manager=manager, relay_service=service_relay,
         session_manager=sessions, audit=audit, sink=sink, relays_root=tmp_path / "relays",
         transport_factory=factory or default_factory, now=clock.now, mono=clock.mono,
         sleep=fake_sleep, rng=lambda: 1.0, port=port, window_sleep=window,
         watch_sleep=ManualSleep(clock), search_sleep=search_sleep, rerun_sleep=rerun,
+        api_sleep=api_sleep, digest_sleep=ManualSleep(clock),
     )
-    return SimpleNamespace(rerun=rerun, search_sleeps=search_sleeps,
+    return SimpleNamespace(rerun=rerun, search_sleeps=search_sleeps, api_sleeps=api_sleeps,
         service=service, adapter=adapter, manager=manager, sessions=sessions, index=index,
         sink=sink, audit=audit, clock=clock, transports=transports, delays=delays, port=port,
         window=window, relay_service=service_relay,

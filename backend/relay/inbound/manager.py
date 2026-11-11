@@ -16,6 +16,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 from . import constants as const
+from . import schedule as sched
 from .health import collect_health
 from .monitor_delivery import CoordinatorPort
 from .service import InboundService, InstructionSink, TransportFactory
@@ -222,7 +223,17 @@ class InboundManager:
             "keywords": list(dict.fromkeys(k.strip() for k in keywords if k.strip())),
             "users": list(dict.fromkeys(u.strip() for u in users if u.strip())),
         }
-        found = service.store.find_monitor(session_id, kind, None, None, filters)
+        schedule = None
+        if args.get("schedule") is not None:
+            raw = args["schedule"]
+            daily = raw.get("daily") if isinstance(raw, dict) else None
+            if isinstance(daily, dict) and not daily.get("timezone") and service.owner_tz is None:
+                return False  # the owner's timezone is not known yet: prompt (fail safe)
+            try:
+                schedule = sched.parse_schedule(raw, owner_tz=service.owner_tz, now=time.time())
+            except sched.ScheduleError:
+                return False
+        found = service.store.find_monitor(session_id, kind, None, None, filters, schedule)
         return found is not None
 
     def schedule_reevaluate(self, session_id: str | None = None) -> None:

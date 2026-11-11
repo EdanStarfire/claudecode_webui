@@ -109,3 +109,23 @@ SUSPEND_DELIVERY_FAILED = "delivery_failed"
 # Reasons the policy / eligibility re-check may lift on its own (flood / delivery_failed need the
 # agent to re-create the monitor; disposed is lifted by a session start).
 AUTO_RESUME_REASONS = frozenset({SUSPEND_CHANNEL_BLOCKED, SUSPEND_POLICY_UNSET, SUSPEND_SESSION_INACTIVE})
+
+# ------------------------------------------------------- scheduled digests (stage 3c-i)
+MODE_LIVE = "live"
+MODE_DIGEST = "digest"
+DIGEST_MIN_INTERVAL_MINUTES = 30
+DIGEST_MAX_TIMES = 4
+DIGEST_WINDOW_MAX_AGE_SECONDS = 72 * 3600  # content window of one digest run
+DIGEST_HYDRATION_CAP = 40  # single-message fetches per digest run (hits beyond it are never delivered)
+DIGEST_TICK_SECONDS = 30.0
+DIGEST_MAX_RUNS_PER_TICK = 3
+DIGEST_JITTER_MAX_SECONDS = 90
+DIGEST_STARTUP_DELAY_SECONDS = 30.0
+DIGEST_RATE_LIMIT_RESCHEDULE_SECONDS = 300.0
+DIGEST_RATE_LIMIT_MAX_RETRIES = 3
+DIGEST_DEFER_STEP_SECONDS = 600.0
+DIGEST_DEFER_MAX = 6
+RUN_NOW_AGENT_MIN_SECONDS = 300.0
+RUN_NOW_OWNER_MIN_SECONDS = 60.0
+MAX_SCHEDULED_PER_RELAY = 30
+API_MIN_SPACING_SECONDS = 1.3  # between Tier-3 calls (info / history / replies) of a digest run

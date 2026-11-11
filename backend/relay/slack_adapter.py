@@ -123,6 +123,7 @@ def _parse_user(user: dict, fallback_id: str) -> UserInfo:
         real_name=real,
         handle=handle,
         deleted=bool(user.get("deleted")),
+        tz=user.get("tz") if isinstance(user.get("tz"), str) and user.get("tz") else None,
     )
 
 

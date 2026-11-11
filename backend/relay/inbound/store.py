@@ -17,6 +17,7 @@ from pathlib import Path
 from typing import Any
 
 from . import constants as const
+from . import schedule as sched
 from .constants import (
     MAX_THREAD_RECORDS,
     MONITOR_KINDS,
@@ -37,6 +38,10 @@ class MonitorLimitError(Exception):
     """A monitor cap (per session / per relay) is reached; ``code`` is ``monitor_limit``."""
 
     code = "monitor_limit"
+
+    def __init__(self, scope: str = "session") -> None:
+        super().__init__(scope)
+        self.scope = scope  # "session" | "relay" | "scheduled"
 
 
 class JsonSubscriptionStore:
@@ -74,6 +79,8 @@ class JsonSubscriptionStore:
         index: dict[str, list[str]] = {}
         scope: list[str] = []
         for rid, r in self._records.items():
+            if is_digest(r):
+                continue  # a digest never matches live events: the scheduler is its only reader
             if r.get("kind") in const.SCOPE_KINDS:
                 scope.append(rid)
             elif r.get("kind") in MONITOR_KINDS and r.get("channel"):
@@ -312,18 +319,54 @@ class JsonSubscriptionStore:
 
     def find_monitor(
         self, session_id: str, kind: str, channel: str | None, thread_ts: str | None,
-        filters: dict[str, Any],
+        filters: dict[str, Any], schedule: dict[str, Any] | None = None,
     ) -> dict[str, Any] | None:
+        """The monitor with this identity. A live and a digest monitor of one scope coexist; two
+        digests differ by schedule (anchor and timezone source do not count)."""
+        wanted = sched.identity(schedule)
         for r in self.monitors(session_id):
             if (r["kind"] == kind and r.get("channel") == channel and r.get("thread_ts") == thread_ts
-                    and r.get("filters") == filters):
+                    and r.get("filters") == filters
+                    and (r.get("mode") or const.MODE_LIVE) == (const.MODE_DIGEST if schedule else const.MODE_LIVE)
+                    and sched.identity(r.get("schedule")) == wanted):
                 return r
         return None
+
+    def count_scheduled(self) -> int:
+        return sum(1 for r in self.monitors() if is_digest(r))
+
+    def due_digests(self, now: float) -> list[dict[str, Any]]:
+        """Active, unpaused digests whose slot has arrived (never early), oldest slot first."""
+        due = [
+            r for r in self.monitors()
+            if is_digest(r) and r.get("status") == ACTIVE and not r.get("paused")
+            and r.get("next_run") is not None and float(r["next_run"]) <= now
+        ]
+        due.sort(key=lambda r: (float(r["next_run"]), r["id"]))
+        return due
+
+    async def set_next_run(self, monitor_id: str, next_run: float | None, **fields: Any) -> None:
+        """Persist the next slot (and bookkeeping) immediately, BEFORE a run starts."""
+        async with self._lock:
+            rec = self.get_monitor(monitor_id)
+            if rec is None:
+                return
+            rec["next_run"] = next_run
+            rec.update(fields)
+            await self._persist()
+
+    def _digest_resume(self, rec: dict[str, Any], now: float) -> None:
+        """A resumed digest restarts from now: next slot after now, nothing carried over."""
+        if is_digest(rec) and rec.get("schedule"):
+            rec["next_run"] = sched.next_run_with_jitter(rec["schedule"], rec["id"], now)
+            rec["slot_retries"] = 0
+            rec["slot_defers"] = 0
 
     async def create_monitor(
         self, session_id: str, kind: str, channel: str | None, *, thread_ts: str | None = None,
         filters: dict[str, Any] | None = None, expires_at: float | None = None,
         created_by: str = "agent", consent: dict[str, Any] | None = None,
+        schedule: dict[str, Any] | None = None,
     ) -> tuple[dict[str, Any], str]:
         """Create a monitor, or return the identical existing one. Returns ``(record, outcome)``
         with outcome ``created`` | ``existing`` | ``resumed`` (a flood / delivery-failed monitor
@@ -332,7 +375,7 @@ class JsonSubscriptionStore:
             raise ValueError(f"unknown monitor kind {kind!r}")
         filters = filters or {"keywords": [], "users": []}
         async with self._lock:
-            existing = self.find_monitor(session_id, kind, channel, thread_ts, filters)
+            existing = self.find_monitor(session_id, kind, channel, thread_ts, filters, schedule)
             now = self._clock()
             if existing is not None:
                 if existing["status"] == SUSPENDED and existing.get("suspended_reason") in (
@@ -342,14 +385,17 @@ class JsonSubscriptionStore:
                         status=ACTIVE, suspended_reason=None, last_seen_ts=self._ts(now),
                         last_error=None, failures=0, flood_windows=0,
                     )
+                    self._digest_resume(existing, now)
                     await self._persist()
                     self._changed(session_id)
                     return existing, "resumed"
                 return existing, "existing"
-            if self.count(session_id) >= const.MAX_MONITORS_PER_SESSION or (
-                self.count() >= const.MAX_MONITORS_PER_RELAY
-            ):
-                raise MonitorLimitError()
+            if self.count(session_id) >= const.MAX_MONITORS_PER_SESSION:
+                raise MonitorLimitError("session")
+            if self.count() >= const.MAX_MONITORS_PER_RELAY:
+                raise MonitorLimitError("relay")
+            if schedule and self.count_scheduled() >= const.MAX_SCHEDULED_PER_RELAY:
+                raise MonitorLimitError("scheduled")
             rec = {
                 "id": str(uuid.uuid4()), "relay_id": self._relay_id, "kind": kind,
                 "session_id": session_id, "created_by": created_by, "created_at": now,
@@ -360,6 +406,13 @@ class JsonSubscriptionStore:
                 "counters": {"delivered": 0, "dropped": 0, "coalesced": 0},
                 "recent_keys": [],
             }
+            if schedule:
+                rec.update(
+                    mode=const.MODE_DIGEST, schedule=schedule,
+                    next_run=sched.next_run_with_jitter(schedule, rec["id"], now),
+                    last_run_at=None, last_run=None, run_failures=0, slot_retries=0, slot_defers=0,
+                    last_run_trigger=None,
+                )
             if consent is not None:
                 rec["consent"] = consent  # written only after an approved scope prompt
             self._records[rec["id"]] = rec
@@ -383,6 +436,7 @@ class JsonSubscriptionStore:
                 rec["flood_windows"] = 0
                 if resume_from is not None:
                     rec["last_seen_ts"] = self._ts(resume_from)
+                    self._digest_resume(rec, resume_from)
             await self._persist()
             self._changed(rec.get("session_id"))
             return rec
@@ -400,6 +454,7 @@ class JsonSubscriptionStore:
             if not paused and resume_from is not None:
                 rec["last_seen_ts"] = self._ts(resume_from)
                 rec["recent_keys"] = []
+                self._digest_resume(rec, resume_from)
             await self._persist()
             self._changed(rec.get("session_id"))
             return rec
@@ -460,7 +515,7 @@ class JsonSubscriptionStore:
             gone = []
             for r in list(self.monitors()):
                 expired = r.get("expires_at") is not None and now >= float(r["expires_at"])
-                idle = (r["kind"] == const.KIND_MONITOR_THREAD
+                idle = (r["kind"] == const.KIND_MONITOR_THREAD and not is_digest(r)
                         and now - float(r.get("last_activity_at") or 0) > const.MONITOR_THREAD_IDLE_SECONDS)
                 if expired or idle:
                     gone.append({**self._records.pop(r["id"]), "_expired_reason": "expired" if expired else "idle"})
@@ -468,6 +523,10 @@ class JsonSubscriptionStore:
                 await self._persist()
                 self._changed(*(g.get("session_id") for g in gone))
             return gone
+
+
+def is_digest(record: dict[str, Any]) -> bool:
+    return record.get("mode") == const.MODE_DIGEST
 
 
 def _newer(a: str, b: str | None) -> bool:

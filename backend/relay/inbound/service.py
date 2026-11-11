@@ -35,6 +35,7 @@ from . import content as monitor_content
 from . import public as monitor_public
 from .backfill import BackfillRun, backfill_dms, backfill_mentions
 from .coalescer import BufferedMessage, Coalescer, SessionBuffer
+from .digest import DigestScheduler, RunNowRefusedError
 from .dispatch import format_instruction, instruction_summary
 from .health import (
     RECONNECTING_LONG_SECONDS,
@@ -132,6 +133,8 @@ class InboundService:
         search_sleep: Callable[[float], Awaitable[None]] | None = None,
         rerun_sleep: Callable[[float], Awaitable[None]] | None = None,
         attention_sleep: Callable[[float], Awaitable[None]] | None = None,
+        digest_sleep: Callable[[float], Awaitable[None]] | None = None,
+        api_sleep: Callable[[float], Awaitable[None]] | None = None,
     ) -> None:
         self.relay_id = relay_id
         self._manager = relay_manager
@@ -186,6 +189,12 @@ class InboundService:
         self._reconnect_task: asyncio.Task | None = None
         self._rerun_sessions: set[str | None] = set()
         self._gaps: dict[str, tuple[float, float]] = {}  # session -> incomplete backfill period
+        # --- scheduled digests (3c-i): own clock (never the supervisor's), shared Tier-3 spacing
+        self._digest_sleep = digest_sleep or asyncio.sleep
+        self.api_limiter = SearchLimiter(mono, api_sleep or asyncio.sleep, const.API_MIN_SPACING_SECONDS)
+        self.digest = DigestScheduler(self)
+        self.owner_tz: str | None = None  # the owner's Slack timezone, cached by ``resolve_owner_tz``
+        self._owner_tz_at = -1e9
 
     # ------------------------------------------------------------- lifecycle
 
@@ -225,6 +234,7 @@ class InboundService:
             loop.create_task(self._supervise(), name=f"inbound-supervisor-{self.relay_id}"),
             loop.create_task(self._housekeeping_loop(), name=f"inbound-housekeeping-{self.relay_id}"),
         ]
+        self.digest.start()
         if self.store.monitors():  # policies / attachments may have changed while the Backend was down
             self._spawn(self.reevaluate_all())
             self.refresh_monitor_sessions()  # summaries were computed before the store was loaded
@@ -240,6 +250,7 @@ class InboundService:
         for t in tasks:
             t.cancel()
         await asyncio.gather(*tasks, return_exceptions=True)
+        await self.digest.stop()  # a run in progress is cancelled: nothing enqueued, cursors untouched
         await self.coalescer.stop()  # buffers are dropped without enqueue; cursors stay durable
         await self.watcher.stop()
         self._tasks = []
@@ -1029,6 +1040,8 @@ class InboundService:
             await self.reevaluate(session_id)
             if restored:
                 self._spawn(self.backfill_monitors(session_id))
+                if any(m.get("mode") == const.MODE_DIGEST for m in restored):
+                    self._spawn(self.digest.tick())  # a slot missed while disposed runs once
 
     def has_thread_grant(self, session_id: str, channel: str, thread_ts: str) -> bool:
         record = self.record
@@ -1052,6 +1065,61 @@ class InboundService:
             return "no_user_token"
         return None
 
+    def digest_eligibility(self) -> str | None:
+        """None when digests can run: they need only the user token (REST) and the owner's inbound
+        switch, not the Socket Mode connection."""
+        record = self.record
+        if record is None:
+            return "relay_missing"
+        if not record.inbound_enabled:
+            return "disabled_by_owner"
+        if not self._manager.has_token(self.relay_id, "user"):
+            return "no_user_token"
+        return None
+
+    async def resolve_owner_tz(self) -> str | None:
+        """The owner's Slack timezone (``users.info``), cached for an hour; None when unknown."""
+        record = self.record
+        owner = getattr(record, "owner_user_id", None)
+        if not owner:
+            return None
+        now = self._mono()
+        if self.owner_tz is not None and now - self._owner_tz_at < 3600:
+            return self.owner_tz
+        try:
+            info = await self._manager.adapter_for(self.relay_id).user_info(owner)
+        except Exception:
+            logger.debug("Owner timezone lookup failed", exc_info=True)
+            return self.owner_tz
+        tz = getattr(info, "tz", None)
+        if isinstance(tz, str) and tz:
+            self.owner_tz, self._owner_tz_at = tz, now
+        return self.owner_tz
+
+    async def run_monitor_now(
+        self, monitor_id: str, *, trigger: str, session_id: str | None = None
+    ) -> dict[str, Any]:
+        """Start an immediate digest run (``agent`` 5 min / ``manual`` 60 s spacing). Every attempt,
+        accepted or refused, is audited. Returns ``{"ok": True}`` or ``{"ok": False, code, message}``."""
+        rec = self.store.get_monitor(monitor_id)
+        source = "agent" if trigger == "agent" else "owner"
+        try:
+            result = self.digest.request_run_now(session_id, monitor_id, trigger=trigger)
+        except RunNowRefusedError as e:
+            owned = rec is not None and (session_id is None or rec.get("session_id") == session_id)
+            await self._rec(
+                event="monitor_digest", outcome="refused", code=e.code, source=source,
+                session_id=rec["session_id"] if owned else session_id,
+                monitor_id=monitor_id if owned else None,
+            )
+            return {"ok": False, "code": e.code, "message": e.message, **e.extra}
+        await self._rec(
+            event="monitor_digest", outcome="accepted", code="run_now", source=source,
+            session_id=rec["session_id"], monitor_id=monitor_id, monitor_kind=rec["kind"],
+            channel_id=rec.get("channel"),
+        )
+        return {"ok": True, **result}
+
     @staticmethod
     def _ts_str(now: float) -> str:
         return f"{now:.6f}"
@@ -1060,10 +1128,11 @@ class InboundService:
         self, session_id: str, kind: str, channel: str | None, *, thread_ts: str | None,
         filters: dict[str, Any], expires_at: float | None, consent: dict[str, Any] | None = None,
         approval: str | None = None, prompt_via: str | None = None,
+        schedule: dict[str, Any] | None = None,
     ) -> tuple[dict[str, Any], str]:
         record, outcome = await self.store.create_monitor(
             session_id, kind, channel, thread_ts=thread_ts, filters=filters, expires_at=expires_at,
-            consent=consent,
+            consent=consent, schedule=schedule,
         )
         self._high_water[record["id"]] = record["last_seen_ts"]
         if outcome in ("created", "resumed"):
@@ -1074,6 +1143,7 @@ class InboundService:
                 channel_id=channel, thread_ts=thread_ts, count=len(keywords),
                 query_sha256=hashlib.sha256("\n".join(keywords).encode()).hexdigest() if keywords else None,
                 source="agent", approval=approval, prompt_via=prompt_via,
+                **({"code": "digest"} if schedule else {}),
             )
         return record, outcome
 
@@ -1350,15 +1420,32 @@ class InboundService:
         if not included:
             self._advance_unqueued_cover(cover)
             return
+        gap = self._gaps.pop(session_id, None)  # an incomplete backfill is announced once, on the next envelope
+        minutes = round((self._now() - buf.opened_at) / 60) or 1
+        comm_id = await self._enqueue_envelope(
+            session_id, included, omitted_by_channel, cover, kind="live", minutes=minutes, gap=gap,
+            older_omitted=buf.older_omitted,
+        )
+        if comm_id is None and gap:
+            self._gaps.setdefault(session_id, gap)
+
+    async def _enqueue_envelope(
+        self, session_id: str, included: list[BufferedMessage], omitted_by_channel: Counter,
+        cover: dict[str, str], *, kind: str, minutes: int = 1,
+        gap: tuple[float, float] | None = None, older_omitted: bool = False,
+        since: float | None = None, notice: str | None = None, watch_info: dict[str, Any] | None = None,
+    ) -> str | None:
+        """Build and enqueue ONE envelope (live coalesced flush or a digest run). Returns its comm id, or None when
+        the enqueue failed (``_monitor_failed`` has run: cursors stay)."""
+        digest = kind == "digest"
         entries = await self._build_entries(included)
         monitor_ids = sorted({mid for m in included for mid in m.monitor_ids})
-        minutes = round((self._now() - buf.opened_at) / 60) or 1
-        gap = self._gaps.pop(session_id, None)  # an incomplete backfill is announced once, on the next envelope
         dispatch = monitor_content.build_dispatch(
             entries, monitor_count=len(monitor_ids), minutes=minutes,
-            omitted_by_channel=dict(omitted_by_channel), older_omitted=buf.older_omitted, gap=gap,
+            omitted_by_channel=dict(omitted_by_channel), older_omitted=older_omitted, gap=gap,
+            kind=kind, since=since, notice=notice,
         )
-        summary = monitor_content.monitor_summary(len(included))
+        summary = monitor_content.digest_summary(len(included)) if digest else monitor_content.monitor_summary(len(included))
         keys = [f"{m.event.channel}:{m.event.ts}" for m in included]
         attempt = 0
         comm_id = monitor_comm_id(self.relay_id, session_id, keys)
@@ -1368,7 +1455,8 @@ class InboundService:
         omitted_total = sum(omitted_by_channel.values())
         metadata = {
             "comm": {
-                "from_name": "slack-monitor", "from_display_name": "Slack monitor",
+                "from_name": "slack-digest" if digest else "slack-monitor",
+                "from_display_name": "Slack digest" if digest else "Slack monitor",
                 "comm_type": "info", "summary": summary, "content": summary,
             },
             "relay_inbound": {
@@ -1376,6 +1464,8 @@ class InboundService:
                 "count": len(included), "omitted": omitted_total, "envelope_id": comm_id,
             },
         }
+        if digest:
+            metadata["relay_inbound"]["mode"] = "digest"
         counts: dict[str, int] = {}
         keys_by_monitor: dict[str, list[str]] = {}
         for m in included:
@@ -1387,7 +1477,7 @@ class InboundService:
         entry = WatchEntry(
             "monitor", session_id, comm_id, self._now(), cover=cover,
             info={"counts": counts, "count": len(included), "omitted": omitted_total, "enqueuing": True,
-                  "keys": keys_by_monitor},
+                  "keys": keys_by_monitor, **({"digest": True, **(watch_info or {})} if digest else {})},
         )
         self.watcher.watch(entry)
         try:
@@ -1399,14 +1489,13 @@ class InboundService:
             logger.exception("Monitor delivery failed")
             outcome = DeliveryOutcome("failed", "exception")
         if outcome.status == "failed":
-            if gap:
-                self._gaps.setdefault(session_id, gap)
             self.watcher.entries.pop(comm_id, None)
             await self._monitor_failed(
                 list(cover), comm_id, outcome.error or "enqueue_failed", len(included)
             )
-            return
-        self.coalescer.envelopes.record(session_id)
+            return None
+        if not digest:
+            self.coalescer.envelopes.record(session_id)
         entry.info.pop("enqueuing", None)
         # a monitor removed / suspended while we were building and enqueueing: undo, do not deliver
         stale = {
@@ -1415,6 +1504,7 @@ class InboundService:
         }
         if stale:
             await self._cancel_pending_for(stale)
+        return comm_id
 
     def _advance_unqueued_cover(self, cover: dict[str, str]) -> None:
         """Nothing was delivered but messages were consumed (flood-dropped / tallied): move the
@@ -1493,6 +1583,11 @@ class InboundService:
                 )
                 self.store.bump_counters(mid, delivered=int(entry.info.get("counts", {}).get(mid, 0)))
                 self.store.note_delivered_keys(mid, (entry.info.get("keys") or {}).get(mid) or [])
+                if entry.info.get("digest"):
+                    self.store.touch_monitor(
+                        mid, last_run_at=now, run_failures=0, slot_retries=0,
+                        last_run={**(entry.info.get("digest_run") or {}), "outcome": "delivered"},
+                    )
             await self._rec(
                 event="monitor_delivered", outcome="ok", session_id=entry.session_id,
                 envelope_id=entry.comm_id, count=entry.info.get("count"),
@@ -1528,6 +1623,12 @@ class InboundService:
                 continue
             failures = int(rec.get("failures") or 0) + 1
             self.store.touch_monitor(mid, failures=failures, last_error=safe_error_code(error)[:60])
+            if rec.get("mode") == const.MODE_DIGEST:
+                self.store.touch_monitor(
+                    mid, run_failures=int(rec.get("run_failures") or 0) + 1,
+                    last_run={"at": self._now(), "outcome": "failed", "messages": count, "omitted": 0,
+                              "gap": False, "late": False},
+                )
             self._hold.add(mid)
             self._high_water[mid] = rec.get("last_seen_ts") or self._ts_str(self._now())
             if failures >= const.DELIVERY_FAILURES_TO_SUSPEND and rec["status"] == ACTIVE:
@@ -1573,8 +1674,8 @@ class InboundService:
         mentions: list[dict[str, Any]] = []
         dms: list[dict[str, Any]] = []
         for m in list(self.store.monitors(session_id)):
-            if m["status"] != ACTIVE or m.get("paused"):
-                continue
+            if m["status"] != ACTIVE or m.get("paused") or m.get("mode") == const.MODE_DIGEST:
+                continue  # a digest has its own catch-up: the scheduler
             if m["kind"] in const.SCOPE_KINDS:
                 self._reset_hold(m)
                 (mentions if m["kind"] == const.KIND_MONITOR_MENTIONS else dms).append(m)

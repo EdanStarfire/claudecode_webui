@@ -37,14 +37,30 @@ class FakeMonitorService:
     def __init__(self, tmp_path) -> None:
         self.store = JsonSubscriptionStore(tmp_path / "mon", "relay1")
         self.problem: str | None = None
+        self.digest_problem: str | None = None
+        self.owner_tz: str | None = "Europe/Paris"
+        self.run_now_calls: list = []
+        self.run_now_result: dict = {"ok": True, "started": True}
         self.created: list = []
 
     def monitor_eligibility(self):
         return self.problem
 
-    async def create_monitor(self, session_id, kind, channel, *, thread_ts, filters, expires_at):
+    def digest_eligibility(self):
+        return self.digest_problem
+
+    async def resolve_owner_tz(self):
+        return self.owner_tz
+
+    async def run_monitor_now(self, monitor_id, *, trigger, session_id=None):
+        self.run_now_calls.append((monitor_id, trigger, session_id))
+        return self.run_now_result
+
+    async def create_monitor(self, session_id, kind, channel, *, thread_ts, filters, expires_at,
+                             schedule=None, **_kw):
         rec, outcome = await self.store.create_monitor(
-            session_id, kind, channel, thread_ts=thread_ts, filters=filters, expires_at=expires_at)
+            session_id, kind, channel, thread_ts=thread_ts, filters=filters, expires_at=expires_at,
+            schedule=schedule)
         self.created.append(rec["id"])
         return rec, outcome
 
@@ -90,7 +106,7 @@ class TestRegistration:
     async def test_tools_are_in_the_spec(self, h):
         from backend.relay.adapters import SLACK_SPEC
         assert SLACK_SPEC.monitor_tools == {"monitor_thread", "monitor_channel", "unmonitor", "list_monitors",
-                                            "monitor_mentions", "monitor_dms"}
+                                            "monitor_mentions", "monitor_dms", "run_monitor_now"}
         assert not (SLACK_SPEC.monitor_tools & SLACK_SPEC.write_tools)  # never send tools
         assert SLACK_SPEC.tool_actions["monitor_thread"] == SLACK_SPEC.tool_actions["monitor_channel"] == "read"
         assert SLACK_SPEC.tool_actions["unmonitor"] is None and SLACK_SPEC.tool_actions["list_monitors"] is None
