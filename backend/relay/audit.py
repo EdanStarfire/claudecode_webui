@@ -38,7 +38,7 @@ _FIELDS = (
     "text_preview", "query_sha256", "query_preview", "kinds", "result_count",
     "old_policy", "source", "tier", "tier_id", "tier_name",
     "inbound_status", "count", "reason_counts",
-    "monitor_id", "monitor_kind", "envelope_id", "omitted",
+    "monitor_id", "monitor_kind", "envelope_id", "omitted", "retry",
 )
 QUERY_PREVIEW_LEN = 40
 

@@ -22,6 +22,7 @@ from .adapter import RelayAdapter, RelayError
 from .adapters import SPECS, AdapterSpec, get_spec, parse_relay_tool
 from .directory import DirectoryLookupError, RelayDirectory
 from .grants import Grant, GrantStore
+from .inbound.schedule import describe_raw
 from .names import NameResolver
 from .policy import ALLOW, CHOOSE_POLICY, DENY, PROMPT
 from .safety import contains_trigger_syntax, safe_error_code, wrap_untrusted
@@ -293,7 +294,8 @@ class RelayPolicyGate:
         if tool == "mark_read":
             return f"mark read up to {args.get('ts') or 'latest'}"
         if tool == "monitor_thread":
-            return f"monitor thread {args.get('thread_ts')}: new replies will be delivered to the session"
+            return (f"monitor thread {args.get('thread_ts')}: new replies will be delivered to the session"
+                    + RelayPolicyGate._digest_suffix(args))
         if tool == "monitor_channel":
             keywords = [_PLAIN_RE.sub(" ", str(k)) for k in (
                 args.get("keywords") if isinstance(args.get("keywords"), list) else [])]
@@ -303,7 +305,8 @@ class RelayPolicyGate:
                 f"keywords: {', '.join(map(str, keywords))}"[:300] if keywords else "",
                 f"users: {', '.join(map(str, users))}"[:300] if users else "",
             ) if p)
-            return f"monitor channel ({filters or 'no filter'}): matching messages will be delivered to the session"
+            return (f"monitor channel ({filters or 'no filter'}): matching messages will be delivered "
+                    "to the session" + RelayPolicyGate._digest_suffix(args))
         return ""
 
     async def evaluate(
@@ -428,9 +431,18 @@ class RelayPolicyGate:
             "kind": "monitor_scope", "tool": tool, "action": "monitor_scope", "scope": scope,
             "filters_summary": self._filters_summary(args),
             "relay_name": _PLAIN_RE.sub(" ", str(getattr(record, "name", "") or ""))[:80],
-            "text": SCOPE_PROMPT_TEXT[scope],
+            "text": SCOPE_PROMPT_TEXT[scope] + self._digest_suffix(args),
         }
+        if args.get("schedule") is not None:
+            prompt["schedule"] = describe_raw(args.get("schedule"))
         return GateResult(PROMPT, tool, "monitor_scope", prompt=prompt)
+
+    @staticmethod
+    def _digest_suffix(args: dict[str, Any]) -> str:
+        """The consent names the schedule: what is delivered, and when."""
+        if args.get("schedule") is None:
+            return ""
+        return f" It will be delivered as a digest at {describe_raw(args['schedule'])}, only when there is content."
 
     @staticmethod
     def _filters_summary(args: dict[str, Any]) -> str:

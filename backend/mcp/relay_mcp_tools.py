@@ -115,6 +115,18 @@ _MONITOR_NOTE = (
 )
 
 
+_SCHEDULE_DOC = (
+    "Optional `schedule` makes this a DIGEST instead of a live monitor: "
+    "{\"daily\": {\"times\": [\"09:00\", \"17:00\"], \"days\": [\"mon\", \"tue\"], \"timezone\": "
+    "\"Europe/Paris\"}} (1-4 times, 24 h; days optional = every day; timezone optional = the owner's "
+    "Slack timezone, UTC when Slack does not tell: the result always states the timezone used) or "
+    "{\"every_minutes\": 120} (at least 30). No `schedule` = live: matching messages arrive about a "
+    "minute after they are posted. With `schedule` = a DIGEST: one message at the scheduled times, "
+    "only when there is content (never a message or a session start for an empty period); a slot "
+    "missed while the Backend was down runs once afterwards. A digest and a live monitor on the "
+    "same scope repeat the same messages. Use `run_monitor_now` to get a digest immediately."
+)
+
 _SCOPE_CONSENT_NOTE = (
     "The first creation asks the owner ONE plain-language consent question (also in bypass "
     "mode); it is REFUSED, not prompted, in don't-ask mode and in unattended sessions "
@@ -351,6 +363,18 @@ class RelayMCPTools:
             "description": "Only messages from these people: user IDs (U…) or @names.",
         }
         expiry_doc = {**s, "description": "Optional ISO-8601 expiry (at most 90 days ahead)."}
+        schedule_doc = {
+            "type": "object",
+            "description": "Optional digest schedule: {daily: {times, days?, timezone?}} or {every_minutes}.",
+            "properties": {
+                "daily": {"type": "object", "properties": {
+                    "times": {"type": "array", "items": s, "maxItems": 4},
+                    "days": {"type": "array", "items": {}},
+                    "timezone": s,
+                }},
+                "every_minutes": {"type": "integer", "minimum": 30, "maximum": 1440},
+            },
+        }
 
         @tool(
             "monitor_thread",
@@ -358,11 +382,11 @@ class RelayMCPTools:
             f"coalesced message about a minute later. {_CHANNEL_DOC} Follows the read policy of the "
             "channel (blocked refused; no policy prompts the owner, refused instead in don't-ask "
             "mode and unattended sessions). The user must be a member of the channel; the user's "
-            f"self-DM and DMs cannot be monitored. {_MONITOR_NOTE}",
+            f"self-DM and DMs cannot be monitored. {_MONITOR_NOTE} {_SCHEDULE_DOC}",
             schema(
                 {"channel": {**s, "description": _CHANNEL_DOC},
                  "thread_ts": {**s, "description": "Timestamp of the thread's parent message."},
-                 "expires_at": expiry_doc},
+                 "expires_at": expiry_doc, "schedule": schedule_doc},
                 ["channel", "thread_ts"],
             ),
             annotations=_MARK,
@@ -376,11 +400,11 @@ class RelayMCPTools:
             "coalesced message about a minute later. At least one filter is required: `keywords` "
             "(any of them, case/accent-insensitive substring) and/or `users` (any of them); both "
             f"given means both must match. {_CHANNEL_DOC} Same policy, membership and DM rules as "
-            f"monitor_thread. {_MONITOR_NOTE}",
+            f"monitor_thread. {_MONITOR_NOTE} {_SCHEDULE_DOC}",
             schema(
                 {"channel": {**s, "description": _CHANNEL_DOC},
                  "keywords": {"type": "array", "items": s, "maxItems": 10},
-                 "users": users_doc, "expires_at": expiry_doc},
+                 "users": users_doc, "expires_at": expiry_doc, "schedule": schedule_doc},
                 ["channel"],
             ),
             annotations=_MARK,
@@ -394,10 +418,10 @@ class RelayMCPTools:
             "user groups), in any conversation they are in, delivered to this session as ONE "
             "coalesced message about a minute later. Optional filters: `keywords` (any, "
             "case/accent-insensitive substring) and/or `users` (any sender); both given means "
-            f"both must match. {_SCOPE_CONSENT_NOTE}",
+            f"both must match. {_SCOPE_CONSENT_NOTE} {_SCHEDULE_DOC}",
             schema(
                 {"keywords": {"type": "array", "items": s, "maxItems": 10},
-                 "users": users_doc, "expires_at": expiry_doc},
+                 "users": users_doc, "expires_at": expiry_doc, "schedule": schedule_doc},
                 [],
             ),
             annotations=_MARK,
@@ -410,10 +434,10 @@ class RelayMCPTools:
             "Watch the direct and group messages other people send the user, delivered to this "
             "session as ONE coalesced message about a minute later. Optional filters: `keywords` "
             "(any) and/or `users` (any sender); both given means both must match. "
-            f"{_SCOPE_CONSENT_NOTE}",
+            f"{_SCOPE_CONSENT_NOTE} {_SCHEDULE_DOC}",
             schema(
                 {"keywords": {"type": "array", "items": s, "maxItems": 10},
-                 "users": users_doc, "expires_at": expiry_doc},
+                 "users": users_doc, "expires_at": expiry_doc, "schedule": schedule_doc},
                 [],
             ),
             annotations=_MARK,
@@ -429,6 +453,18 @@ class RelayMCPTools:
         )
         async def unmonitor_tool(args: dict[str, Any]) -> dict[str, Any]:
             return await mon.handle_unmonitor(session_id, args)
+
+        @tool(
+            "run_monitor_now",
+            "Run one of this session's DIGEST monitors now (see list_monitors; only monitors with a "
+            "schedule). Returns immediately; the digest arrives later and ONLY if there is content. "
+            "At most once every 5 minutes per monitor; refused for paused or suspended monitors. "
+            "The scheduled slots are not changed.",
+            schema({"monitor_id": s}, ["monitor_id"]),
+            annotations=_MARK,
+        )
+        async def run_monitor_now_tool(args: dict[str, Any]) -> dict[str, Any]:
+            return await mon.handle_run_now(session_id, args)
 
         @tool(
             "list_monitors",
@@ -447,7 +483,7 @@ class RelayMCPTools:
                 post_tool, reply_tool, read_thread_tool, search_tool, upload_tool, react_tool,
                 mark_read_tool, get_identity_tool, find_channels_tool, monitor_thread_tool,
                 monitor_channel_tool, monitor_mentions_tool, monitor_dms_tool, unmonitor_tool,
-                list_monitors_tool,
+                run_monitor_now_tool, list_monitors_tool,
             ],
         )
 

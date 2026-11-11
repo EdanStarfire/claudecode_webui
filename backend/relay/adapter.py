@@ -103,6 +103,7 @@ class UserInfo:
     real_name: str | None = None
     handle: str | None = None  # the Slack ``name`` field
     deleted: bool = False
+    tz: str | None = None  # IANA timezone Slack reports for the user (users.info ``tz``)
 
 
 EventHandler = Callable[[Any], Awaitable[None]]

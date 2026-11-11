@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import logging
 from collections import Counter
+from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any
 
@@ -52,6 +53,17 @@ class BackfillRun:
     counts: Counter = field(default_factory=Counter)
     gap: bool = False
     gap_from: float | None = None
+    # --- digest runs (3c-i): collect instead of buffering, own window / hydration cap, paced calls
+    digest: bool = False
+    sink: Callable[[Any, dict[str, Any], bool], None] | None = None
+    hydration_cap: int = const.HYDRATION_CAP
+    max_age: float = const.MONITOR_BACKFILL_MAX_AGE_SECONDS
+    pacer: Callable[[], Awaitable[None]] | None = None
+
+    async def pace(self) -> None:
+        """Digest runs space their Tier-3 calls (shared limiter); live backfills do not."""
+        if self.pacer is not None:
+            await self.pacer()
 
     def note_gap(self, since: float) -> None:
         self.gap = True
@@ -63,14 +75,15 @@ def monitor_cutoff(svc: InboundService, monitor: dict[str, Any], run: BackfillRu
     never older than the 24 h cap)."""
     mid = monitor["id"]
     durable = monitor.get("last_seen_ts") or f"{run.now:.6f}"
-    high = svc._high_water.get(mid) or durable
-    floor = run.now - const.MONITOR_BACKFILL_MAX_AGE_SECONDS
+    # a digest re-reads from its durable cursor only: nothing is buffered, so no high water exists
+    high = durable if run.digest else (svc._high_water.get(mid) or durable)
+    floor = run.now - run.max_age
     return max(_tsf(high), floor) - const.BACKFILL_MARGIN_SECONDS
 
 
 def _older_omitted(monitor: dict[str, Any], run: BackfillRun) -> bool:
     durable = monitor.get("last_seen_ts") or f"{run.now:.6f}"
-    return _tsf(durable) < run.now - const.MONITOR_BACKFILL_MAX_AGE_SECONDS
+    return _tsf(durable) < run.now - run.max_age
 
 
 def _deliver(
@@ -86,7 +99,10 @@ def _deliver(
         if _tsf(event.ts) <= monitor_cutoff(svc, m, run):
             continue
         if matches_monitor(event, m, owner):
-            svc.coalescer.add(event, [m], older_omitted=_older_omitted(m, run))
+            if run.sink is not None:
+                run.sink(event, m, _older_omitted(m, run))
+            else:
+                svc.coalescer.add(event, [m], older_omitted=_older_omitted(m, run))
 
 
 # ------------------------------------------------------------------------------ DMs / MPIMs
@@ -101,6 +117,7 @@ async def backfill_dms(
     owner, self_dm = record.owner_user_id, record.self_dm_channel_id
     ctx = svc._match_context()
     try:
+        await run.pace()
         conversations = await adapter.list_conversations(types="im,mpim", limit=1000)
     except RelayError as e:
         run.counts["rate_limited" if e.code == "ratelimited" else "list_failed"] += 1
@@ -115,12 +132,14 @@ async def backfill_dms(
     oldest = min(cutoffs.values())
     for conv in conversations:  # serialized: one Slack call at a time
         try:
+            await run.pace()
             info = await adapter.conversation_info(conv.id)
             channel_type = "mpim" if (info.is_mpim or conv.is_mpim) else "im"
             if info.latest_ts is not None and _tsf(info.latest_ts) <= oldest:
                 continue  # nothing newer than every cursor: no history call needed
             page_cursor: str | None = None
             for page_no in range(const.BACKFILL_MAX_PAGES):
+                await run.pace()
                 page = await adapter.read_history(
                     conv.id, limit=const.BACKFILL_PAGE_SIZE, oldest=f"{oldest:.6f}", cursor=page_cursor
                 )
@@ -163,6 +182,7 @@ async def backfill_mentions(
     cutoffs = {m["id"]: monitor_cutoff(svc, m, run) for m in monitors}
     stop_at = min(cutoffs.values())
     try:
+        await run.pace()
         member_of = {
             c.id for c in await adapter.list_conversations(
                 types="public_channel,private_channel,mpim,im", limit=5000
@@ -204,12 +224,13 @@ async def backfill_mentions(
             if not needing:
                 continue  # already known: costs no call
             if key not in run.cache:
-                if run.hydrations >= const.HYDRATION_CAP:
+                if run.hydrations >= run.hydration_cap:
                     run.counts["hydration_cap"] += 1
                     run.note_gap(stop_at)
                     continue
                 run.hydrations += 1
                 try:
+                    await run.pace()
                     run.cache[key] = await hydrate(adapter, channel, ts, msg.permalink)
                 except HydrationRateLimitedError:
                     run.counts["rate_limited"] += 1
@@ -233,3 +254,52 @@ async def backfill_mentions(
     if not done:
         run.counts["truncated"] += 1  # the search pages ran out before the cursor was reached
         run.note_gap(stop_at)
+
+
+# ------------------------------------------------------------- thread / channel (digest runs)
+
+
+async def collect_thread_or_channel(
+    svc: InboundService, adapter: RelayAdapter, monitor: dict[str, Any], run: BackfillRun
+) -> None:
+    """A thread / channel digest's window: replies of the thread (or top-level history of the
+    channel) since the cursor, judged exactly like live events, handed to ``run.sink``."""
+    cutoff = monitor_cutoff(svc, monitor, run)
+    ctx = svc._match_context()
+    is_thread = monitor["kind"] == const.KIND_MONITOR_THREAD
+    page_cursor: str | None = None
+    messages = []
+    try:
+        for page_no in range(const.BACKFILL_MAX_PAGES):
+            await run.pace()
+            if is_thread:
+                page = await adapter.read_thread(
+                    monitor["channel"], monitor["thread_ts"], const.BACKFILL_PAGE_SIZE, page_cursor,
+                    oldest=f"{cutoff:.6f}",
+                )
+            else:
+                page = await adapter.read_history(
+                    monitor["channel"], limit=const.BACKFILL_PAGE_SIZE, oldest=f"{cutoff:.6f}",
+                    cursor=page_cursor,
+                )
+            messages.extend(page.messages)
+            page_cursor = page.next_cursor
+            if not page_cursor:
+                break
+            if page_no == const.BACKFILL_MAX_PAGES - 1:
+                run.counts["truncated"] += 1
+                run.note_gap(cutoff)
+    except RelayError as e:
+        run.counts["rate_limited" if e.code == "ratelimited" else "fetch_failed"] += 1
+        run.note_gap(cutoff)
+        return
+    owner = ctx.owner_user_id
+    for msg in sorted(messages, key=lambda x: _tsf(x.ts)):
+        if _tsf(msg.ts) <= cutoff:
+            continue
+        event = event_from_message(svc.relay_id, msg, monitor["channel"], channel_type=None)
+        if isinstance(event, Drop):
+            continue
+        if event.thread_ts is None and is_thread:
+            event.thread_ts = monitor["thread_ts"]
+        _deliver(svc, event, [monitor], run, ctx, owner)

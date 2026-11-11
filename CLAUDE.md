@@ -781,6 +781,61 @@ frontend in `frontend/CLAUDE.md`.
   envelope, produced by a real `InboundService` through the real `DeliveryGate`, stored with `MessageRecord.from_user_input`) to the seeded
   sessions' `messages.jsonl`.
 
+### Relay inbound: scheduled digest monitors (3c-i)
+
+Stage 3c-i adds `mode="digest"` to the four monitor kinds (thread, channel, mentions, DMs): the optional `schedule`
+parameter of `monitor_thread|monitor_channel|monitor_mentions|monitor_dms` turns a live monitor into a DIGEST: ONE
+message at the scheduled times, only when there is content. Unread monitors (3c-ii) and the UI / attention / owner
+run-now (3c-iii) are later stages. Code: `relay/inbound/{schedule,digest}.py`, `backfill.py::collect_thread_or_channel`,
+`service.py::_enqueue_envelope`.
+
+- **Schedule** (`schedule.py`, pure): `{"daily": {"times": ["09:00","17:00"] (1-4, 24 h), "days"?: [mon..sun | 0-6],
+  "timezone"?: IANA}}` or `{"every_minutes": N}` (30-1440); exactly one form, unknown keys -> `invalid_schedule`. Timezone is
+  resolved at creation: explicit -> the owner's Slack tz (`users.info.tz`, cached 1 h in `InboundService.owner_tz`) -> UTC
+  fallback. **Tool results, `list_monitors` and the consent prompt always state the schedule in words, the timezone and its
+  source (`slack|explicit|utc_fallback`) and `next_run` (UTC + local)**. `next_run_after` is strictly after the given instant;
+  a nonexistent local time (spring-forward) runs at the first valid instant after the gap, an ambiguous one (fall-back) at
+  its first occurrence; a deterministic 0-90 s per-monitor jitter is added to the slot.
+- **Record**: `mode`, `schedule`, persisted `next_run`, `last_run_at`, `last_run {at,outcome,messages,omitted,gap,late}`,
+  `run_failures`, `slot_retries`, `slot_defers`, `last_run_trigger`, `last_manual_run_at`. Identity gains `(mode, schedule)`
+  (anchor and tz source do not count): a live and a digest monitor of one scope coexist, an identical digest is
+  `already_monitored` (no consent prompt for scope kinds). `_reindex` skips digests (**they never match live events**), the
+  `hello` / session-start backfill skips them (the scheduler is their catch-up). Caps: the shared 20 / 100 plus
+  `MAX_SCHEDULED_PER_RELAY = 30`. The 14-day thread idle rule does not apply to digests; `expires_at` does.
+- **Scheduler** (`DigestScheduler`, 30 s tick, own sleep): due = active, unpaused, `next_run <= now` (never early); oldest slot
+  first, <= 3 runs per tick, serialized relay-wide; `next_run` is recomputed and fsynced BEFORE the run (a crash never re-runs
+  a slot); several missed slots produce ONE run (`late` when > 2 ticks overdue, audit code `late`); a 30 s startup delay after
+  the service starts. Digests need only the user token and the owner's `inbound_enabled` switch (`digest_eligibility`), **not**
+  the Socket Mode connection or app token. Pause/resume and policy resume recompute `next_run` after now and start the cursor
+  from now; dispose suspends, start restores and triggers a due-check.
+- **A run** (`_run`): fresh `apply_policy` (blocked / unset suspend), window `max(cursor, now - 72 h)` (`older_omitted`), the
+  existing strategies through a collecting sink (`BackfillRun.digest/sink/hydration_cap/pacer`), shared Tier-3 spacing
+  (`api_limiter`, >= 1.3 s) plus the 6 s search limiter, mentions hydration cap **40** (hits beyond it are never delivered; the
+  next envelope's line outside the fence states the counts, e.g. "12 mentions could not be checked (hydration limit)"; audit
+  `reason_counts`). **Empty -> no envelope, no session start**, the cursor moves to run start - 60 s. Content -> ONE envelope per
+  monitor run (same caps as live, `+N more` tally, blocked-channel messages dropped for scope digests) through the shared
+  `_enqueue_envelope` (Comm shape unchanged, `relay_inbound.mode="digest"`, CommCard "Slack digest", queue label
+  `Slack digest: N messages`, framing "scheduled digest ... untrusted"). Cursor-on-confirm, 3 failures -> `delivery_failed`.
+- **Defer / rate limits**: a session already holding `MAX_PENDING_ENVELOPES` monitor comms defers the run 10 min, up to 6 times,
+  then enqueues anyway (audited each time). A `ratelimited` anywhere stops the run: rescheduled +5 min up to 3 times per slot
+  (audit `rate_limited_rescheduled` + `retry`), then the slot is given up (`rate_limited_gave_up`), next regular slot and a gap
+  notice on the next envelope.
+- **`run_monitor_now(monitor_id)`**: own digest monitors only; refusals `monitor_not_found`, `not_a_digest_monitor`,
+  `monitor_paused`, `monitor_suspended`, `run_too_soon` (agent 5 min; owner 60 s in 3c-iii), `run_in_progress`,
+  `inbound_unavailable`. Returns at once (the run is a background task serialized with the loop), never changes `next_run`,
+  every attempt is audited (`monitor_digest`, `source=agent|owner`).
+- **Consent**: channel / thread digests follow the channel read policy exactly as live monitors; mentions / DMs digests ask
+  once (`monitor_scope`, the text and `prompt.schedule` name the digest schedule); an identical existing digest returns
+  without a prompt (`InboundManager.scope_monitor_exists` parses the schedule with the cached owner tz; unknown tz -> prompt).
+- **Audit**: `monitor_digest` (`outcome` delivered|empty|rate_limited|deferred|refused|failed|accepted, `code`, `count`,
+  `omitted`, `reason_counts`, `envelope_id`, `retry`, `source` schedule|late|agent|owner); `monitor_created` carries
+  `code=digest`. No message text.
+- **Known limitations**: #2362 (the pending queue is not recovered across a restart; the cursor moves only on confirmed delivery so
+  the next digest re-collects, at-least-once); a digest and a live monitor on the same scope repeat messages by design (tool
+  descriptions and the creation result say so); two Backends with one app token disturb live monitors, not digests, but each
+  runs the digests of its own monitors; edits are not redelivered; Slack search lags (60 s margin); sessions started before
+  the upgrade lack the `schedule` parameter and `run_monitor_now` (static tool lists): restart them.
+
 #### Relay setup (owner walkthrough)
 
 1. Settings -> Library -> Relays -> **Create Slack relay**.
