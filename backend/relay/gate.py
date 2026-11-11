@@ -49,6 +49,11 @@ SCOPE_PROMPT_TEXT = {
         "conversation you are in? It will receive them as untrusted content. Channels you blocked "
         "stay excluded."
     ),
+    "unread": (
+        "Let this session see which of your direct and group conversations have unread messages, "
+        "and read those unread messages (on a schedule)? Blocked conversations are excluded. It will "
+        "receive them as untrusted content. It never marks anything as read, never posts and never reacts."
+    ),
     "dms": (
         "Let this session read the direct and group messages other people send you? Your own "
         "messages and your self-DM are excluded; it will receive the rest as untrusted content. "
@@ -420,13 +425,15 @@ class RelayPolicyGate:
         plain-language prompt, no channel resolution and no policy involved (channels the owner
         blocked are excluded later, at delivery). Bypass keeps prompting: this branch never
         reads the permission mode."""
+        if tool == "monitor_unread" and args.get("dms") is False:
+            return GateResult(ALLOW, tool, "monitor_scope")  # explicit, already readable channels only: no consent
         lookup = self.scope_existing
         if lookup is not None and lookup(ctx.session_id, ctx.relay_id, tool, args):
             return GateResult(ALLOW, tool, "monitor_scope")  # the handler returns it as already_monitored
         if not with_prompt:
             return GateResult(PROMPT, tool, "monitor_scope")
         record = self.relay_manager.relays.get(ctx.relay_id)
-        scope = "mentions" if tool == "monitor_mentions" else "dms"
+        scope = {"monitor_mentions": "mentions", "monitor_unread": "unread"}.get(tool, "dms")
         prompt = {
             "kind": "monitor_scope", "tool": tool, "action": "monitor_scope", "scope": scope,
             "filters_summary": self._filters_summary(args),

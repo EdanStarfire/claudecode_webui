@@ -34,6 +34,7 @@ from . import constants as const
 from . import content as monitor_content
 from . import public as monitor_public
 from .backfill import BackfillRun, backfill_dms, backfill_mentions
+from .caches import ConversationInfoCache, ConversationListCache
 from .coalescer import BufferedMessage, Coalescer, SessionBuffer
 from .digest import DigestScheduler, RunNowRefusedError
 from .dispatch import format_instruction, instruction_summary
@@ -193,6 +194,8 @@ class InboundService:
         self._digest_sleep = digest_sleep or asyncio.sleep
         self.api_limiter = SearchLimiter(mono, api_sleep or asyncio.sleep, const.API_MIN_SPACING_SECONDS)
         self.digest = DigestScheduler(self)
+        self.list_cache = ConversationListCache(mono)  # 3c-ii: shared by unread monitors and DM digests
+        self.info_cache = ConversationInfoCache(mono)
         self.owner_tz: str | None = None  # the owner's Slack timezone, cached by ``resolve_owner_tz``
         self._owner_tz_at = -1e9
 
@@ -1128,11 +1131,11 @@ class InboundService:
         self, session_id: str, kind: str, channel: str | None, *, thread_ts: str | None,
         filters: dict[str, Any], expires_at: float | None, consent: dict[str, Any] | None = None,
         approval: str | None = None, prompt_via: str | None = None,
-        schedule: dict[str, Any] | None = None,
+        schedule: dict[str, Any] | None = None, options: dict[str, Any] | None = None,
     ) -> tuple[dict[str, Any], str]:
         record, outcome = await self.store.create_monitor(
             session_id, kind, channel, thread_ts=thread_ts, filters=filters, expires_at=expires_at,
-            consent=consent, schedule=schedule,
+            consent=consent, schedule=schedule, options=options,
         )
         self._high_water[record["id"]] = record["last_seen_ts"]
         if outcome in ("created", "resumed"):
@@ -1143,7 +1146,7 @@ class InboundService:
                 channel_id=channel, thread_ts=thread_ts, count=len(keywords),
                 query_sha256=hashlib.sha256("\n".join(keywords).encode()).hexdigest() if keywords else None,
                 source="agent", approval=approval, prompt_via=prompt_via,
-                **({"code": "digest"} if schedule else {}),
+                **({"code": "unread" if kind == const.KIND_MONITOR_UNREAD else "digest"} if schedule else {}),
             )
         return record, outcome
 
@@ -1285,8 +1288,8 @@ class InboundService:
         """None = the monitor may be active, else the suspension reason."""
         if problem:
             return const.SUSPEND_SESSION_INACTIVE
-        if monitor.get("kind") in const.SCOPE_KINDS:
-            return None  # no channel: blocked channels are filtered per message at the flush
+        if monitor.get("kind") in const.SCOPE_KINDS or monitor.get("kind") == const.KIND_MONITOR_UNREAD:
+            return None  # no channel: blocked channels are filtered per message / per run
         eff = policies.get(monitor.get("channel"))
         policy = eff.policy if eff else None
         if policy == "blocked":
@@ -1447,37 +1450,51 @@ class InboundService:
         )
         summary = monitor_content.digest_summary(len(included)) if digest else monitor_content.monitor_summary(len(included))
         keys = [f"{m.event.channel}:{m.event.ts}" for m in included]
-        attempt = 0
-        comm_id = monitor_comm_id(self.relay_id, session_id, keys)
-        while self.port.item_status(session_id, comm_id) not in (None, "pending") and attempt < 50:
-            attempt += 1  # the earlier comm of this exact content already ended: a retry is a new comm
-            comm_id = monitor_comm_id(self.relay_id, session_id, keys, attempt)
         omitted_total = sum(omitted_by_channel.values())
-        metadata = {
-            "comm": {
-                "from_name": "slack-digest" if digest else "slack-monitor",
-                "from_display_name": "Slack digest" if digest else "Slack monitor",
-                "comm_type": "info", "summary": summary, "content": summary,
-            },
-            "relay_inbound": {
-                "relay_id": self.relay_id, "kind": "monitor", "monitor_ids": monitor_ids,
-                "count": len(included), "omitted": omitted_total, "envelope_id": comm_id,
-            },
-        }
-        if digest:
-            metadata["relay_inbound"]["mode"] = "digest"
         counts: dict[str, int] = {}
         keys_by_monitor: dict[str, list[str]] = {}
         for m in included:
             for mid in m.monitor_ids:
                 counts[mid] = counts.get(mid, 0) + 1
                 keys_by_monitor.setdefault(mid, []).append(f"{m.event.channel}:{m.event.ts}")
+        return await self._enqueue_prepared(
+            session_id, dispatch=dispatch, summary=summary, keys=keys, monitor_ids=monitor_ids,
+            cover=cover, count=len(included), omitted=omitted_total, counts=counts,
+            keys_by_monitor=keys_by_monitor, mode="digest" if digest else None,
+            card=("slack-digest", "Slack digest") if digest else ("slack-monitor", "Slack monitor"),
+            info={"digest": True, **(watch_info or {})} if digest else {}, live=not digest,
+        )
+
+    async def _enqueue_prepared(
+        self, session_id: str, *, dispatch: str, summary: str, keys: list[str], monitor_ids: list[str],
+        cover: dict[str, str], count: int, omitted: int, counts: dict[str, int],
+        keys_by_monitor: dict[str, list[str]], mode: str | None, card: tuple[str, str],
+        info: dict[str, Any], live: bool,
+    ) -> str | None:
+        """Enqueue one already built envelope (live, digest or unread) and watch it."""
+        attempt = 0
+        comm_id = monitor_comm_id(self.relay_id, session_id, keys)
+        while self.port.item_status(session_id, comm_id) not in (None, "pending") and attempt < 50:
+            attempt += 1  # the earlier comm of this exact content already ended: a retry is a new comm
+            comm_id = monitor_comm_id(self.relay_id, session_id, keys, attempt)
+        metadata = {
+            "comm": {
+                "from_name": card[0], "from_display_name": card[1],
+                "comm_type": "info", "summary": summary, "content": summary,
+            },
+            "relay_inbound": {
+                "relay_id": self.relay_id, "kind": "monitor", "monitor_ids": monitor_ids,
+                "count": count, "omitted": omitted, "envelope_id": comm_id,
+            },
+        }
+        if mode:
+            metadata["relay_inbound"]["mode"] = mode
         # Watched BEFORE the enqueue so a block / unmonitor that lands meanwhile can cancel it; the
         # watcher skips the entry until the enqueue has finished.
         entry = WatchEntry(
             "monitor", session_id, comm_id, self._now(), cover=cover,
-            info={"counts": counts, "count": len(included), "omitted": omitted_total, "enqueuing": True,
-                  "keys": keys_by_monitor, **({"digest": True, **(watch_info or {})} if digest else {})},
+            info={"counts": counts, "count": count, "omitted": omitted, "enqueuing": True,
+                  "keys": keys_by_monitor, **info},
         )
         self.watcher.watch(entry)
         try:
@@ -1490,11 +1507,9 @@ class InboundService:
             outcome = DeliveryOutcome("failed", "exception")
         if outcome.status == "failed":
             self.watcher.entries.pop(comm_id, None)
-            await self._monitor_failed(
-                list(cover), comm_id, outcome.error or "enqueue_failed", len(included)
-            )
+            await self._monitor_failed(list(cover), comm_id, outcome.error or "enqueue_failed", count)
             return None
-        if not digest:
+        if live:
             self.coalescer.envelopes.record(session_id)
         entry.info.pop("enqueuing", None)
         # a monitor removed / suspended while we were building and enqueueing: undo, do not deliver
@@ -1505,6 +1520,57 @@ class InboundService:
         if stale:
             await self._cancel_pending_for(stale)
         return comm_id
+
+    async def enqueue_unread(
+        self, monitor: dict[str, Any], conversations: list, *, as_of: float, omitted: int,
+        cover: dict[str, str], notice: str | None, watch_info: dict[str, Any],
+    ) -> str | None:
+        """ONE unread envelope (3c-ii). ``notified`` advances only when the session confirms it."""
+        mid = monitor["id"]
+        entries = await self._build_unread_entries(conversations)
+        dispatch = monitor_content.build_unread_dispatch(entries, as_of=as_of, omitted=omitted, notice=notice)
+        keys = [f"{c.channel}:{c.consumed_ts}" for c in conversations]
+        summary = monitor_content.unread_summary(len(conversations))
+        return await self._enqueue_prepared(
+            monitor["session_id"], dispatch=dispatch, summary=summary, keys=keys, monitor_ids=[mid],
+            cover=cover, count=len(conversations), omitted=omitted, counts={mid: len(conversations)},
+            keys_by_monitor={}, mode="unread", card=("slack-unread", "Slack unread"),
+            info={"digest": True, "unread_notified": {c.channel: c.consumed_ts for c in conversations},
+                  **watch_info},
+            live=False,
+        )
+
+    async def _build_unread_entries(self, conversations: list) -> list[dict[str, Any]]:
+        record = self.record
+        owner = record.owner_user_id if record else None
+        labels: dict[str, str] = {}
+        users: dict[str, str | None] = {}
+        names = self._names
+        if names is not None:
+            adapter = self._manager.adapter_for(self.relay_id)
+
+            async def resolve() -> None:
+                for conv in conversations:
+                    labels[conv.channel] = await names.channel_label(adapter, self.relay_id, conv.channel, owner)
+                users.update(await names.user_names(
+                    adapter, self.relay_id, (m.user for c in conversations for m in c.messages)
+                ))
+
+            try:
+                await asyncio.wait_for(resolve(), const.LABEL_TIMEOUT_SECONDS)
+            except Exception:  # IDs on failure: names never block or fail a delivery
+                logger.debug("Unread label resolution failed", exc_info=True)
+        return [
+            monitor_content.unread_entry(
+                channel=c.channel, channel_label=labels.get(c.channel), kind=c.kind, count=c.count,
+                count_exact=c.count_exact, newest_ts=c.newest_ts, last_read=c.last_read,
+                messages=[monitor_content.unread_message(
+                    ts=m.ts, thread_ts=m.thread_ts, user=m.user,
+                    user_name=users.get(m.user) if m.user else None,
+                    bot=bool(m.app_id or m.bot_id or m.is_agent), text=m.text, files=m.file_count,
+                ) for m in c.messages],
+            ) for c in conversations
+        ]
 
     def _advance_unqueued_cover(self, cover: dict[str, str]) -> None:
         """Nothing was delivered but messages were consumed (flood-dropped / tallied): move the
@@ -1583,6 +1649,8 @@ class InboundService:
                 )
                 self.store.bump_counters(mid, delivered=int(entry.info.get("counts", {}).get(mid, 0)))
                 self.store.note_delivered_keys(mid, (entry.info.get("keys") or {}).get(mid) or [])
+                if entry.info.get("unread_notified"):
+                    self.store.set_notified(mid, entry.info["unread_notified"])
                 if entry.info.get("digest"):
                     self.store.touch_monitor(
                         mid, last_run_at=now, run_failures=0, slot_retries=0,

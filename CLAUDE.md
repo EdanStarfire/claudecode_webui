@@ -785,7 +785,7 @@ frontend in `frontend/CLAUDE.md`.
 
 Stage 3c-i adds `mode="digest"` to the four monitor kinds (thread, channel, mentions, DMs): the optional `schedule`
 parameter of `monitor_thread|monitor_channel|monitor_mentions|monitor_dms` turns a live monitor into a DIGEST: ONE
-message at the scheduled times, only when there is content. Unread monitors (3c-ii) and the UI / attention / owner
+message at the scheduled times, only when there is content. Unread monitors (3c-ii, below) and the UI / attention / owner
 run-now (3c-iii) are later stages. Code: `relay/inbound/{schedule,digest}.py`, `backfill.py::collect_thread_or_channel`,
 `service.py::_enqueue_envelope`.
 
@@ -835,6 +835,55 @@ run-now (3c-iii) are later stages. Code: `relay/inbound/{schedule,digest}.py`, `
   descriptions and the creation result say so); two Backends with one app token disturb live monitors, not digests, but each
   runs the digests of its own monitors; edits are not redelivered; Slack search lags (60 s margin); sessions started before
   the upgrade lack the `schedule` parameter and `run_monitor_now` (static tool lists): restart them.
+
+### Relay inbound: unread monitors (3c-ii)
+
+Stage 3c-ii adds `monitor_unread`: a SCHEDULED summary of Slack's own read state. At each slot (same `schedule` object, scheduler,
+runner, rate-limit rules, `_enqueue_envelope`-style delivery, `run_monitor_now`, `monitor_digest` audit event as 3c-i; `every_minutes`
+>= 60 for unread, `UNREAD_MIN_INTERVAL_MINUTES`) ONE envelope lists the conversations with unread messages, newest first, as untrusted
+content. The UI / attention / owner run-now are 3c-iii. **The relay NEVER marks anything read, posts or reacts** (a spy test asserts zero
+write calls; only the agent's own `mark_read` tool, under the channel policy, can). Code: `relay/inbound/{unread,caches}.py`,
+`digest.py::_run_unread`, `service.py::enqueue_unread / _enqueue_prepared`, `mcp/relay_monitor_tools.py::handle_unread_monitor`.
+
+- **Record**: kind `monitor_unread`, stored with `mode="digest"` (so it is skipped by the live indexes and the `hello` backfill, picked up by
+  `due_digests`, paused / resumed / disposed / restored exactly like a digest), plus `options {dms=true, channels[<=20], exclude[<=30],
+  mentions_only=false, repeat=false}` (part of the identity; IDs sorted) and `notified {conversation: newest ts the session was told about}`
+  (bounded 100, least recently updated dropped). No keyword / user filters. Counts toward 20 / session, 100 / relay, `MAX_SCHEDULED_PER_RELAY`.
+- **Tool** `monitor_unread(schedule, dms?, channels?, exclude?, mentions_only?, repeat?, expires_at?)`: `schedule` REQUIRED
+  (`schedule_required`); `dms:false` with no channels -> `filter_required`. Explicit `channels` (IDs or `#name`, resolved by the gate) must
+  ALREADY be readable under the session's effective policy, checked WITHOUT prompting: one refusal lists every offending ID
+  (`channel_blocked` / `channel_policy_required`); self-DM -> `self_dm_not_monitorable`; not a member -> `not_a_member`.
+- **Consent**: `monitor_scope` with `scope: "unread"` whenever `dms` is true (callback prompt + grant, or handler broker; bypass still prompts;
+  unattended -> `monitor_consent_unavailable`, don't-ask -> `monitor_consent_unavailable_dont_ask`; an identical monitor returns
+  `already_monitored` without a prompt, `InboundManager._unread_exists`). `dms:false` + explicit readable channels needs no prompt. Wording
+  (`gate.SCOPE_PROMPT_TEXT["unread"]`) states it never marks anything as read, never posts and never reacts. In default / acceptEdits the
+  callback prompt precedes the handler's channel-policy check, so a policy refusal can follow an approved consent (nothing is created).
+- **A run** (`unread.evaluate`): `apply_policy`-style session check; candidates = `users.conversations im,mpim` (per-relay `ConversationListCache`,
+  TTL 10 min, shared with DM digests; minus the self-DM, `exclude` and explicitly `blocked` entries; capped at 50, `conversation_cap` + gap
+  notice) plus the explicit channels re-checked against the CURRENT policy (blocked / unset skipped and counted, the monitor stays active,
+  no history of them is ever read). Per candidate, serialized through the Tier-3 `api_limiter` and a per-relay `ConversationInfoCache`
+  (TTL 60 s: N monitors and a DM digest due together cost one scan): DM / MPIM unread = `unread_count > 0` (else `latest_ts > last_read`);
+  channel unread = `latest_ts > last_read` (no counts; `last_read` unknown -> `no_read_state`); unless `repeat`, `latest_ts <= notified[conv]`
+  is skipped. Then one `conversations.history(oldest=last_read, limit=50)`; messages are judged by `never_content` + the echo rule directly (history
+  carries identity fields: NO hydration), the owner's own dropped, `mentions_only` keeps mentions; a conversation qualifies only if a message survives.
+  `count` = surviving messages (DM: Slack's count when larger; `count_exact=false` for a full page or a larger Slack count). <= 5 newest messages each
+  (500 chars); <= 30 conversations / 24 000 chars per envelope, the rest a counts-only `+N more conversations` tally. Run budget
+  `UNREAD_RUN_MAX_SECONDS = 300` (`time_cap`, gap notice). Rate limits: stop, +5 min, 3 retries per slot, then the next slot with a gap notice
+  (every reschedule audited). Empty -> no envelope, no session start.
+- **Envelope**: header `📬 Slack unread — N conversation(s)… (as of <time>)`, fixed framing (untrusted, never marks read, `mark_read` only if the user
+  asks, `unmonitor`), entries inside the nonce fence (`channel, channel_label, kind dm|group_dm|channel|private_channel, unread_count, count_exact,
+  newest_ts, last_read, messages[]`), outside it only counts / times / the tally / the gap line. Comm shape as 3b (`SYSTEM_MINION_ID` + `EXTERNAL`
+  + `INFO`, `WHEN_IDLE`, `auto_start`); metadata `relay_inbound.mode="unread"`, card "Slack unread", queue label `Slack unread: N conversations`.
+- **Confirm**: on `delivered` the watcher sets `notified[conv]` (newest ts consumed) for every listed conversation (`InboundService._monitor_outcome`);
+  failed / cancelled change nothing (listed again). Conversations evaluated with nothing to report (`mentions_only` with no mention) are marked
+  consumed at once. "Unread now": reading a conversation in Slack makes it disappear by itself.
+- **Audit**: `monitor_digest` with `monitor_kind=monitor_unread`, `count` = conversations listed, `omitted` = conversations beyond the caps,
+  `reason_counts` (`blocked_channel`, `policy_unset`, `conversation_cap`, `no_read_state`, `no_unread`, `already_notified`, `time_cap`,
+  `not_a_member`, `conversation_gone`, `rate_limited`); `monitor_created` carries `code=unread`. Conversation IDs only, never message text.
+- **Known limitations**: #2362 (an enqueued, undelivered envelope is lost on a restart; `notified` moves only on confirmation, so it is listed again,
+  at-least-once); unread monitors need only the user token + the owner's inbound switch (a second Backend runs its own); channels have no Slack
+  unread counts (approximate); DM unread counts exclude muted / thread-only unreads and thread unread state is not modelled; sessions started before
+  the upgrade lack the tool (restart them). Live DM backfill on `hello` does not use the shared caches (only digest / unread runs do).
 
 #### Relay setup (owner walkthrough)
 

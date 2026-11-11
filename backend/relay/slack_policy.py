@@ -38,11 +38,13 @@ SLACK_TOOL_ACTIONS: dict[str, str | None] = {
     # Scope monitors (3b-ii): no channel; ONE plain-language consent prompt, never a channel policy.
     "monitor_mentions": "monitor_scope",
     "monitor_dms": "monitor_scope",
+    # 3c-ii: unread monitor; consent only when it reads direct messages (the handler checks explicit channels)
+    "monitor_unread": "monitor_scope",
     "run_monitor_now": None,  # 3c-i: an immediate digest run of the caller's own monitor, no policy
 }
 SLACK_WRITE_TOOLS = frozenset({"post", "reply", "upload_file", "react", "mark_read"})
 SLACK_DISCOVERY_TOOLS = frozenset({"get_identity", "find_channels"})
-SLACK_SCOPE_TOOLS = frozenset({"monitor_mentions", "monitor_dms"})
+SLACK_SCOPE_TOOLS = frozenset({"monitor_mentions", "monitor_dms", "monitor_unread"})
 SLACK_MONITOR_TOOLS = frozenset({
     "monitor_thread", "monitor_channel", "unmonitor", "list_monitors", "run_monitor_now",
     *SLACK_SCOPE_TOOLS,

@@ -77,7 +77,7 @@ import { computed, ref } from 'vue'
 // Issue #2103 (outbound-1b): relay permission prompt. Kinds from the backend permission
 // pre-hook: `ask_send` (send on an `ask` channel), `choose_policy` (first touch of an
 // unlisted channel) and `monitor_scope` (stage 3b-ii: consent to read all mentions / direct
-// messages; Allow / Deny only, never a policy choice). Emits `decide` with the REST
+// messages / unread conversations (stage 3c-ii); Allow / Deny only, never a policy choice). Emits `decide` with the REST
 // `relay_choice` shape (camelCase here, forwarded by the polling store).
 const props = defineProps({
   prompt: { type: Object, required: true },
@@ -105,6 +105,7 @@ const isChoosePolicy = computed(() => props.prompt.kind === 'choose_policy')
 const isMonitorScope = computed(() => props.prompt.kind === 'monitor_scope')
 const title = computed(() => {
   if (isMonitorScope.value) {
+    if (props.prompt.scope === 'unread') return 'Allow reading your unread Slack messages'
     return props.prompt.scope === 'dms'
       ? 'Allow reading your direct messages'
       : 'Allow reading all mentions of you'
