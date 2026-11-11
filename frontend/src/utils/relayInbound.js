@@ -208,3 +208,27 @@ export const ACTIVITY_CHIPS = [
 
 const OK_OUTCOMES = new Set([null, undefined, '', 'ok', 'delivered'])
 export const isProblem = (row) => !OK_OUTCOMES.has(row.outcome)
+
+// ── session surface (3d-ii) ──────────────────────────────────────────────
+
+/** Total / tag counts from `relay_summary.monitors` (absent on an older Backend -> zeros). */
+export function summaryMonitors(summary) {
+  const m = summary?.monitors || {}
+  const active = m.active || 0
+  const paused = m.paused || 0
+  const suspended = m.suspended || 0
+  return { active, paused, suspended, total: active + paused + suspended }
+}
+
+export const monitorCountText = (total) => `${total} ${total === 1 ? 'monitor' : 'monitors'}`
+
+/** Hover text of the session chip: attachment, policy count, monitor count, attention. */
+export function summaryTitle(summary) {
+  if (!summary) return ''
+  const n = summary.policy_count ?? 0
+  const parts = [`Relay attached${summary.handle ? ` as !${summary.handle}` : ''}`, `${n} channel ${n === 1 ? 'policy' : 'policies'}`]
+  const { total } = summaryMonitors(summary)
+  if (total) parts.push(monitorCountText(total))
+  if (summary.attention) parts.push('needs attention (monitors)')
+  return parts.join(' · ')
+}

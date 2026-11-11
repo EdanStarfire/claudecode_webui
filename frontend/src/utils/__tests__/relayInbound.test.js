@@ -2,8 +2,7 @@ import { describe, it, expect } from 'vitest'
 import {
   ATTENTION_COPY, STATE_COPY, agoText, attentionHint, attentionLabel, auditQuery, caughtUpTo, deliveredText,
   expiresText, filterChips, hasAttention, isProblem, monitorLabel, monitorsLine, stateCopy, stateTag, toEpoch,
-  windowLine,
-} from '@/utils/relayInbound'
+  windowLine, monitorCountText, summaryMonitors, summaryTitle } from '@/utils/relayInbound'
 import { NOW, health, monitor } from '@/components/relay/__tests__/monitorFixtures'
 
 describe('stateTag / stateCopy', () => {
@@ -109,5 +108,24 @@ describe('health lines and attention', () => {
     expect(isProblem({ outcome: 'delivered' })).toBe(false)
     expect(isProblem({})).toBe(false)
     for (const o of ['refused', 'late', 'rate_limited', 'error', 'dropped', 'delivery_failed']) expect(isProblem({ outcome: o })).toBe(true)
+  })
+})
+
+describe('session summary helpers (3d-ii)', () => {
+  const base = { handle: 'ea', policy_count: 1 }
+  it('summaryMonitors tolerates an older Backend without the field', () => {
+    expect(summaryMonitors(base)).toEqual({ active: 0, paused: 0, suspended: 0, total: 0 })
+    expect(summaryMonitors(null).total).toBe(0)
+    expect(summaryMonitors({ monitors: { active: 2, paused: 1, suspended: 1 } }).total).toBe(4)
+  })
+  it('summaryTitle', () => {
+    expect(summaryTitle(null)).toBe('')
+    expect(summaryTitle(base)).toBe('Relay attached as !ea · 1 channel policy')
+    expect(summaryTitle({ ...base, monitors: { active: 3, paused: 0, suspended: 0 } })).toBe('Relay attached as !ea · 1 channel policy · 3 monitors')
+    expect(summaryTitle({ ...base, monitors: { active: 1 }, attention: true })).toBe('Relay attached as !ea · 1 channel policy · 1 monitor · needs attention (monitors)')
+  })
+  it('monitorCountText', () => {
+    expect(monitorCountText(1)).toBe('1 monitor')
+    expect(monitorCountText(2)).toBe('2 monitors')
   })
 })

@@ -68,6 +68,17 @@
         />
       </div>
 
+      <div
+        v-if="isSessionMode && policyEditorRelayId"
+        id="monitors"
+        ref="monitorsBlock"
+        class="monitors-block"
+        data-testid="relay-monitors-block"
+      >
+        <div class="monitors-head">Monitors</div>
+        <RelayMonitorList :key="`${entityId}:${policyEditorRelayId}`" :relay-id="policyEditorRelayId" :session-id="entityId" />
+      </div>
+
       <div v-if="isSessionMode" class="handle-block" data-testid="relay-handle-block">
         <FieldRenderer
           :field="HANDLE_FIELD"
@@ -82,7 +93,7 @@
 </template>
 
 <script setup>
-import { computed, ref, watch, onMounted } from 'vue'
+import { computed, nextTick, ref, watch, onMounted } from 'vue'
 import { useRoute } from 'vue-router'
 import { useSettingsStore } from '@/stores/settings'
 import { useTemplateStore } from '@/stores/template'
@@ -93,6 +104,7 @@ import FieldSection from '../../configuration/fields/FieldSection.vue'
 import FieldRenderer from '../../configuration/fields/FieldRenderer.vue'
 import { useRelayStore } from '@/stores/relay'
 import RelayPolicyEditor from '../../relay/RelayPolicyEditor.vue'
+import RelayMonitorList from '../../relay/RelayMonitorList.vue'
 import { normalizePolicies } from '@/utils/relayPolicies'
 import { useRestartRequired } from '@/composables/useRestartRequired'
 import { FIELD_SCHEMAS } from '../../configuration/fields/fieldSchemas.js'
@@ -237,6 +249,14 @@ const inheritedPolicies = computed(() => {
   }
   return out
 })
+
+// ── Monitors block (3d-ii): outside the form, immediate actions, `#monitors` anchor ─────────
+const monitorsBlock = ref(null)
+function scrollToMonitors() {
+  if (route.hash !== '#monitors') return
+  nextTick(() => monitorsBlock.value?.scrollIntoView?.({ block: 'start' }))
+}
+watch([() => route.hash, monitorsBlock], scrollToMonitors, { flush: 'post' })
 
 // ── Server-side validation messages ───────────────────────────────────────
 const saveError = ref('')
@@ -406,6 +426,8 @@ onMounted(() => {
 
 .restart-note { font-size: 12px; color: #d29922; margin: 8px 0 0; }
 .handle-block { margin-top: 8px; }
+.monitors-block { margin-top: 14px; padding-top: 12px; border-top: 1px solid var(--bs-border-color); }
+.monitors-head { font-size: 13px; font-weight: 600; margin-bottom: 4px; }
 .policy-block { margin-top: 14px; padding-top: 12px; border-top: 1px solid var(--bs-border-color); }
 
 .restart-chip {

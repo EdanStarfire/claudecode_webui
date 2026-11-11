@@ -193,6 +193,7 @@ def build_core_managers(
     )
     relay_service.change_listeners.append(relay_inbound.schedule_reevaluate)  # monitors (3b-i)
     relay_manager.change_listeners.append(relay_inbound.schedule_refresh)
+    relay_service.monitor_summary = relay_inbound.session_monitor_summary  # 3d-ii: chip counts / dot
     relay_manager.inbound_status_provider = relay_inbound.status_for
     relay_gate.thread_grants = relay_inbound.has_thread_grant
     relay_gate.scope_existing = relay_inbound.scope_monitor_exists  # 3b-ii: no second consent prompt

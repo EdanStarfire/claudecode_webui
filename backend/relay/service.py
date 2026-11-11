@@ -32,6 +32,9 @@ _ATTACHMENT_FIELDS = (
 )
 
 
+_NO_MONITORS = {"active": 0, "paused": 0, "suspended": 0, "attention": False}
+
+
 class SessionNotFoundError(KeyError):
     pass
 
@@ -64,6 +67,9 @@ class RelayService:
         # sync callbacks ``(session_id | None) -> None``: a session's effective policy / relay
         # attachment may have changed (None = every dependent session); monitors re-evaluate (3b-i)
         self.change_listeners: list = []
+        # sync ``(relay_id, session_id) -> {active, paused, suspended, attention}``: the inbound layer's
+        # in-memory monitor summary, injected so this module imports nothing from relay.inbound (3d-ii)
+        self.monitor_summary = lambda relay_id, session_id: dict(_NO_MONITORS)
 
     # ---------------------------------------------------------------- tiers
 
@@ -175,11 +181,15 @@ class RelayService:
         if record is None:
             return None
         policies = await self.effective_relay_policies(info, relay_id)
+        monitors = dict(self.monitor_summary(relay_id, info.session_id))
+        attention = bool(monitors.pop("attention", False))
         return {
             "relay_id": relay_id,
             "adapter_type": record.adapter_type,
             "handle": info.config.get("relay_handle"),
             "policy_count": len(policies),
+            "monitors": monitors,
+            "attention": attention,
         }
 
     async def refresh_summary(self, session_id: str) -> None:

@@ -59,7 +59,8 @@ describe('RelayMonitorList loading and filters', () => {
     await flushPromises()
     expect(r.wrapper.find('[data-testid="monitor-not-running"]').exists()).toBe(true)
     expect(r.wrapper.find('[data-testid="monitor-filter-session"]').exists()).toBe(false)
-    expect(apiMock.get.mock.calls.at(-1)[1].params.session_id).toBe('s1')
+    expect(apiMock.get.mock.calls.at(-1)[0]).toBe('/api/sessions/s1/relays/r1/monitors') // session-qualified (3d-ii)
+    expect(apiMock.get.mock.calls.at(-1)[1].params.session_id).toBeNull()
   })
 
   it('shows an error for a failed load', async () => {

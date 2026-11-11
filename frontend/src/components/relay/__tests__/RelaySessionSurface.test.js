@@ -43,7 +43,33 @@ describe('RelaySessionInfoRow', () => {
     expect(router.currentRoute.value.fullPath).toBe('/settings/session/s1/relay')
     await wrapper.find('[data-testid="relay-info-audit"]').trigger('click')
     await flushPromises()
-    expect(router.currentRoute.value.fullPath).toBe('/settings/relays?session=s1')
+    expect(router.currentRoute.value.fullPath).toBe('/settings/relays?tab=audit&session=s1')
+  })
+
+  it('shows no monitor count without monitors and no dot on an older Backend summary', async () => {
+    const { wrapper } = await mountRow({ relay_summary: SUMMARY })
+    expect(wrapper.find('[data-testid="relay-info-monitors"]').exists()).toBe(false)
+    expect(wrapper.find('[data-testid="relay-info-dot"]').exists()).toBe(false)
+  })
+
+  it('shows the monitor count with paused / suspended tags, the dot only with attention, and the #monitors link', async () => {
+    const quiet = await mountRow({
+      relay_summary: { ...SUMMARY, monitors: { active: 1, paused: 1, suspended: 1 }, attention: false },
+    })
+    expect(quiet.wrapper.find('[data-testid="relay-info-monitors-link"]').text()).toBe('3 monitors')
+    expect(quiet.wrapper.find('[data-testid="relay-info-monitors-paused"]').text()).toBe('1 paused')
+    expect(quiet.wrapper.find('[data-testid="relay-info-monitors-suspended"]').text()).toBe('1 suspended')
+    expect(quiet.wrapper.find('[data-testid="relay-info-dot"]').exists()).toBe(false)
+    const { wrapper, router } = await mountRow({
+      relay_summary: { ...SUMMARY, monitors: { active: 1, paused: 0, suspended: 0 }, attention: true },
+    })
+    expect(wrapper.find('[data-testid="relay-info-monitors-link"]').text()).toBe('1 monitor')
+    expect(wrapper.find('[data-testid="relay-info-monitors-paused"]').exists()).toBe(false)
+    const dot = wrapper.find('[data-testid="relay-info-dot"]')
+    expect(dot.attributes('title')).toBe('Needs attention: see Monitors')
+    await wrapper.find('[data-testid="relay-info-monitors-link"]').trigger('click')
+    await flushPromises()
+    expect(router.currentRoute.value.fullPath).toBe('/settings/session/s1/relay#monitors')
   })
 
   it('shows the 2a restart note with a Restart action only for the not-attached reason', async () => {
@@ -64,5 +90,16 @@ describe('RelaySessionChip', () => {
     expect(w.find('.relay-chip-handle').text()).toBe('!<b>x</b>')
     expect(w.find('b').exists()).toBe(false)
     expect(w.attributes('title')).toContain('3 channel policies')
+  })
+
+  it('adds the dot and the title text only with attention, and the monitor count when there are monitors', () => {
+    const quiet = mount(RelaySessionChip, { props: { summary: { ...SUMMARY, monitors: { active: 3, paused: 0, suspended: 0 }, attention: false } } })
+    expect(quiet.find('[data-testid="relay-chip-dot"]').exists()).toBe(false)
+    expect(quiet.attributes('title')).toContain('3 monitors')
+    expect(quiet.attributes('title')).not.toContain('needs attention')
+    const lit = mount(RelaySessionChip, { props: { summary: { ...SUMMARY, monitors: { active: 3 }, attention: true } } })
+    expect(lit.find('[data-testid="relay-chip-dot"]').exists()).toBe(true)
+    expect(lit.attributes('title')).toContain('needs attention (monitors)')
+    expect(mount(RelaySessionChip, { props: { summary: SUMMARY } }).find('[data-testid="relay-chip-dot"]').exists()).toBe(false)
   })
 })

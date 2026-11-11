@@ -292,6 +292,10 @@ class FakeRelayService:
         self._sessions = sessions
         # channel -> policy value; tests edit it live (blocked | read_only | ask | auto)
         self.policies: dict[str, str] = {}
+        self.refreshed: list[str] = []  # sessions whose relay_summary was recomputed (3d-ii)
+
+    async def refresh_summary(self, session_id):
+        self.refreshed.append(session_id)
 
     async def effective_attachment(self, info):
         return {"relay_id": info.config.get("relay_id")}

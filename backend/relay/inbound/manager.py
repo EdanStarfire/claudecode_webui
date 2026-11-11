@@ -183,6 +183,14 @@ class InboundManager:
             if isinstance(r, dict) and r.get("id") and r.get("kind") in const.MONITOR_KINDS
         ]
 
+    def session_monitor_summary(self, relay_id: str, session_id: str) -> dict[str, Any]:
+        """``{active, paused, suspended, attention}`` of one session's monitors for ``relay_summary``:
+        in memory only (no Slack call, no audit scan); zeros when the relay has no running service."""
+        service = self.services.get(relay_id)
+        if service is None:
+            return {"active": 0, "paused": 0, "suspended": 0, "attention": False}
+        return service.session_monitor_summary(session_id)
+
     def has_thread_grant(
         self, session_id: str, relay_id: str, channel: str, thread_ts: str
     ) -> bool:
