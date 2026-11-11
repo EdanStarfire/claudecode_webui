@@ -15,7 +15,7 @@
 
 <script setup>
 import { computed } from 'vue'
-import { summaryTitle } from '@/utils/relayInbound'
+import { relayChipShowsText, summaryTitle } from '@/utils/relayInbound'
 
 const props = defineProps({
   summary: { type: Object, default: null },
@@ -23,7 +23,8 @@ const props = defineProps({
   slug: { type: String, default: '' },
 })
 const title = computed(() => summaryTitle(props.summary))
-const iconOnly = computed(() => !!props.summary?.handle && !!props.slug && props.summary.handle === props.slug)
+// icon only when the handle equals the slug (the name already says it); a missing slug keeps the text
+const iconOnly = computed(() => !!props.summary?.handle && !!props.slug && !relayChipShowsText(props.summary, props.slug))
 </script>
 
 <style scoped>

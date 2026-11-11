@@ -157,13 +157,13 @@ const saveLabel = computed(() =>
 }
 .btn-timeline:disabled { opacity: 0.5; cursor: not-allowed; }
 .btn-approve { background: var(--hook-badge-success-bg); border-color: var(--hook-badge-success-bg); color: var(--hook-badge-text); }
-.btn-approve:hover:not(:disabled) { filter: brightness(0.92); }
+.btn-approve:hover:not(:disabled) { filter: brightness(0.82); }
 .btn-approve-outline { background: var(--bs-body-bg); border-color: var(--hook-badge-success-bg); color: var(--tool-success-text); }
 .btn-approve-outline:hover:not(:disabled) { background: var(--tool-success-bg); }
 .btn-deny { background: var(--hook-badge-failure-bg); border-color: var(--hook-badge-failure-bg); color: var(--hook-badge-text); }
-.btn-deny:hover:not(:disabled) { filter: brightness(0.92); }
+.btn-deny:hover:not(:disabled) { filter: brightness(0.82); }
 .btn-primary { background: var(--tool-badge-bg); border-color: var(--tool-badge-bg); color: var(--tool-badge-text); }
-.btn-primary:hover:not(:disabled) { filter: brightness(0.92); }
+.btn-primary:hover:not(:disabled) { filter: brightness(0.82); }
 .relay-action { margin-right: 4px; }
 .relay-scope-text { opacity: 1 !important; margin-top: 4px; }
 .relay-channel { font-size: 12px; }

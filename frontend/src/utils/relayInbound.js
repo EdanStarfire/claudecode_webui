@@ -232,3 +232,6 @@ export function summaryTitle(summary) {
   if (summary.attention) parts.push('needs attention (monitors)')
   return parts.join(' · ')
 }
+
+/** True when the session chip shows `!handle` text: a handle that differs from the session slug (exact). */
+export const relayChipShowsText = (summary, slug) => !!summary?.handle && summary.handle !== (slug || '')
