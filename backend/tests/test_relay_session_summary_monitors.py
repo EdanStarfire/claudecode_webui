@@ -272,6 +272,17 @@ class TestRefreshTriggers:
         await asyncio.sleep(0.02)
         assert env.relay_service.refreshed == []
 
+    async def test_unchanged_failure_fields_and_spell_flips_do_not_refresh(self, env):
+        rec = await monitor(env)
+        env.service.store.touch_monitor(rec["id"], failures=0, last_error=None, last_delivered_at=1.0)
+        env.service._set_status(const.STATUS_BACKOFF, "a")
+        await asyncio.sleep(0.02)
+        env.relay_service.refreshed.clear()
+        env.service._set_status(const.STATUS_CONNECTING, "b")  # same reconnecting spell
+        env.service._set_status(const.STATUS_BACKOFF, "c")
+        await asyncio.sleep(0.02)
+        assert env.relay_service.refreshed == []
+
     async def test_status_change_refreshes_only_sessions_with_monitors(self, env):
         env.sessions.add("other")
         await monitor(env)

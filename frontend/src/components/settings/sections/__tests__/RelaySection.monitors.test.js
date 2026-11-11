@@ -80,7 +80,7 @@ describe('RelaySection session Monitors block', () => {
     await flush()
     expect(apiMock.delete).toHaveBeenCalledWith('/api/sessions/sess-1/relays/r1/monitors/m1')
     expect(settingsStore.dirtyAreas.has('session:sess-1:relay')).toBe(false)
-    expect(wrapper.find('[data-testid="settings-save"], .btn-save').exists()).toBe(false)
+    expect(apiMock.patch.mock.calls.every(c => /\/monitors\//.test(c[0]))).toBe(true) // no config write
   })
 
   it('a failed pause rolls back with an inline message', async () => {
@@ -98,7 +98,7 @@ describe('RelaySection session Monitors block', () => {
     expect(r.wrapper.find('[data-testid="monitor-empty"]').text()).toBe('No monitors. The agent creates them with its monitor tools.')
     monitorsResponse = () => Promise.reject(Object.assign(new Error('x'), { status: 409 }))
     r = await mountSession({ relay_id: 'r1' })
-    expect(r.wrapper.find('[data-testid="monitor-not-running"]').text()).toContain('inbound is not running')
+    expect(r.wrapper.find('[data-testid="monitor-not-running"]').text()).toContain('unavailable')
     expect(r.wrapper.find('[role="alert"]').exists()).toBe(false)
   })
 

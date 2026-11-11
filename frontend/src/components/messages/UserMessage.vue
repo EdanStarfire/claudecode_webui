@@ -278,6 +278,7 @@ function parseAttachmentsFromContent(content) {
  * Tier 2: regex parse of content block (fallback for old messages)
  */
 const attachmentItems = computed(() => {
+  if (instruction.value) return [] // the content is the delivered wrapper: its text is not an attachment list
   const meta = props.message?.metadata?.attachments
   if (meta && meta.length > 0) {
     return meta.map(a => ({

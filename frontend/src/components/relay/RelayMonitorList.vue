@@ -24,7 +24,7 @@
     </div>
 
     <div v-if="loadError" class="mon-load-error" role="alert" data-testid="monitor-load-error">{{ loadError }}</div>
-    <div v-else-if="notRunning" class="muted" data-testid="monitor-not-running">{{ sessionId ? 'Monitors are unavailable: inbound is not running for this relay.' : 'Inbound is not running, so there is nothing to list.' }}</div>
+    <div v-else-if="notRunning" class="muted" data-testid="monitor-not-running">{{ sessionId ? 'Monitors are unavailable for this relay right now.' : 'Inbound is not running, so there is nothing to list.' }}</div>
     <div v-else-if="loaded && !rows.length" class="muted" data-testid="monitor-empty">
       {{ hasFilter ? 'No monitors match.' : (sessionId ? 'No monitors. The agent creates them with its monitor tools.' : 'No monitors yet. Agents create them with the monitor tools.') }}
     </div>

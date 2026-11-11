@@ -438,9 +438,10 @@ class JsonSubscriptionStore:
         rec = self.get_monitor(monitor_id)
         if rec is None:
             return
+        erroring_before = (rec.get("failures"), rec.get("last_error"))
         rec.update(fields)
         self._persist_soon()
-        if "failures" in fields or "last_error" in fields:  # the "erroring" attention rule reads these
+        if (rec.get("failures"), rec.get("last_error")) != erroring_before:  # the "erroring" attention rule reads these
             self._changed(rec.get("session_id"))
 
     async def remove_monitor(self, monitor_id: str) -> dict[str, Any] | None:

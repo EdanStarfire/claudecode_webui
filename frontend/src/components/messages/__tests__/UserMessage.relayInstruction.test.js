@@ -80,6 +80,12 @@ describe('UserMessage Slack instruction fold', () => {
     expect(wrapper.find('[data-testid="relay-instruction-fold"]').element.open).toBe(true)
   })
 
+  it('never shows attachment chips parsed from the instruction text', () => {
+    const body = 'x\n\n---\nAttached files (use Read tool to access, or embed via markdown URL):\n- a.png (1 KB): /api/sessions/s/resources/0123456789abcdef0123456789abcdef0123'
+    const { wrapper } = mountMsg(message(body))
+    expect(wrapper.find('.msg-attachments').exists()).toBe(false)
+  })
+
   it('copy still copies the full content', async () => {
     const writeText = vi.fn().mockResolvedValue()
     Object.assign(navigator, { clipboard: { writeText } })

@@ -183,6 +183,7 @@ class InboundService:
         self._rerun_sleep = rerun_sleep or asyncio.sleep
         self._attention_sleep = attention_sleep or asyncio.sleep  # own clock: never the supervisor's
         self._rerun_task: asyncio.Task | None = None
+        self._reconnect_task: asyncio.Task | None = None
         self._rerun_sessions: set[str | None] = set()
         self._gaps: dict[str, tuple[float, float]] = {}  # session -> incomplete backfill period
 
@@ -263,6 +264,10 @@ class InboundService:
         # them on every attempt): health measures how long it has lasted, not the last flip
         spell = {const.STATUS_CONNECTING, const.STATUS_BACKOFF}
         new_spell = status in spell and self.status not in spell
+        # attention depends on the status class (a connecting <-> backoff flip is one spell) and, when off, on why
+        relevant = (status != self.status and not (status in spell and self.status in spell)) or (
+            status == const.STATUS_DISABLED and detail != self.detail
+        )
         if status != self.status and not (status in spell and self.status in spell):
             self.status_changed_at = self._now()
         self.status, self.detail = status, detail
@@ -275,10 +280,12 @@ class InboundService:
             self._spawn(self._audit.record(
                 self.relay_id, event="inbound_connection", inbound_status=status, code=detail,
             ))
-        if changed and not self._stopping:
+        if changed and relevant and not self._stopping:
             self.refresh_monitor_sessions()  # the session chips' attention follows the connection
             if new_spell:  # "reconnecting for too long" starts without any further status change
-                self._spawn(self._reconnect_check())
+                if self._reconnect_task is not None:
+                    self._reconnect_task.cancel()  # one timer: a flapping connection never stacks them
+                self._reconnect_task = self._spawn(self._reconnect_check())
 
     def _monitors_changed(self, session_id: str) -> None:
         """A session's monitors changed: recompute its ``relay_summary`` (broadcast only on change)."""
