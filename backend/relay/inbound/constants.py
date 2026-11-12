@@ -54,7 +54,8 @@ KIND_MONITOR_CHANNEL = "monitor_channel"
 KIND_MONITOR_MENTIONS = "monitor_mentions"  # stage 3b-ii: every message that mentions the owner
 KIND_MONITOR_DMS = "monitor_dms"  # stage 3b-ii: direct and group messages other people send the owner
 SCOPE_KINDS = frozenset({KIND_MONITOR_MENTIONS, KIND_MONITOR_DMS})  # no channel; need the owner's consent
-MONITOR_KINDS = frozenset({KIND_MONITOR_THREAD, KIND_MONITOR_CHANNEL}) | SCOPE_KINDS
+KIND_MONITOR_UNREAD = "monitor_unread"  # stage 3c-ii: scheduled summary of Slack's own unread state
+MONITOR_KINDS = frozenset({KIND_MONITOR_THREAD, KIND_MONITOR_CHANNEL, KIND_MONITOR_UNREAD}) | SCOPE_KINDS
 
 # Coalescing window and envelope caps
 MONITOR_WINDOW_SECONDS = 60.0
@@ -129,3 +130,16 @@ RUN_NOW_AGENT_MIN_SECONDS = 300.0
 RUN_NOW_OWNER_MIN_SECONDS = 60.0
 MAX_SCHEDULED_PER_RELAY = 30
 API_MIN_SPACING_SECONDS = 1.3  # between Tier-3 calls (info / history / replies) of a digest run
+
+# ------------------------------------------------------- unread monitors (stage 3c-ii)
+UNREAD_MIN_INTERVAL_MINUTES = 60
+UNREAD_MAX_CONVERSATIONS = 30  # conversations listed in one envelope
+UNREAD_MESSAGES_PER_CONVERSATION = 5
+UNREAD_MESSAGE_CHARS = 500
+UNREAD_HISTORY_LIMIT = 50
+UNREAD_RUN_MAX_SECONDS = 300.0
+UNREAD_MAX_CHANNELS = 20
+UNREAD_MAX_EXCLUDE = 30
+UNREAD_NOTIFIED_MAX = 100
+INFO_CACHE_SECONDS = 60.0
+LIST_CACHE_SECONDS = 600.0

@@ -59,6 +59,9 @@ class BackfillRun:
     hydration_cap: int = const.HYDRATION_CAP
     max_age: float = const.MONITOR_BACKFILL_MAX_AGE_SECONDS
     pacer: Callable[[], Awaitable[None]] | None = None
+    # shared per-relay caches (3c-ii): a DM digest and unread monitors due together cost one scan
+    list_cache: Any = None
+    info_cache: Any = None
 
     async def pace(self) -> None:
         """Digest runs space their Tier-3 calls (shared limiter); live backfills do not."""
@@ -116,9 +119,12 @@ async def backfill_dms(
         return
     owner, self_dm = record.owner_user_id, record.self_dm_channel_id
     ctx = svc._match_context()
-    try:
+    async def list_dms():
         await run.pace()
-        conversations = await adapter.list_conversations(types="im,mpim", limit=1000)
+        return await adapter.list_conversations(types="im,mpim", limit=1000)
+
+    try:
+        conversations = await (run.list_cache.get("im,mpim", list_dms) if run.list_cache else list_dms())
     except RelayError as e:
         run.counts["rate_limited" if e.code == "ratelimited" else "list_failed"] += 1
         run.note_gap(min(monitor_cutoff(svc, m, run) for m in monitors))
@@ -131,9 +137,12 @@ async def backfill_dms(
     cutoffs = {m["id"]: monitor_cutoff(svc, m, run) for m in monitors}
     oldest = min(cutoffs.values())
     for conv in conversations:  # serialized: one Slack call at a time
-        try:
+        async def fetch_info(cid=conv.id):
             await run.pace()
-            info = await adapter.conversation_info(conv.id)
+            return await adapter.conversation_info(cid)
+
+        try:
+            info = await (run.info_cache.get(conv.id, fetch_info) if run.info_cache else fetch_info())
             channel_type = "mpim" if (info.is_mpim or conv.is_mpim) else "im"
             if info.latest_ts is not None and _tsf(info.latest_ts) <= oldest:
                 continue  # nothing newer than every cursor: no history call needed

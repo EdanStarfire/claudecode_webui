@@ -320,13 +320,15 @@ class JsonSubscriptionStore:
     def find_monitor(
         self, session_id: str, kind: str, channel: str | None, thread_ts: str | None,
         filters: dict[str, Any], schedule: dict[str, Any] | None = None,
+        options: dict[str, Any] | None = None,
     ) -> dict[str, Any] | None:
         """The monitor with this identity. A live and a digest monitor of one scope coexist; two
-        digests differ by schedule (anchor and timezone source do not count)."""
+        digests differ by schedule (anchor and timezone source do not count); unread monitors also
+        differ by their options."""
         wanted = sched.identity(schedule)
         for r in self.monitors(session_id):
             if (r["kind"] == kind and r.get("channel") == channel and r.get("thread_ts") == thread_ts
-                    and r.get("filters") == filters
+                    and r.get("filters") == filters and r.get("options") == options
                     and (r.get("mode") or const.MODE_LIVE) == (const.MODE_DIGEST if schedule else const.MODE_LIVE)
                     and sched.identity(r.get("schedule")) == wanted):
                 return r
@@ -355,6 +357,21 @@ class JsonSubscriptionStore:
             rec.update(fields)
             await self._persist()
 
+    def set_notified(self, monitor_id: str, notified: dict[str, str]) -> None:
+        """Unread monitors: remember the newest ts the session was told about per conversation
+        (confirmed deliveries only). Bounded: the least recently updated entries are dropped."""
+        rec = self.get_monitor(monitor_id)
+        if rec is None or not notified:
+            return
+        merged = dict(rec.get("notified") or {})
+        for conv, ts in notified.items():
+            old = merged.pop(conv, None)
+            merged[conv] = ts if old is None or _newer(ts, old) else old
+        while len(merged) > const.UNREAD_NOTIFIED_MAX:
+            merged.pop(next(iter(merged)))
+        rec["notified"] = merged
+        self._persist_soon()
+
     def _digest_resume(self, rec: dict[str, Any], now: float) -> None:
         """A resumed digest restarts from now: next slot after now, nothing carried over."""
         if is_digest(rec) and rec.get("schedule"):
@@ -366,7 +383,7 @@ class JsonSubscriptionStore:
         self, session_id: str, kind: str, channel: str | None, *, thread_ts: str | None = None,
         filters: dict[str, Any] | None = None, expires_at: float | None = None,
         created_by: str = "agent", consent: dict[str, Any] | None = None,
-        schedule: dict[str, Any] | None = None,
+        schedule: dict[str, Any] | None = None, options: dict[str, Any] | None = None,
     ) -> tuple[dict[str, Any], str]:
         """Create a monitor, or return the identical existing one. Returns ``(record, outcome)``
         with outcome ``created`` | ``existing`` | ``resumed`` (a flood / delivery-failed monitor
@@ -375,7 +392,7 @@ class JsonSubscriptionStore:
             raise ValueError(f"unknown monitor kind {kind!r}")
         filters = filters or {"keywords": [], "users": []}
         async with self._lock:
-            existing = self.find_monitor(session_id, kind, channel, thread_ts, filters, schedule)
+            existing = self.find_monitor(session_id, kind, channel, thread_ts, filters, schedule, options)
             now = self._clock()
             if existing is not None:
                 if existing["status"] == SUSPENDED and existing.get("suspended_reason") in (
@@ -413,6 +430,10 @@ class JsonSubscriptionStore:
                     last_run_at=None, last_run=None, run_failures=0, slot_retries=0, slot_defers=0,
                     last_run_trigger=None,
                 )
+            if kind == const.KIND_MONITOR_UNREAD:
+                if not schedule:
+                    raise ValueError("an unread monitor needs a schedule")
+                rec.update(options=options or {}, notified={})
             if consent is not None:
                 rec["consent"] = consent  # written only after an approved scope prompt
             self._records[rec["id"]] = rec

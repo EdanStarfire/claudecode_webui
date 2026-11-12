@@ -51,6 +51,15 @@ describe('RelayPermissionPrompt monitor_scope (3b-ii)', () => {
     ])
   })
 
+  it('titles the unread scope and shows its never-marks-read wording as plain text', () => {
+    const text = 'It never marks anything as read, never posts and never reacts.'
+    renderWithStores(RelayPermissionPrompt, {
+      props: { prompt: { ...SCOPE, scope: 'unread', tool: 'monitor_unread', text, filters_summary: '' } }
+    })
+    expect(screen.getByText('Allow reading your unread Slack messages')).toBeTruthy()
+    expect(screen.getByTestId('relay-scope-text').textContent).toBe(text)
+  })
+
   it('titles the DM scope and renders the text as plain text', () => {
     renderWithStores(RelayPermissionPrompt, {
       props: { prompt: { ...SCOPE, scope: 'dms', tool: 'monitor_dms', text: 'DMs <b>x</b>', filters_summary: '' } }

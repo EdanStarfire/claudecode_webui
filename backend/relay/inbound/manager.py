@@ -15,8 +15,10 @@ from functools import partial
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
+from ..slack_policy import CHANNEL_ID_RE
 from . import constants as const
 from . import schedule as sched
+from . import unread
 from .health import collect_health
 from .monitor_delivery import CoordinatorPort
 from .service import InboundService, InstructionSink, TransportFactory
@@ -210,6 +212,8 @@ class InboundManager:
         service = self.services.get(relay_id)
         if service is None:
             return False
+        if tool == "monitor_unread":
+            return self._unread_exists(service, session_id, args)
         kind = const.KIND_MONITOR_MENTIONS if tool == "monitor_mentions" else const.KIND_MONITOR_DMS
         keywords, users = args.get("keywords") or [], args.get("users") or []
         if not isinstance(keywords, list) or not isinstance(users, list):
@@ -234,6 +238,33 @@ class InboundManager:
             except sched.ScheduleError:
                 return False
         found = service.store.find_monitor(session_id, kind, None, None, filters, schedule)
+        return found is not None
+
+    @staticmethod
+    def _unread_exists(service: InboundService, session_id: str, args: dict[str, Any]) -> bool:
+        """The IDENTICAL unread monitor already exists (plain conversation IDs only; names answer False)."""
+        raw = args.get("schedule")
+        if raw is None:
+            return False
+        try:
+            dms, channels, exclude, mentions_only, repeat = unread.parse_option_values(args)
+        except unread.OptionError:
+            return False
+        if not all(CHANNEL_ID_RE.match(c) for c in channels):
+            return False
+        daily = raw.get("daily") if isinstance(raw, dict) else None
+        if isinstance(daily, dict) and not daily.get("timezone") and service.owner_tz is None:
+            return False
+        try:
+            schedule = sched.parse_schedule(
+                raw, owner_tz=service.owner_tz, now=time.time(), min_minutes=const.UNREAD_MIN_INTERVAL_MINUTES,
+            )
+        except sched.ScheduleError:
+            return False
+        options = unread.make_options(dms, channels, exclude, mentions_only, repeat)
+        found = service.store.find_monitor(
+            session_id, const.KIND_MONITOR_UNREAD, None, None, {"keywords": [], "users": []}, schedule, options,
+        )
         return found is not None
 
     def schedule_reevaluate(self, session_id: str | None = None) -> None:

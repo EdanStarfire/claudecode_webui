@@ -59,7 +59,9 @@ def _parse_day(value: Any) -> int:
     raise ScheduleError("days must be names (mon..sun) or numbers 0-6 (0 = Monday).")
 
 
-def parse_schedule(raw: Any, *, owner_tz: str | None, now: float) -> dict[str, Any]:
+def parse_schedule(
+    raw: Any, *, owner_tz: str | None, now: float, min_minutes: int = const.DIGEST_MIN_INTERVAL_MINUTES,
+) -> dict[str, Any]:
     """Validate and normalize *raw*. ``owner_tz`` is the owner's Slack timezone (None = unknown ->
     UTC fallback). Raises ``ScheduleError``."""
     if not isinstance(raw, dict) or not raw:
@@ -73,8 +75,8 @@ def parse_schedule(raw: Any, *, owner_tz: str | None, now: float) -> dict[str, A
         minutes = raw["every_minutes"]
         if isinstance(minutes, bool) or not isinstance(minutes, int):
             raise ScheduleError("every_minutes must be a whole number of minutes.")
-        if minutes < const.DIGEST_MIN_INTERVAL_MINUTES:
-            raise ScheduleError(f"every_minutes must be at least {const.DIGEST_MIN_INTERVAL_MINUTES}.")
+        if minutes < min_minutes:
+            raise ScheduleError(f"every_minutes must be at least {min_minutes}.")
         if minutes > 1440:
             raise ScheduleError("every_minutes must be at most 1440 (one day).")
         return {"type": "interval", "minutes": minutes, "anchor": float(now)}

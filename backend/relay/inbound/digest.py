@@ -18,6 +18,7 @@ from typing import TYPE_CHECKING, Any
 from ..adapter import RelayError
 from . import constants as const
 from . import content as monitor_content
+from . import unread
 from .backfill import BackfillRun, backfill_dms, backfill_mentions, collect_thread_or_channel
 from .coalescer import BufferedMessage
 from .schedule import next_run_with_jitter
@@ -30,8 +31,10 @@ logger = logging.getLogger(__name__)
 SOURCE_BY_TRIGGER = {"schedule": "schedule", "late": "late", "agent": "agent", "manual": "owner"}
 _GAP_KEYS = frozenset({
     "hydration_cap", "hydration_failed", "conversation_cap", "rate_limited", "truncated",
-    "list_failed", "search_failed", "conversation_failed", "fetch_failed", "error",
+    "list_failed", "search_failed", "conversation_failed", "fetch_failed", "error", "time_cap",
 })
+# unread reasons that are problems worth the 5-minute drop summary (the rest are routine)
+_UNREAD_DROP_REASONS = ("blocked_channel", "policy_unset", "conversation_cap", "time_cap", "conversation_failed")
 
 
 def _tsf(ts: str | None) -> float:
@@ -215,6 +218,10 @@ class DigestScheduler:
         if int(m.get("slot_defers") or 0):
             svc.store.touch_monitor(mid, slot_defers=0)
 
+        if m["kind"] == const.KIND_MONITOR_UNREAD:
+            await self._run_unread(m, trigger, regular, now, policies)
+            return
+
         durable = _tsf(m.get("last_seen_ts")) or now
         since = max(durable, now - const.DIGEST_WINDOW_MAX_AGE_SECONDS)
         older_omitted = durable < now - const.DIGEST_WINDOW_MAX_AGE_SECONDS
@@ -229,6 +236,7 @@ class DigestScheduler:
         run = BackfillRun(
             now, digest=True, sink=sink, hydration_cap=const.DIGEST_HYDRATION_CAP,
             max_age=const.DIGEST_WINDOW_MAX_AGE_SECONDS, pacer=svc.api_limiter.wait,
+            list_cache=svc.list_cache, info_cache=svc.info_cache,
         )
         adapter = svc._manager.adapter_for(svc.relay_id)
         try:
@@ -309,6 +317,68 @@ class DigestScheduler:
         await self._finish(
             m, trigger, "delivered", count=len(included), omitted=omitted_total,
             reason_counts=reasons, envelope_id=envelope_id, gap=bool(notice),
+        )
+
+    async def _run_unread(
+        self, m: dict[str, Any], trigger: str, regular: bool, now: float, policies: dict[str, Any]
+    ) -> None:
+        """One unread run (3c-ii): evaluate Slack's read state, enqueue ONE envelope only when
+        something is newly unread. Rate limits follow the digest rules; ``notified`` advances only
+        when the session confirms the delivery (``InboundService._monitor_outcome``)."""
+        svc = self._svc
+        mid, session_id = m["id"], m["session_id"]
+        since = float(m.get("last_run_at") or now - 3600)
+        adapter = svc._manager.adapter_for(svc.relay_id)
+        try:
+            res = await unread.evaluate(svc, adapter, m, policies)
+        except asyncio.CancelledError:
+            raise
+        except RelayError as e:
+            res = unread.UnreadResult(rate_limited=e.code == "ratelimited", failed=e.code != "ratelimited")
+            res.counts["rate_limited" if res.rate_limited else "error"] += 1
+        except Exception:
+            logger.exception("Unread evaluation failed")
+            res = unread.UnreadResult(failed=True)
+            res.counts["error"] += 1
+        reasons = dict(res.counts)
+        for reason in _UNREAD_DROP_REASONS:
+            if res.counts.get(reason):
+                svc._drops[f"monitor_{reason}"] += res.counts[reason]
+        if res.rate_limited:
+            await self._rate_limited(m, trigger, regular, since, now, reasons)
+            return
+        if res.failed:
+            await self._finish(m, trigger, "failed", code="collect_failed", reason_counts=reasons,
+                               run_failures=int(m.get("run_failures") or 0) + 1)
+            return
+        svc.store.touch_monitor(mid, slot_retries=0)
+        if res.consumed_empty:  # evaluated, nothing to tell the session: not looked at again until newer
+            svc.store.set_notified(mid, res.consumed_empty)
+        gap_counts = {k: v for k, v in reasons.items() if k in _GAP_KEYS and v}
+        if gap_counts:
+            self._notices.setdefault(session_id, []).append({"counts": gap_counts, "from": since, "to": now})
+        if not res.conversations:
+            svc._advance_unqueued_cover({mid: svc._ts_str(now)})
+            await self._finish(m, trigger, "empty", reason_counts=reasons, gap=bool(gap_counts))
+            return
+        notice = self._take_notice(session_id)
+        count = len(res.conversations)
+        digest_run = {
+            "at": now, "messages": count, "conversations": count, "omitted": res.omitted,
+            "gap": bool(notice), "late": trigger == "late", "trigger": trigger,
+        }
+        envelope_id = await svc.enqueue_unread(
+            m, res.conversations, as_of=now, omitted=res.omitted, cover={mid: svc._ts_str(now)},
+            notice=notice, watch_info={"digest_run": digest_run},
+        )
+        if envelope_id is None:
+            if notice:  # the announcement was not delivered: keep it for the next envelope
+                self._notices.setdefault(session_id, []).append({"counts": gap_counts, "from": since, "to": now})
+            await self._finish(m, trigger, "failed", code="enqueue_failed", reason_counts=reasons, count=count)
+            return
+        await self._finish(
+            m, trigger, "delivered", count=count, omitted=res.omitted, reason_counts=reasons,
+            envelope_id=envelope_id, gap=bool(notice),
         )
 
     def _take_notice(self, session_id: str) -> str | None:
