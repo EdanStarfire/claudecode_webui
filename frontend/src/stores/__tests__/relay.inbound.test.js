@@ -17,7 +17,20 @@ describe('relay store: inbound tab calls', () => {
     await store.loadInboundHealth('r 1')
     expect(apiMock.get.mock.calls[0][0]).toBe('/api/relays/r%201/inbound/health')
     await store.loadMonitors('r1', { sessionId: 's1', status: 'paused', limit: 100, offset: 100 })
-    expect(apiMock.get.mock.calls[1]).toEqual(['/api/relays/r1/monitors', { params: { session_id: 's1', status: 'paused', kind: null, limit: 100, offset: 100 }, signal: undefined }])
+    expect(apiMock.get.mock.calls[1]).toEqual(['/api/relays/r1/monitors', { params: { session_id: 's1', status: 'paused', kind: null, mode: null, limit: 100, offset: 100 }, signal: undefined }])
+  })
+
+  it('runMonitor posts to the relay or session route and unwraps structured errors', async () => {
+    const store = useRelayStore()
+    apiMock.post.mockResolvedValue({ started: true, monitor: { id: 'm1' } })
+    expect(await store.runMonitor('r1', 'm1')).toEqual({ started: true, monitor: { id: 'm1' } })
+    expect(apiMock.post.mock.calls[0][0]).toBe('/api/relays/r1/monitors/m1/run')
+    await store.runMonitor('r1', 'm1', 's 1')
+    expect(apiMock.post.mock.calls[1][0]).toBe('/api/sessions/s%201/relays/r1/monitors/m1/run')
+    apiMock.post.mockRejectedValue(Object.assign(new Error('x'), { status: 429, data: { detail: { code: 'run_too_soon', message: 'wait', retry_after_seconds: 41 } } }))
+    await expect(store.runMonitor('r1', 'm1')).rejects.toMatchObject({ status: 429, code: 'run_too_soon', retryAfter: 41, message: 'wait' })
+    apiMock.post.mockRejectedValue(Object.assign(new Error('Monitor not found'), { status: 404, data: { detail: 'Monitor not found' } }))
+    await expect(store.runMonitor('r1', 'm1')).rejects.toMatchObject({ status: 404, code: '' })
   })
 
   it('a 409 (inbound not running) reads as an empty list; other errors propagate', async () => {

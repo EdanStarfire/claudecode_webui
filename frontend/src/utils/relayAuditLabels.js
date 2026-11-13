@@ -21,11 +21,16 @@ export const EVENTS = {
   monitor_expired: 'Monitor expired',
   monitor_flood: 'Monitor flood',
   monitor_backfill: 'Monitor backfill',
+  monitor_digest: 'Monitor digest run', // scheduled digest / unread runs (3c); the unread kind has its own label
 }
 
 export const MONITOR_KINDS = {
   monitor_thread: 'thread', monitor_channel: 'channel', monitor_mentions: 'mentions', monitor_dms: 'DMs',
+  monitor_unread: 'unread',
 }
+
+/** Event label; scheduled unread runs say so. */
+export const eventLabel = (r) => (r.event === 'monitor_digest' && r.monitor_kind === 'monitor_unread' ? 'Monitor unread run' : EVENTS[r.event])
 
 export function plural(n, word) {
   return `${n} ${word}${n === 1 ? '' : 's'}`
@@ -63,6 +68,8 @@ export function monitorDetail(r) {
       if (r.count != null) parts.push(plural(r.count, 'message'))
       if (r.omitted) parts.push(`+${r.omitted} omitted`)
       break
+    case 'monitor_digest':
+      return digestDetail(r, parts)
     case 'monitor_flood':
       parts.push('over the flood limit, messages dropped')
       break
@@ -75,5 +82,41 @@ export function monitorDetail(r) {
     default:
       if (r.code) parts.push(r.code)
   }
+  return parts.join(' · ')
+}
+
+const DIGEST_REFUSALS = {
+  monitor_paused: 'monitor paused', monitor_suspended: 'monitor suspended', run_too_soon: 'too soon',
+  run_in_progress: 'already running', inbound_unavailable: 'inbound unavailable', not_a_digest_monitor: 'not a scheduled monitor',
+  monitor_not_found: 'monitor not found', disabled_by_owner: 'inbound switched off', no_user_token: 'no user token',
+  channel_blocked: 'channel blocked', policy_unset: 'no policy', paused: 'monitor paused',
+}
+const SOURCE_WORDS = { owner: 'run now by you', agent: 'run now by the agent' }
+
+// A scheduled run: counts and codes only ("12 messages · +3 omitted", "rate limited, retry 2/3 at 14:35").
+function digestDetail(r, parts) {
+  const unit = r.monitor_kind === 'monitor_unread' ? 'conversation' : 'message'
+  switch (r.outcome) {
+    case 'delivered':
+      parts.push(plural(r.count || 0, unit))
+      if (r.omitted) parts.push(`+${r.omitted} omitted`)
+      break
+    case 'empty': parts.push('nothing new, session not woken'); break
+    case 'rate_limited':
+      if (r.code === 'rate_limited_gave_up') parts.push('gave up this slot')
+      else if (r.code === 'rate_limited_rescheduled') {
+        const at = r.retry_at ? new Date(r.retry_at) : null
+        const when = at && !Number.isNaN(at.getTime()) ? ` at ${at.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}` : ''
+        parts.push(`rate limited, retry ${r.retry || 1}/3${when}`)
+      } else parts.push('rate limited')
+      break
+    case 'deferred': parts.push(`postponed, session busy${r.retry ? ` (${r.retry}/6)` : ''}`); break
+    case 'refused': parts.push(`refused: ${DIGEST_REFUSALS[r.code] || (r.code || '').replace(/_/g, ' ')}`); break
+    case 'failed': parts.push(`failed${r.code ? `: ${r.code.replace(/_/g, ' ')}` : ''}`); break
+    case 'accepted': parts.push('started'); break
+    default: if (r.code) parts.push(r.code)
+  }
+  if (r.code === 'late' && r.outcome !== 'refused') parts.push('ran late (missed slot)')
+  if (SOURCE_WORDS[r.source]) parts.push(SOURCE_WORDS[r.source])
   return parts.join(' · ')
 }

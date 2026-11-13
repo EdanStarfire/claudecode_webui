@@ -88,7 +88,7 @@ class TestAttentionRules:
             mon("a"), mon("b", paused=True), mon("c", status="suspended", reason="flood"),
             mon("d", status="suspended", reason="disposed"),
         ])
-        assert counts == {"active": 1, "paused": 1, "suspended": 2}
+        assert counts == {"active": 1, "paused": 1, "suspended": 2, "scheduled": 0}
 
 
 # ------------------------------------------------------------------ parity with build_health
@@ -139,10 +139,13 @@ def test_session_attention_agrees_with_library_health(conn, monitors):
 
 
 def test_every_attention_code_is_covered_by_a_session_rule_or_is_audit_only():
-    audit_only = {"backfill_gap_24h", "backfill_cap_24h", "instruction_delivery_failed_24h"}
+    audit_only = {
+        "backfill_gap_24h", "backfill_cap_24h", "instruction_delivery_failed_24h", "digest_rate_limited_24h",
+    }
     assert {c for c, s in ATTENTION_CODES.items() if s == ATTENTION} - audit_only == {
         "auth_failed", "transport_unavailable", "reconnecting_long", "inbound_off_with_monitors",
         "monitor_error", "monitors_flood", "monitors_delivery_failed", "monitors_policy_unset",
+        "digest_failures", "digest_overdue",
     }
 
 
@@ -178,7 +181,7 @@ async def rs_env(tmp_path):
 async def test_summary_defaults_to_no_monitors_and_no_attention(rs_env):
     await rs_env.service.refresh_summary("s1")
     s = (await rs_env.sessions.get_session_info("s1")).relay_summary
-    assert s["monitors"] == {"active": 0, "paused": 0, "suspended": 0} and s["attention"] is False
+    assert s["monitors"] == {"active": 0, "paused": 0, "suspended": 0, "scheduled": 0} and s["attention"] is False
 
 
 async def test_summary_uses_the_injected_monitor_summary_and_broadcasts_only_on_change(rs_env):
@@ -339,7 +342,7 @@ class TestServiceSummary:
         await monitor(env, keywords=("other",))
         await env.service.set_paused(rec["id"], True)
         s = env.service.session_monitor_summary(SESSION)
-        assert s == {"active": 1, "paused": 1, "suspended": 0, "attention": False}
+        assert s == {"active": 1, "paused": 1, "suspended": 0, "scheduled": 0, "attention": False}
         env.service._set_status(const.STATUS_AUTH_FAILED, "invalid_auth")
         assert env.service.session_monitor_summary(SESSION)["attention"] is True
 
@@ -353,7 +356,7 @@ class TestServiceSummary:
             session_manager=SimpleNamespace(), audit=SimpleNamespace(), relays_root=tmp_path,
         )
         assert mgr.session_monitor_summary(RELAY_ID, SESSION) == {
-            "active": 0, "paused": 0, "suspended": 0, "attention": False}
+            "active": 0, "paused": 0, "suspended": 0, "scheduled": 0, "attention": False}
 
     async def test_manager_delegates_to_the_service(self, env):
         await monitor(env)

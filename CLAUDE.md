@@ -885,6 +885,34 @@ write calls; only the agent's own `mark_read` tool, under the channel policy, ca
   unread counts (approximate); DM unread counts exclude muted / thread-only unreads and thread unread state is not modelled; sessions started before
   the upgrade lack the tool (restart them). Live DM backfill on `hello` does not use the shared caches (only digest / unread runs do).
 
+### Relay inbound: scheduled monitors on the owner surface (3c-iii)
+
+Stage 3c-iii puts the digest (3c-i) and unread (3c-ii) monitors on the Library tab and the session surface, adds their attention
+rules and the owner **Run now**. Code: `relay/inbound/{public,health}.py`, `digest.py`, `routers/relay.py`; frontend in `frontend/CLAUDE.md`.
+
+- **Public row** (`public.py`): `mode` (`live|digest|unread`; unread is stored as a digest of kind `monitor_unread`), `schedule`, `schedule_text`
+  (`schedule.describe`: words + timezone + source), `tz`, `tz_source`, `next_run`, `last_run_at`, `last_run {at, outcome, messages, omitted, gap, late,
+  trigger, code?, retry?, retry_at?}`, `last_run_trigger`, `run_failures`, `unread {dms, channels, exclude, mentions_only, repeat, labels}`,
+  `unread_text`, `notified_count`. Live rows: `mode: "live"`, null / zero schedule fields. Never message text. `last_run` now also carries `trigger`, `code` and,
+  for a reschedule or defer, `retry` / `retry_at` (the audit row has `retry_at` too). An `empty` run resets `run_failures` (a clean run ends a failure streak).
+- **REST**: `POST /api/relays/{id}/monitors/{mid}/run` (and the session-qualified form) = owner Run now through `run_monitor_now(trigger="manual")`: returns
+  `{started, monitor}` at once (the run is a background task), never changes `next_run`, owner spacing 60 s, every attempt audited `monitor_digest`
+  (`source=owner`, refusals with their code). 404 unknown, 409 `monitor_paused|monitor_suspended|run_in_progress|inbound_unavailable`, 422
+  `not_a_digest_monitor`, 429 `run_too_soon` (`Retry-After`, `retry_after_seconds`). `GET .../monitors?mode=` filters on the row mode.
+- **Attention rules** (`health.py`, frozen constants): attention = `digest_failures` (an active scheduled monitor with `run_failures >= 3`),
+  `digest_rate_limited_24h` (>= 2 `monitor_digest` rows with code `rate_limited_rescheduled` / `rate_limited_gave_up`), `digest_overdue` (an active, unpaused
+  scheduled monitor 10 min past `next_run` while digests are eligible: the scheduler is stuck); info = `digest_ran_late` (audit code `late` in 24 h),
+  `digest_deferred` (`last_run.outcome == "deferred"`). `digest_failures` and `digest_overdue` also light the session chip (shared
+  `attention_for_session`, which now takes `digest_eligible`); the rate-limit rule is audit-derived and Library-only.
+- **Connection-rule split**: scheduled monitors need only the user token and the owner switch. `connection_codes(..., has_live_monitors,
+  has_scheduled_monitors)`: `auth_failed` / `transport_unavailable` / `reconnecting_long` apply only when the relay (or session) has live monitors or
+  no scheduled ones at all; a relay / session with ONLY scheduled monitors is not flagged by them. `inbound_off_with_monitors` applies to live monitors
+  for any off reason and to scheduled ones only for `disabled_by_owner` / `no_user_token`. Library and chip use the same helper (parity test).
+- **Health / summary**: `monitors` gains `scheduled` (count) and `next_run` (earliest active scheduled slot); `window_24h` gains `digest_runs`,
+  `digest_delivered`, `digest_empty`, `rate_limited_runs`, `late_runs` (from `monitor_digest` rows, same scan / cache / cap). `relay_summary.monitors`
+  gains `scheduled`; every run finish / failure refreshes the summary (`_monitors_changed`, broadcast only on change).
+- **Test-only seeding** (`backend/tests/relay_inbound_demo.py`) also creates scheduled monitors in every state with their `monitor_digest` audit rows.
+
 #### Relay setup (owner walkthrough)
 
 1. Settings -> Library -> Relays -> **Create Slack relay**.

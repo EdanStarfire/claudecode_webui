@@ -22,7 +22,7 @@ class StubInbound:
         self.store = SimpleNamespace(get_monitor=self.recs.get)
         self.calls: list = []
 
-    async def public_monitors(self, session_id=None, *, status=None, kind=None, limit=100, offset=0):
+    async def public_monitors(self, session_id=None, *, status=None, kind=None, limit=100, offset=0, mode=None):
         self.calls.append(("list", session_id, status, kind, limit, offset))
         rows = [r for r in self.recs.values() if session_id in (None, r["session_id"])]
         return rows, len(rows)

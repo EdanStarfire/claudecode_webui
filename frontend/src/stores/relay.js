@@ -225,9 +225,9 @@ export const useRelayStore = defineStore('relay', () => {
     : `${_relayUrl(relayId)}/monitors`)
 
   /** Relay-wide monitor rows `{monitors, total}`; 409 (inbound not running) reads as an empty list. */
-  async function loadMonitors(relayId, { sessionId, status, kind, limit, offset, signal, qualified = false } = {}) {
+  async function loadMonitors(relayId, { sessionId, status, kind, mode, limit, offset, signal, qualified = false } = {}) {
     const params = {
-      session_id: qualified ? null : (sessionId || null), status: status || null, kind: kind || null,
+      session_id: qualified ? null : (sessionId || null), status: status || null, kind: kind || null, mode: mode || null,
       limit: limit || null, offset: offset || null,
     }
     try {
@@ -245,6 +245,21 @@ export const useRelayStore = defineStore('relay', () => {
       return await api.patch(`${_monitorsUrl(relayId, sessionId)}/${encodeURIComponent(monitorId)}`, { paused })
     } catch (e) {
       throw Object.assign(new Error(errorMessage(e)), { status: e?.status })
+    }
+  }
+
+  /** Owner "Run now" of a scheduled monitor. Starts the run in the background; resolves
+   *  `{started, monitor}`. Rejects with `{status, code, retryAfter, message}` (409 paused / suspended /
+   *  in progress / unavailable, 422 live monitor, 429 too soon, 404 removed). */
+  async function runMonitor(relayId, monitorId, sessionId = null) {
+    try {
+      return await api.post(`${_monitorsUrl(relayId, sessionId)}/${encodeURIComponent(monitorId)}/run`, {})
+    } catch (e) {
+      const detail = e?.data?.detail ?? e?.detail
+      const d = detail && typeof detail === 'object' ? detail : {}
+      throw Object.assign(new Error(d.message || errorMessage(e)), {
+        status: e?.status, code: d.code || '', retryAfter: d.retry_after_seconds ?? null,
+      })
     }
   }
 
@@ -268,7 +283,7 @@ export const useRelayStore = defineStore('relay', () => {
   }
 
   return {
-    loadInboundHealth, loadMonitors, setMonitorPaused, deleteMonitor, loadInboundActivity,
+    loadInboundHealth, loadMonitors, setMonitorPaused, runMonitor, deleteMonitor, loadInboundActivity,
     getPolicyModel, searchConversations, resolveLabels, cachedLabel, setPolicy, removePolicy,
     loadAudit, errorMessage, rememberLabel,
     relays, relay, loaded, loading, error,

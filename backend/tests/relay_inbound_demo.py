@@ -12,7 +12,8 @@ What it does, writing only inside ``--data-dir``:
      hold genuine rows spread over the last day: connection changes, instructions (delivered, refused,
      late, rate limited, delivery failed), monitor deliveries, a flood, delivery failures, suspensions
      and a backfill gap with cap reasons;
-  3. creates monitors of every kind and state for the sessions found under ``<data-dir>/sessions``.
+  3. (3c-iii) scheduled digest / unread monitors in every state with their audit rows;
+  4. creates monitors of every kind and state for the sessions found under ``<data-dir>/sessions``.
   4. (3d-ii) appends genuine user-message records to the first sessions' ``messages.jsonl``: an owner
      instruction, a multi-line instruction with markup, and a monitor envelope, each produced by a real
      ``InboundService`` and delivered through the REAL ``DeliveryGate`` / ``PendingStore`` against a mock
@@ -213,7 +214,94 @@ async def drive(data_dir: Path, relay_id: str, sessions, real_now: float) -> Non
     await advance(env, 30)
     await settle(env)
     _ = (thread, channel, users, expiring)
+    await seed_scheduled(env, real_now, (s1, s2, sessions[3][0] if many else s3))
     await env.service.stop()
+
+
+async def seed_scheduled(env, real_now: float, sessions: tuple[str, str, str]) -> None:
+    """3c-iii: scheduled (digest / unread) monitors in every state with their ``last_run`` variants and the
+    matching ``monitor_digest`` audit rows, through the real service / store (nothing is faked but Slack)."""
+    from backend.relay.inbound import schedule as sched
+
+    s1, s2, s3 = sessions
+    store = env.service.store
+
+    def parse(raw, tz=None):
+        return sched.parse_schedule(raw, owner_tz=tz, now=real_now - 6 * HOURS)
+
+    async def digest(kind, channel, session, raw, *, tz="Europe/Paris", keywords=(), thread_ts=None, options=None,
+                     consent=None):
+        rec, _ = await env.service.create_monitor(
+            session, kind, channel, thread_ts=thread_ts, filters={"keywords": list(keywords), "users": []},
+            expires_at=None, schedule=parse(raw, tz), options=options, consent=consent,
+        )
+        return rec
+
+    consent = {"at": real_now - 5 * HOURS, "via": "prompt"}
+    daily = {"daily": {"times": ["09:00", "17:00"], "days": ["mon", "tue", "wed", "thu", "fri"]}}
+    d_chan = await digest(const.KIND_MONITOR_CHANNEL, CHANNELS[0], s1, daily, keywords=("deploy",))
+    d_thread = await digest(const.KIND_MONITOR_THREAD, CHANNELS[1], s1, {"every_minutes": 120},
+                            thread_ts=env.clock.ts(offset=-7200))
+    d_mentions = await digest(const.KIND_MONITOR_MENTIONS, None, s2, {"every_minutes": 360}, consent=consent)
+    d_dms = await digest(const.KIND_MONITOR_DMS, None, s3, {"daily": {"times": ["08:30"]}}, tz=None, consent=consent)
+    unread = await digest(
+        const.KIND_MONITOR_UNREAD, None, s2, {"every_minutes": 120},
+        options={"dms": True, "channels": [CHANNELS[0]], "exclude": ["D0DEMOA", "D0DEMOB"], "mentions_only": True,
+                 "repeat": False}, consent=consent)
+    d_paused = await digest(const.KIND_MONITOR_CHANNEL, CHANNELS[2], s1, {"every_minutes": 240}, keywords=("billing",))
+    d_blocked = await digest(const.KIND_MONITOR_CHANNEL, CHANNELS[3], s1, {"every_minutes": 480}, keywords=("audit",))
+    d_failing = await digest(const.KIND_MONITOR_CHANNEL, CHANNELS[1], s2, {"every_minutes": 90}, keywords=("incident",))
+    d_overdue = await digest(const.KIND_MONITOR_CHANNEL, CHANNELS[2], s3, {"every_minutes": 60}, keywords=("sev1",))
+    d_deferred = await digest(const.KIND_MONITOR_CHANNEL, CHANNELS[3], s2, {"every_minutes": 180}, keywords=("noise",))
+    d_late = await digest(const.KIND_MONITOR_CHANNEL, CHANNELS[0], s3, {"every_minutes": 720}, keywords=("rollback",))
+
+    def last(at, outcome, **kw):
+        return {"at": real_now - at, "outcome": outcome, "messages": 0, "omitted": 0, "gap": False,
+                "late": False, "trigger": "schedule", **kw}
+
+    async def state(rec, *, next_in, last_run=None, trigger="schedule", failures=0):
+        await store.set_next_run(rec["id"], real_now + next_in, run_failures=failures)
+        store.touch_monitor(rec["id"], last_run=last_run, last_run_at=last_run["at"] if last_run else None,
+                            last_run_trigger=trigger if last_run else None)
+
+    await state(d_chan, next_in=3 * HOURS + 120, last_run=last(2 * HOURS, "delivered", messages=12))
+    await state(d_thread, next_in=40 * 60, last_run=last(80 * 60, "empty"))
+    await state(d_mentions, next_in=5 * 60, last_run=last(300, "rate_limited", code="rate_limited_rescheduled",
+                                                          retry=2, retry_at=real_now + 5 * 60))
+    await state(d_dms, next_in=14 * HOURS, last_run=last(10 * HOURS, "rate_limited", code="rate_limited_gave_up", retry=3))
+    await state(unread, next_in=75 * 60, last_run=last(45 * 60, "delivered", messages=3, trigger="manual"),
+                trigger="manual")
+    await state(d_paused, next_in=2 * HOURS, last_run=last(4 * HOURS, "delivered", messages=2))
+    await state(d_blocked, next_in=3 * HOURS, last_run=last(HOURS, "refused", code="channel_blocked"))
+    await state(d_failing, next_in=30 * 60, last_run=last(1800, "failed", code="collect_failed"), failures=3)
+    await state(d_overdue, next_in=-30 * 60, last_run=last(90 * 60, "delivered", messages=1))
+    await state(d_deferred, next_in=8 * 60, last_run=last(120, "deferred", code="session_busy", retry=1,
+                                                         retry_at=real_now + 8 * 60))
+    await state(d_late, next_in=6 * HOURS, last_run=last(3 * HOURS, "delivered", messages=4, late=True, trigger="late"),
+                trigger="late")
+    await env.service.set_paused(d_paused["id"], True, source="owner")
+    await env.service._suspend(store.get_monitor(d_blocked["id"]), const.SUSPEND_CHANNEL_BLOCKED)
+
+    # ---- audit rows of the runs (the 24 h counters / attention tags read these)
+    async def run_row(rec, outcome, **fields):
+        await env.service._rec(
+            event="monitor_digest", outcome=outcome, session_id=rec["session_id"], monitor_id=rec["id"],
+            monitor_kind=rec["kind"], source=fields.pop("source", "schedule"), **fields)
+        await advance(env, 20)
+
+    await run_row(d_chan, "delivered", count=12, omitted=0)
+    await run_row(d_thread, "empty")
+    await run_row(d_mentions, "rate_limited", code="rate_limited_rescheduled", retry=1)
+    await run_row(d_mentions, "rate_limited", code="rate_limited_rescheduled", retry=2)
+    await run_row(d_dms, "rate_limited", code="rate_limited_gave_up", retry=3)
+    await run_row(unread, "accepted", code="run_now", source="owner")
+    await run_row(unread, "delivered", count=3, source="owner")
+    await run_row(d_late, "delivered", code="late", count=4, source="late")
+    await run_row(d_deferred, "deferred", code="session_busy", retry=1)
+    await run_row(d_blocked, "refused", code="channel_blocked")
+    await run_row(d_paused, "refused", code="monitor_paused", source="owner")
+    await run_row(d_failing, "failed", code="collect_failed")
+    await run_row(d_overdue, "empty")
 
 
 async def seed_timeline(data_dir: Path, relay_id: str, sessions) -> None:

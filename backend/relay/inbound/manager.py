@@ -191,7 +191,7 @@ class InboundManager:
         in memory only (no Slack call, no audit scan); zeros when the relay has no running service."""
         service = self.services.get(relay_id)
         if service is None:
-            return {"active": 0, "paused": 0, "suspended": 0, "attention": False}
+            return {"active": 0, "paused": 0, "suspended": 0, "scheduled": 0, "attention": False}
         return service.session_monitor_summary(session_id)
 
     def has_thread_grant(

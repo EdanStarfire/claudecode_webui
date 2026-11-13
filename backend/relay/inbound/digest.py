@@ -21,6 +21,7 @@ from . import content as monitor_content
 from . import unread
 from .backfill import BackfillRun, backfill_dms, backfill_mentions, collect_thread_or_channel
 from .coalescer import BufferedMessage
+from .health import iso
 from .schedule import next_run_with_jitter
 
 if TYPE_CHECKING:
@@ -171,25 +172,40 @@ class DigestScheduler:
         )
 
     def _last_run(self, outcome: str, *, count: int = 0, omitted: int = 0, gap: bool = False,
-                  late: bool = False) -> dict[str, Any]:
-        return {"at": self._svc._now(), "outcome": outcome, "messages": count, "omitted": omitted,
-                "gap": gap, "late": late}
+                  late: bool = False, trigger: str | None = None, code: str | None = None,
+                  retry: int | None = None, retry_at: float | None = None) -> dict[str, Any]:
+        run: dict[str, Any] = {"at": self._svc._now(), "outcome": outcome, "messages": count,
+                               "omitted": omitted, "gap": gap, "late": late, "trigger": trigger}
+        if code:
+            run["code"] = code
+        if retry is not None:
+            run["retry"] = retry
+        if retry_at is not None:
+            run["retry_at"] = retry_at
+        return run
 
     async def _finish(
         self, m: dict[str, Any], trigger: str, outcome: str, *, code: str | None = None,
         count: int = 0, omitted: int = 0, reason_counts: dict[str, int] | None = None,
-        envelope_id: str | None = None, retry: int | None = None, gap: bool = False, **fields: Any,
+        envelope_id: str | None = None, retry: int | None = None, gap: bool = False,
+        retry_at: float | None = None, **fields: Any,
     ) -> None:
         svc = self._svc
         updates: dict[str, Any] = {"last_run_trigger": trigger, **fields}
         if outcome != "delivered":  # a delivered run is recorded when the session confirms it
-            updates["last_run"] = self._last_run(outcome, count=count, omitted=omitted, gap=gap,
-                                                 late=trigger == "late")
+            updates["last_run"] = self._last_run(
+                outcome, count=count, omitted=omitted, gap=gap, late=trigger == "late", trigger=trigger,
+                code=code, retry=retry, retry_at=retry_at,
+            )
             updates["last_run_at"] = svc._now()
+        if outcome == "empty":  # a clean run ends a streak of failures
+            updates["run_failures"] = 0
         svc.store.touch_monitor(m["id"], **updates)
+        svc._monitors_changed(m["session_id"])
         await self._audit(
             m, trigger, outcome, code=code or ("late" if trigger == "late" else None), count=count,
             omitted=omitted, reason_counts=reason_counts or None, envelope_id=envelope_id, retry=retry,
+            retry_at=iso(retry_at),
         )
 
     async def _run(self, m: dict[str, Any], *, trigger: str, regular: bool) -> None:
@@ -213,7 +229,8 @@ class DigestScheduler:
                 await svc.store.set_next_run(
                     mid, now + const.DIGEST_DEFER_STEP_SECONDS, slot_defers=defers + 1,
                 )
-                await self._finish(m, trigger, "deferred", code="session_busy", retry=defers + 1)
+                await self._finish(m, trigger, "deferred", code="session_busy", retry=defers + 1,
+                                   retry_at=now + const.DIGEST_DEFER_STEP_SECONDS)
                 return
         if int(m.get("slot_defers") or 0):
             svc.store.touch_monitor(mid, slot_defers=0)
@@ -411,7 +428,8 @@ class DigestScheduler:
                 run_failures=failures,
             )
             await self._finish(m, trigger, "rate_limited", code="rate_limited_rescheduled",
-                               retry=retries, reason_counts=reasons)
+                               retry=retries, reason_counts=reasons,
+                               retry_at=now + const.DIGEST_RATE_LIMIT_RESCHEDULE_SECONDS)
             return
         await svc.store.set_next_run(
             mid, next_run_with_jitter(m["schedule"], mid, now), slot_retries=0, run_failures=failures,

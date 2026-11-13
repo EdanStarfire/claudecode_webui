@@ -7,6 +7,7 @@
       <span class="text-muted" data-testid="relay-info-count">{{ summary.policy_count }} channel {{ summary.policy_count === 1 ? 'policy' : 'policies' }}</span>
       <span v-if="monitors.total" class="mon-summary" data-testid="relay-info-monitors">
         <button type="button" class="btn btn-sm btn-link p-0" data-testid="relay-info-monitors-link" @click="go(`/settings/session/${sessionId}/relay#monitors`)">{{ monitorCountText(monitors.total) }}</button>
+        <RelayTag v-if="monitors.scheduled" tone="neutral" title="Scheduled digest or unread monitors" data-testid="relay-info-monitors-scheduled">{{ monitors.scheduled }} scheduled</RelayTag>
         <RelayTag v-if="monitors.paused" tone="neutral" data-testid="relay-info-monitors-paused">{{ monitors.paused }} paused</RelayTag>
         <RelayTag v-if="monitors.suspended" tone="neutral" data-testid="relay-info-monitors-suspended">{{ monitors.suspended }} suspended</RelayTag>
         <span v-if="summary.attention" class="attn-dot" title="Needs attention: see Monitors" role="img" aria-label="Needs attention: see Monitors" data-testid="relay-info-dot"></span>
