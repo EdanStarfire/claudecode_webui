@@ -130,3 +130,19 @@ describe('RelaySessionChip', () => {
     expect(lit.attributes('title')).toContain('needs attention')
   })
 })
+
+describe('scheduled monitors on the session surface (3c-iii)', () => {
+  it('info row shows a quiet scheduled tag only when there are scheduled monitors', async () => {
+    const some = await mountRow({ relay_summary: { ...SUMMARY, monitors: { active: 2, paused: 0, suspended: 0, scheduled: 2 }, attention: false } })
+    expect(some.wrapper.find('[data-testid="relay-info-monitors-scheduled"]').text()).toBe('2 scheduled')
+    const none = await mountRow({ relay_summary: { ...SUMMARY, monitors: { active: 2, paused: 0, suspended: 0 }, attention: false } })
+    expect(none.wrapper.find('[data-testid="relay-info-monitors-scheduled"]').exists()).toBe(false)
+  })
+
+  it('chip title names scheduled monitors only when attention can only come from them', () => {
+    const only = mount(RelaySessionChip, { props: { summary: { ...SUMMARY, monitors: { active: 1, scheduled: 1 }, attention: true } } })
+    expect(only.find('[data-testid="relay-session-chip"]').attributes('title')).toContain('scheduled monitors')
+    const mixed = mount(RelaySessionChip, { props: { summary: { ...SUMMARY, monitors: { active: 2, scheduled: 1 }, attention: true } } })
+    expect(mixed.find('[data-testid="relay-session-chip"]').attributes('title')).not.toContain('scheduled')
+  })
+})

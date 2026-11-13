@@ -46,7 +46,7 @@
 import { computed, onBeforeUnmount, ref, watch } from 'vue'
 import { useRelayStore } from '@/stores/relay'
 import RelayTag from './RelayTag.vue'
-import { EVENTS, inboundDetail } from '@/utils/relayAuditLabels'
+import { EVENTS, eventLabel, inboundDetail } from '@/utils/relayAuditLabels'
 import { ACTIVITY_CHIPS, clockTime, fullTime, isProblem } from '@/utils/relayInbound'
 
 const props = defineProps({
@@ -71,7 +71,7 @@ const auditLink = computed(() => ({ path: '/settings/relays', query: { tab: 'aud
 
 const who = (r) => r.session_name || r.handle || ''
 function text(r) {
-  const label = EVENTS[r.event] || r.event
+  const label = eventLabel(r) || EVENTS[r.event] || r.event
   const detail = inboundDetail(r) || r.code || ''
   return detail ? `${label} · ${detail}` : label
 }

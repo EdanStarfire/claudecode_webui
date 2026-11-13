@@ -32,7 +32,7 @@ _ATTACHMENT_FIELDS = (
 )
 
 
-_NO_MONITORS = {"active": 0, "paused": 0, "suspended": 0, "attention": False}
+_NO_MONITORS = {"active": 0, "paused": 0, "suspended": 0, "scheduled": 0, "attention": False}
 
 
 class SessionNotFoundError(KeyError):

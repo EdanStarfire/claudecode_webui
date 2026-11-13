@@ -17,9 +17,16 @@
         <option value="">All sessions</option>
         <option v-for="s in sessionOptions" :key="s.id" :value="s.id">{{ s.name }}</option>
       </select>
+      <select v-model="mode" class="form-select form-select-sm" aria-label="Type" data-testid="monitor-filter-mode">
+        <option v-for="o in MODE_OPTIONS" :key="o.key" :value="o.key">{{ o.label }}</option>
+      </select>
       <select v-model="kind" class="form-select form-select-sm" aria-label="Kind" data-testid="monitor-filter-kind">
         <option value="">All kinds</option>
         <option v-for="(label, k) in KIND_OPTIONS" :key="k" :value="k">{{ label }}</option>
+      </select>
+      <select v-model="sortBy" class="form-select form-select-sm" aria-label="Sort" data-testid="monitor-sort">
+        <option value="created">Sort: created</option>
+        <option value="next">Sort: next run</option>
       </select>
     </div>
 
@@ -32,14 +39,18 @@
     <div v-if="removedNote" class="muted" data-testid="monitor-removed-note">A monitor was {{ removedNote }}.</div>
 
     <RelayMonitorRow
-      v-for="m in rows"
+      v-for="m in sortedRows"
       :key="m.id"
       :monitor="m"
       :now-sec="nowSec"
       :busy="busy.has(m.id)"
+      :running="running.has(m.id)"
+      :note="notes[m.id] || ''"
+      :peers="rows"
       :error="errors[m.id] || ''"
       :show-session="!sessionId"
       @toggle-pause="togglePause"
+      @run="runNow"
       @delete="remove"
     />
 
@@ -52,7 +63,9 @@
       @click="loadMore"
     >{{ loadingMore ? 'Loading…' : `Load more (${total - rows.length})` }}</button>
 
-    <div class="muted foot" data-testid="monitor-foot">Applies immediately. Nothing here needs saving.</div>
+    <div class="muted foot" data-testid="monitor-foot">
+      <template v-if="hasScheduled"><span data-testid="monitor-repeat-foot">{{ REPEAT_NOTICE }}</span>{{ ' ' }}</template>Applies immediately. Nothing here needs saving.
+    </div>
   </div>
 </template>
 
@@ -61,6 +74,7 @@ import { computed, onBeforeUnmount, reactive, ref, watch } from 'vue'
 import { useRelayStore } from '@/stores/relay'
 import { useSessionStore } from '@/stores/session'
 import RelayMonitorRow from './RelayMonitorRow.vue'
+import { REPEAT_NOTICE, runNowError, toEpoch } from '@/utils/relayInbound'
 
 const props = defineProps({
   relayId: { type: String, required: true },
@@ -77,13 +91,22 @@ const STATE_CHIPS = [
   { key: '', label: 'All' }, { key: 'active', label: 'Active' },
   { key: 'paused', label: 'Paused' }, { key: 'suspended', label: 'Suspended' },
 ]
-const KIND_OPTIONS = { monitor_thread: 'Thread', monitor_channel: 'Channel', monitor_mentions: 'Mentions', monitor_dms: 'Direct messages' }
+const KIND_OPTIONS = {
+  monitor_thread: 'Thread', monitor_channel: 'Channel', monitor_mentions: 'Mentions', monitor_dms: 'Direct messages',
+  monitor_unread: 'Unread',
+}
+const MODE_OPTIONS = [
+  { key: '', label: 'All types' }, { key: 'live', label: 'Live' }, { key: 'digest', label: 'Digest' }, { key: 'unread', label: 'Unread' },
+]
+const RUNNING_MAX_MS = 8000 // "Running…" ends at the latest then, whatever the next refresh shows
 
 const store = useRelayStore()
 const sessionStore = useSessionStore()
 
 const status = ref('')
 const kind = ref('')
+const mode = ref('')
+const sortBy = ref('created')
 const sessionFilter = ref(props.initialSession)
 const rows = ref([])
 const total = ref(0)
@@ -93,6 +116,10 @@ const notRunning = ref(false)
 const loadingMore = ref(false)
 const busy = reactive(new Set())
 const errors = reactive({})
+const notes = reactive({})
+const running = reactive(new Set())
+const runBaseline = {} // monitor id -> last_run.at when Run now was clicked
+const runTimers = {}
 const nowSec = ref(Date.now() / 1000)
 let seq = 0
 let moreSeq = 0
@@ -103,7 +130,13 @@ let reloadAfter = null // a load skipped while an action was in flight: re-run w
 let timer = null
 
 const effectiveSession = computed(() => props.sessionId || sessionFilter.value)
-const hasFilter = computed(() => !!(status.value || kind.value || (!props.sessionId && sessionFilter.value)))
+const hasFilter = computed(() => !!(status.value || kind.value || mode.value || (!props.sessionId && sessionFilter.value)))
+const hasScheduled = computed(() => rows.value.some(m => m.mode === 'digest' || m.mode === 'unread'))
+const sortedRows = computed(() => {
+  if (sortBy.value !== 'next') return rows.value
+  const next = (m) => (m.mode === 'live' || !m.mode ? Infinity : (toEpoch(m.next_run) ?? Infinity))
+  return [...rows.value].sort((a, b) => next(a) - next(b))
+})
 const sessionOptions = computed(() => {
   const list = [...sessionStore.sessions.values()]
     .filter(s => s.session_id)
@@ -117,7 +150,7 @@ const sessionOptions = computed(() => {
 
 function query(extra = {}) {
   // a locked session list uses the session-qualified routes (the session's Monitors block, 3d-ii)
-  return { sessionId: effectiveSession.value, qualified: !!props.sessionId, status: status.value, kind: kind.value, ...extra }
+  return { sessionId: effectiveSession.value, qualified: !!props.sessionId, status: status.value, kind: kind.value, mode: mode.value, ...extra }
 }
 
 /** Reload the loaded span (a poll, a filter change, after an action). Skipped while an action is in flight. */
@@ -140,6 +173,10 @@ async function load({ reset = false } = {}) {
     notRunning.value = !!res.notRunning
     loadError.value = ''
     nowSec.value = Date.now() / 1000
+    for (const id of [...running]) { // a new last run ends the optimistic "Running…"
+      const row = rows.value.find(r => r.id === id)
+      if (!row || (row.last_run?.at ?? null) !== runBaseline[id]) finishRun(id)
+    }
   } catch (e) {
     if (mine === seq) loadError.value = e.message
   } finally {
@@ -191,6 +228,35 @@ async function togglePause(monitor) {
   } finally {
     busy.delete(id)
     settleAction()
+  }
+}
+
+function finishRun(id) {
+  clearTimeout(runTimers[id])
+  delete runTimers[id]
+  delete runBaseline[id]
+  running.delete(id)
+  delete notes[id]
+}
+
+async function runNow(monitor) {
+  const id = monitor.id
+  if (running.has(id)) return // no double submit
+  delete errors[id]
+  running.add(id)
+  runBaseline[id] = monitor.last_run?.at ?? null
+  notes[id] = 'Started: the result appears in "last run".'
+  runTimers[id] = setTimeout(() => { finishRun(id); load() }, RUNNING_MAX_MS)
+  try {
+    const res = await store.runMonitor(props.relayId, id, props.sessionId || null)
+    if (res?.monitor?.id) replace(id, { ...monitor, ...res.monitor })
+    emit('changed')
+    setTimeout(() => { if (!unmounted) load() }, 2500) // pick the result up without waiting for the poll
+  } catch (e) {
+    finishRun(id)
+    if (e.status === 404) dropRow(id, 'already removed')
+    else if (e.status === 422) delete errors[id] // not a scheduled monitor: nothing to show
+    else errors[id] = runNowError({ status: e.status, code: e.code, retryAfter: e.retryAfter })
   }
 }
 
@@ -248,7 +314,7 @@ function startPolling() {
 
 // a deep link (?session=) can arrive while the page is already open
 watch(() => props.initialSession, (id) => { sessionFilter.value = id })
-watch([status, kind, sessionFilter], () => { filterGen++; load({ reset: true }) })
+watch([status, kind, mode, sessionFilter], () => { filterGen++; load({ reset: true }) })
 watch(() => props.active, (on) => {
   if (on) { load(); startPolling() } else stopPolling()
 }, { immediate: true })
@@ -256,6 +322,7 @@ function onVisible() { if (!document.hidden && props.active) load() }
 document.addEventListener('visibilitychange', onVisible)
 onBeforeUnmount(() => {
   unmounted = true
+  Object.values(runTimers).forEach(clearTimeout)
   stopPolling()
   seq++
   document.removeEventListener('visibilitychange', onVisible)

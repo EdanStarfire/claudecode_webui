@@ -65,10 +65,11 @@ def test_every_rule_code_is_frozen_with_its_severity():
         "auth_failed", "transport_unavailable", "reconnecting_long", "inbound_off_with_monitors",
         "monitors_flood", "monitors_delivery_failed", "monitors_policy_unset", "monitor_error",
         "backfill_gap_24h", "backfill_cap_24h", "instruction_delivery_failed_24h",
+        "digest_failures", "digest_rate_limited_24h", "digest_overdue",
     }
     assert {c for c, s in ATTENTION_CODES.items() if s == INFO} == {
         "monitors_channel_blocked", "monitors_disposed", "monitors_session_inactive",
-        "monitors_paused", "monitors_expiring",
+        "monitors_paused", "monitors_expiring", "digest_ran_late", "digest_deferred",
     }
 
 
@@ -143,7 +144,10 @@ def test_monitor_error_rule():
 
 def test_paused_wins_over_suspended_in_counts():
     p = build(monitors=[mon(paused=True, status="suspended", reason="flood")])
-    assert p["monitors"] == {"total": 1, "active": 0, "paused": 1, "suspended": 0, "by_reason": {}}
+    assert p["monitors"] == {
+        "total": 1, "active": 0, "paused": 1, "suspended": 0, "by_reason": {}, "scheduled": 0,
+        "next_run": None,
+    }
     assert codes(p) == ["monitors_paused"]
 
 

@@ -14,7 +14,7 @@ from typing import Any
 
 from ..audit import AuditScan
 from . import constants as const
-from .public import effective_state
+from .public import effective_state, monitor_mode
 
 ATTENTION = "attention"  # amber dot: the owner has to act
 INFO = "info"  # plain tag: an owner-caused or self-healing state
@@ -24,13 +24,18 @@ SCAN_CACHE_SECONDS = 30.0
 SCAN_MAX_ROWS = 5000
 RECONNECTING_LONG_SECONDS = 120.0  # backoff / connecting for longer than this needs attention
 EXPIRING_SOON_SECONDS = 24 * 3600
+DIGEST_FAILURES_ATTENTION = 3  # consecutive failed runs of one scheduled monitor
+DIGEST_RATE_LIMITED_ROWS = 2  # reschedule / give-up rows in the window
+DIGEST_OVERDUE_SECONDS = 600  # an active scheduled monitor this far past its slot: the scheduler is stuck
 
 # Audit events the health aggregate reads (an exact list: the scan skips every other row).
 HEALTH_EVENTS = [
     "inbound_connection", "inbound_instruction", "inbound_housekeeping",
     "monitor_delivered", "monitor_delivery_failed", "monitor_flood", "monitor_backfill",
-    "monitor_suspended", "monitor_paused",
+    "monitor_suspended", "monitor_paused", "monitor_digest",
 ]
+# ``monitor_digest`` codes that mean Slack rate limited a scheduled slot
+DIGEST_RATE_LIMIT_CODES = ("rate_limited_rescheduled", "rate_limited_gave_up")
 # monitor_backfill ``reason_counts`` keys that mean a message was not delivered
 BACKFILL_DROP_REASONS = frozenset({
     "non_member", "hydration_cap", "hydration_failed", "conversation_cap", "rate_limited",
@@ -38,6 +43,8 @@ BACKFILL_DROP_REASONS = frozenset({
 BACKFILL_CAP_REASONS = ("hydration_cap", "conversation_cap")
 # ``inbound_status`` detail codes of a ``disabled`` status that mean "monitors cannot work"
 OFF_DETAILS = frozenset({"disabled_by_owner", "no_app_token", "no_user_token"})
+# ... and the ones that stop SCHEDULED monitors too (they need only the user token and the owner switch)
+SCHEDULED_OFF_DETAILS = frozenset({"disabled_by_owner", "no_user_token"})
 
 # Suspension reason -> (attention code, severity, audit events the Audit link filters on)
 SUSPENSION_RULES: dict[str, tuple[str, str, list[str]]] = {
@@ -57,34 +64,77 @@ ATTENTION_CODES: dict[str, str] = {
     "reconnecting_long": ATTENTION,
     "inbound_off_with_monitors": ATTENTION,
     "monitor_error": ATTENTION,
+    "digest_failures": ATTENTION,
+    "digest_rate_limited_24h": ATTENTION,
+    "digest_overdue": ATTENTION,
     "backfill_gap_24h": ATTENTION,
     "backfill_cap_24h": ATTENTION,
     "instruction_delivery_failed_24h": ATTENTION,
     "monitors_paused": INFO,
     "monitors_expiring": INFO,
+    "digest_ran_late": INFO,
+    "digest_deferred": INFO,
     **{code: sev for code, sev, _events in SUSPENSION_RULES.values()},
 }
 
 
 def connection_codes(
     status: str, detail: str | None, status_since: float | None, now: float, *,
-    has_live_monitors: bool,
+    has_live_monitors: bool, has_scheduled_monitors: bool = False,
 ) -> list[str]:
     """Attention-level connection codes (shared by ``build_health`` and the per-session summary, so the
-    Library tab and the session chip cannot disagree)."""
+    Library tab and the session chip cannot disagree).
+
+    Scheduled monitors (digest / unread) need only the user token and the owner's inbound switch, not
+    the Socket Mode connection: when a relay (or session) has ONLY scheduled monitors the socket-level
+    codes stay quiet, and the "inbound off" code applies to them only for the owner switch / a missing
+    user token."""
     codes: list[str] = []
-    if status == const.STATUS_AUTH_FAILED:
-        codes.append("auth_failed")
-    if status == const.STATUS_TRANSPORT_UNAVAILABLE:
-        codes.append("transport_unavailable")
-    if (
-        status in (const.STATUS_BACKOFF, const.STATUS_CONNECTING) and status_since is not None
-        and now - status_since > RECONNECTING_LONG_SECONDS
+    socket_matters = has_live_monitors or not has_scheduled_monitors
+    if socket_matters:
+        if status == const.STATUS_AUTH_FAILED:
+            codes.append("auth_failed")
+        if status == const.STATUS_TRANSPORT_UNAVAILABLE:
+            codes.append("transport_unavailable")
+        if (
+            status in (const.STATUS_BACKOFF, const.STATUS_CONNECTING) and status_since is not None
+            and now - status_since > RECONNECTING_LONG_SECONDS
+        ):
+            codes.append("reconnecting_long")
+    if status == const.STATUS_DISABLED and (
+        (has_live_monitors and detail in OFF_DETAILS)
+        or (has_scheduled_monitors and detail in SCHEDULED_OFF_DETAILS)
     ):
-        codes.append("reconnecting_long")
-    if status == const.STATUS_DISABLED and detail in OFF_DETAILS and has_live_monitors:
         codes.append("inbound_off_with_monitors")
     return codes
+
+
+def _is_scheduled(monitor: dict[str, Any]) -> bool:
+    return monitor_mode(monitor) != "live"
+
+
+def monitor_is_failing_runs(monitor: dict[str, Any]) -> bool:
+    """An ACTIVE scheduled monitor whose runs keep failing."""
+    return (
+        _is_scheduled(monitor) and effective_state(monitor) == "active"
+        and int(monitor.get("run_failures") or 0) >= DIGEST_FAILURES_ATTENTION
+    )
+
+
+def monitor_is_overdue(monitor: dict[str, Any], now: float, *, eligible: bool) -> bool:
+    """An ACTIVE scheduled monitor far past its slot while the relay can run digests."""
+    next_run = monitor.get("next_run")
+    return bool(
+        eligible and _is_scheduled(monitor) and effective_state(monitor) == "active"
+        and next_run is not None and now - float(next_run) > DIGEST_OVERDUE_SECONDS
+    )
+
+
+def monitor_is_deferred(monitor: dict[str, Any]) -> bool:
+    return (
+        _is_scheduled(monitor) and effective_state(monitor) == "active"
+        and (monitor.get("last_run") or {}).get("outcome") == "deferred"
+    )
 
 
 def monitor_is_erroring(monitor: dict[str, Any]) -> bool:
@@ -106,21 +156,32 @@ def monitor_needs_attention(monitor: dict[str, Any]) -> bool:
 
 def monitor_summary_counts(monitors: list[dict[str, Any]]) -> dict[str, int]:
     states = Counter(effective_state(m) for m in monitors)
-    return {"active": states["active"], "paused": states["paused"], "suspended": states["suspended"]}
+    return {
+        "active": states["active"], "paused": states["paused"], "suspended": states["suspended"],
+        "scheduled": sum(1 for m in monitors if _is_scheduled(m)),
+    }
 
 
 def attention_for_session(
     monitors: list[dict[str, Any]], *, status: str, detail: str | None,
-    status_since: float | None, now: float,
+    status_since: float | None, now: float, digest_eligible: bool = True,
 ) -> bool:
     """The session chip's dot: only a session WITH monitors can be lit, by one of its own monitors or
     by an attention-level connection (same rules as the Inbound tab)."""
     if not monitors:
         return False
-    if any(monitor_needs_attention(m) for m in monitors):
+    if any(
+        monitor_needs_attention(m) or monitor_is_failing_runs(m)
+        or monitor_is_overdue(m, now, eligible=digest_eligible)
+        for m in monitors
+    ):
         return True
-    live = any(effective_state(m) in ("active", "paused") for m in monitors)
-    return bool(connection_codes(status, detail, status_since, now, has_live_monitors=live))
+    running = [m for m in monitors if effective_state(m) in ("active", "paused")]
+    return bool(connection_codes(
+        status, detail, status_since, now,
+        has_live_monitors=any(not _is_scheduled(m) for m in running),
+        has_scheduled_monitors=any(_is_scheduled(m) for m in running),
+    ))
 
 
 def window_start_iso(now: float) -> str:
@@ -157,12 +218,18 @@ def _item(
 
 def _monitor_counts(monitors: list[dict[str, Any]]) -> dict[str, Any]:
     states = Counter(effective_state(m) for m in monitors)
+    upcoming = [
+        float(m["next_run"]) for m in monitors
+        if _is_scheduled(m) and effective_state(m) == "active" and m.get("next_run") is not None
+    ]
     reasons = Counter(
         m.get("suspended_reason") or "unknown" for m in monitors if effective_state(m) == "suspended"
     )
     return {
         "total": len(monitors), "active": states["active"], "paused": states["paused"],
         "suspended": states["suspended"], "by_reason": dict(reasons),
+        "scheduled": sum(1 for m in monitors if _is_scheduled(m)),
+        "next_run": min(upcoming) if upcoming else None,
     }
 
 
@@ -188,6 +255,13 @@ def _window(scan: AuditScan) -> dict[str, Any]:
         "cap_events": caps,
         "instructions": instructions,
         "connection_changes": scan.rows_for("inbound_connection"),
+        "digest_runs": sum(
+            scan.rows_for("monitor_digest", outcome=o) for o in ("delivered", "empty", "rate_limited", "failed")
+        ),
+        "digest_delivered": scan.rows_for("monitor_digest", outcome="delivered"),
+        "digest_empty": scan.rows_for("monitor_digest", outcome="empty"),
+        "rate_limited_runs": scan.rows_for("monitor_digest", outcome="rate_limited"),
+        "late_runs": scan.rows_for("monitor_digest", code="late"),
     }
 
 
@@ -202,6 +276,7 @@ def build_health(
     *, relay_id: str, enabled: bool, status: str, detail: str | None,
     status_since: float | None, connected_at: float | None, inflight: int,
     monitors: list[dict[str, Any]], last_backfill: dict[str, Any] | None, scan: AuditScan, now: float,
+    digest_eligible: bool = False,
 ) -> dict[str, Any]:
     counts = _monitor_counts(monitors)
     window = _window(scan)
@@ -209,11 +284,18 @@ def build_health(
     since_iso = iso(status_since)
 
     # ---- connection
-    live = counts["active"] + counts["paused"]
-    for code in connection_codes(status, detail, status_since, now, has_live_monitors=bool(live)):
-        attention.append(_item(
-            code, since_iso, live if code == "inbound_off_with_monitors" else 1, ["inbound_connection"],
-        ))
+    running = [m for m in monitors if effective_state(m) in ("active", "paused")]
+    live = sum(1 for m in running if not _is_scheduled(m))
+    scheduled_running = len(running) - live
+    for code in connection_codes(
+        status, detail, status_since, now, has_live_monitors=bool(live),
+        has_scheduled_monitors=bool(scheduled_running),
+    ):
+        if code == "inbound_off_with_monitors":
+            off_count = live + (scheduled_running if detail in SCHEDULED_OFF_DETAILS else 0)
+        else:
+            off_count = 1
+        attention.append(_item(code, since_iso, off_count, ["inbound_connection"]))
 
     # ---- suspended monitors, by reason
     by_reason: dict[str, list[dict[str, Any]]] = {}
@@ -236,6 +318,28 @@ def build_health(
         attention.append(_item(
             "monitor_error", scan.newest_for("monitor_delivery_failed"), len(erroring),
             ["monitor_delivery_failed"], sorted({m["session_id"] for m in erroring if m.get("session_id")}),
+        ))
+
+    # ---- scheduled (digest / unread) monitors
+    failing = [m for m in monitors if monitor_is_failing_runs(m)]
+    if failing:
+        attention.append(_item(
+            "digest_failures", scan.newest_for("monitor_digest", outcome="failed"), len(failing),
+            ["monitor_digest"], sorted({m["session_id"] for m in failing if m.get("session_id")}),
+        ))
+    rate_limited = sum(scan.rows_for("monitor_digest", code=c) for c in DIGEST_RATE_LIMIT_CODES)
+    if rate_limited >= DIGEST_RATE_LIMITED_ROWS:
+        attention.append(_item(
+            "digest_rate_limited_24h",
+            max(filter(None, (scan.newest_for("monitor_digest", code=c) for c in DIGEST_RATE_LIMIT_CODES)),
+                default=None),
+            rate_limited, ["monitor_digest"],
+        ))
+    overdue = [m for m in monitors if monitor_is_overdue(m, now, eligible=digest_eligible)]
+    if overdue:
+        attention.append(_item(
+            "digest_overdue", None, len(overdue), ["monitor_digest"],
+            sorted({m["session_id"] for m in overdue if m.get("session_id")}),
         ))
 
     # ---- 24 h audit facts
@@ -270,6 +374,18 @@ def build_health(
             sorted({m["session_id"] for m in expiring if m.get("session_id")}),
         ))
 
+    if window["late_runs"]:
+        attention.append(_item(
+            "digest_ran_late", scan.newest_for("monitor_digest", code="late"), window["late_runs"],
+            ["monitor_digest"],
+        ))
+    deferred = [m for m in monitors if monitor_is_deferred(m)]
+    if deferred:
+        attention.append(_item(
+            "digest_deferred", scan.newest_for("monitor_digest", outcome="deferred"), len(deferred),
+            ["monitor_digest"], sorted({m["session_id"] for m in deferred if m.get("session_id")}),
+        ))
+
     # attention-level first, then info; stable inside each group
     attention.sort(key=lambda a: a["severity"] != ATTENTION)
     lb = None
@@ -291,7 +407,7 @@ def build_health(
 async def collect_health(
     audit, relay_id: str, *, enabled: bool, status: dict[str, Any], live_since: float | None,
     started_at: float | None, monitors: list[dict[str, Any]], last_backfill: dict[str, Any] | None,
-    now: float,
+    now: float, digest_eligible: bool = False,
 ) -> dict[str, Any]:
     """Scan the (cached) 24 h audit aggregate and assemble the payload.
 
@@ -310,4 +426,5 @@ async def collect_health(
         relay_id=relay_id, enabled=enabled, status=status["status"], detail=status.get("detail"),
         status_since=since, connected_at=status.get("connected_at"), inflight=status.get("inflight", 0),
         monitors=monitors, last_backfill=last_backfill, scan=scan, now=now,
+        digest_eligible=digest_eligible,
     )

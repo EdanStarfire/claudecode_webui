@@ -53,3 +53,34 @@ describe('RelayInboundHealth', () => {
     expect(wrapper.find('[data-testid="health-status"]').classes()).toContain('chip--bad')
   })
 })
+
+describe('RelayInboundHealth scheduled monitors (3c-iii)', () => {
+  it('shows scheduled count with the next run and the 24 h digest line', () => {
+    const { wrapper } = mountHealth(health({
+      monitors: { total: 3, active: 3, paused: 0, suspended: 0, by_reason: {}, scheduled: 2, next_run: NOW + 720 },
+      window_24h: { ...health().window_24h, digest_delivered: 5, digest_empty: 2, rate_limited_runs: 1, late_runs: 0 },
+    }))
+    expect(wrapper.find('[data-testid="health-monitors"]').text()).toContain('2 scheduled (next run in 12 min)')
+    expect(wrapper.find('[data-testid="health-digests"]').text()).toContain('digests 5 delivered · 2 empty · rate limited ×1')
+  })
+
+  it('hides the digest line when nothing ran; older Backend renders', () => {
+    expect(mountHealth(health()).wrapper.find('[data-testid="health-digests"]').exists()).toBe(false)
+  })
+
+  it('new attention and info tags with audit links to monitor_digest', () => {
+    const { wrapper } = mountHealth(health({ attention: [
+      { code: 'digest_failures', severity: 'attention', count: 1, audit: { events: ['monitor_digest'], session_id: 's1' } },
+      { code: 'digest_rate_limited_24h', severity: 'attention', count: 2, audit: { events: ['monitor_digest'] } },
+      { code: 'digest_overdue', severity: 'attention', count: 1, audit: { events: ['monitor_digest'] } },
+      { code: 'digest_ran_late', severity: 'info', count: 1, audit: { events: ['monitor_digest'] } },
+      { code: 'digest_deferred', severity: 'info', count: 1, audit: { events: ['monitor_digest'] } },
+    ] }))
+    const tags = wrapper.findAll('[data-testid="health-tag"]')
+    expect(tags.map(t => t.find('.relay-tag').text())).toEqual(['digest failing', 'rate limited ×2', 'run overdue', 'ran late', 'postponed'])
+    expect(tags[0].find('.relay-tag').classes()).toContain('relay-tag--amber')
+    expect(tags[3].find('.relay-tag').classes()).not.toContain('relay-tag--amber')
+    expect(tags[0].find('a').attributes('href')).toBe('/settings/relays?tab=audit&events=monitor_digest&session=s1')
+    expect(tags[0].attributes('title')).toContain('failed 3 times in a row')
+  })
+})

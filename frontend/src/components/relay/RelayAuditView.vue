@@ -67,7 +67,7 @@ import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { useRoute } from 'vue-router'
 import { useRelayStore } from '@/stores/relay'
 import { useSessionStore } from '@/stores/session'
-import { EVENTS, inboundDetail } from '@/utils/relayAuditLabels'
+import { EVENTS, eventLabel, inboundDetail } from '@/utils/relayAuditLabels'
 
 const props = defineProps({ relayId: { type: String, required: true } })
 
@@ -112,7 +112,7 @@ const canLoadOlder = computed(() => records.value.length > 0 && !exhausted.value
 
 function actionLabel(r) {
   if (r.event === 'policy_change') return 'Policy change'
-  if (EVENTS[r.event]) return EVENTS[r.event]
+  if (EVENTS[r.event]) return eventLabel(r)
   const tool = (r.tool || '').replace(TOOL_PREFIX, '')
   return ACTIONS[tool] || tool || r.event || ''
 }
@@ -203,8 +203,8 @@ defineExpose({ reload: () => load(true) })
   color: var(--bs-tertiary-color, #6b7280); border: 1px solid var(--bs-border-color, rgba(0,0,0,0.12));
   vertical-align: baseline; white-space: nowrap; user-select: none;
 }
-.outcome-denied .outcome, .outcome-refused .outcome, .outcome-late .outcome, .outcome-rate_limited .outcome, .outcome-removed .outcome, .outcome-dropped .outcome, .outcome-truncated .outcome, .outcome-cancelled .outcome { color: var(--perm-amber-suggestion-strong); }
-.outcome-error .outcome, .outcome-delivery_failed .outcome { color: var(--tool-error-text); }
+.outcome-denied .outcome, .outcome-refused .outcome, .outcome-late .outcome, .outcome-rate_limited .outcome, .outcome-removed .outcome, .outcome-dropped .outcome, .outcome-truncated .outcome, .outcome-cancelled .outcome, .outcome-deferred .outcome { color: var(--perm-amber-suggestion-strong); }
+.outcome-error .outcome, .outcome-delivery_failed .outcome, .outcome-failed .outcome { color: var(--tool-error-text); }
 .older { align-self: flex-start; }
 .audit-events { display: flex; align-items: center; gap: 4px; max-width: 100%; }
 .audit-events .audit-tag { margin-left: 0; overflow: hidden; text-overflow: ellipsis; max-width: 80%; }

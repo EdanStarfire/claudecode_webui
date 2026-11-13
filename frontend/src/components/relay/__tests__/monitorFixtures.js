@@ -22,3 +22,20 @@ export const health = (over = {}) => ({
   },
   attention: [], ...over,
 })
+
+// Scheduled monitors (3c-iii)
+export const digest = (over = {}) => monitor({
+  id: 'd1', mode: 'digest', schedule: { type: 'daily', times: ['09:00', '17:00'], days: [0, 1, 2, 3, 4], tz: 'Europe/Paris', tz_source: 'slack' },
+  schedule_text: 'daily at 09:00 and 17:00, Mon–Fri, Europe/Paris (your Slack timezone)', tz: 'Europe/Paris', tz_source: 'slack',
+  next_run: NOW + 3 * 3600 + 120, last_run_at: NOW - 7200,
+  last_run: { at: NOW - 7200, outcome: 'delivered', messages: 12, omitted: 0, gap: false, late: false, trigger: 'schedule' },
+  last_run_trigger: 'schedule', run_failures: 0, unread: null, unread_text: null, notified_count: 0, ...over,
+})
+
+export const unreadMonitor = (over = {}) => digest({
+  id: 'u1', kind: 'monitor_unread', mode: 'unread', channel: null, channel_label: null,
+  schedule: { type: 'interval', minutes: 120, anchor: 0 }, schedule_text: 'every 2 hours', tz: null, tz_source: null,
+  unread: { dms: true, channels: ['C0AAAAAAA2'], exclude: ['D0X', 'D0Y'], mentions_only: true, repeat: false, labels: { C0AAAAAAA2: '#alpha' } },
+  unread_text: 'all direct and group messages except 2, channels #alpha, only messages that mention you, only newly unread',
+  notified_count: 1, ...over,
+})

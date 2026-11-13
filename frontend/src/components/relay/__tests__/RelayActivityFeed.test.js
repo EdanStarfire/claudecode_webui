@@ -94,3 +94,41 @@ describe('RelayActivityFeed', () => {
     expect(wrapper.find('[data-testid="activity-session"]').text()).toBe('<img src=x onerror=alert(1)>')
   })
 })
+
+describe('RelayActivityFeed digest rows (3c-iii)', () => {
+  it('labels digest and unread runs by kind with counts, outcomes and codes', async () => {
+    apiMock.get.mockResolvedValue({ records: [
+      row({ event: 'monitor_digest', monitor_kind: 'monitor_channel', outcome: 'delivered', count: 12, omitted: 3 }),
+      row({ event: 'monitor_digest', monitor_kind: 'monitor_unread', outcome: 'delivered', count: 2 }),
+      row({ event: 'monitor_digest', monitor_kind: 'monitor_dms', outcome: 'empty' }),
+      row({ event: 'monitor_digest', monitor_kind: 'monitor_dms', outcome: 'rate_limited', code: 'rate_limited_rescheduled', retry: 2, retry_at: '2026-11-10T14:35:00+00:00' }),
+      row({ event: 'monitor_digest', monitor_kind: 'monitor_dms', outcome: 'rate_limited', code: 'rate_limited_gave_up', retry: 3 }),
+      row({ event: 'monitor_digest', monitor_kind: 'monitor_dms', outcome: 'delivered', code: 'late', count: 1 }),
+      row({ event: 'monitor_digest', monitor_kind: 'monitor_dms', outcome: 'refused', code: 'monitor_paused', source: 'owner' }),
+      row({ event: 'monitor_digest', monitor_kind: 'monitor_dms', outcome: 'accepted', code: 'run_now', source: 'agent' }),
+      row({ event: 'monitor_digest', monitor_kind: 'monitor_dms', outcome: 'deferred', code: 'session_busy', retry: 1 }),
+    ] })
+    const { wrapper } = mountFeed()
+    await flushPromises()
+    const texts = wrapper.findAll('[data-testid="activity-text"]').map(t => t.text())
+    expect(texts[0]).toBe('Monitor digest run · channel monitor · 12 messages · +3 omitted')
+    expect(texts[1]).toBe('Monitor unread run · unread monitor · 2 conversations')
+    expect(texts[2]).toContain('nothing new, session not woken')
+    expect(texts[3]).toMatch(/rate limited, retry 2\/3 at \d\d:\d\d/)
+    expect(texts[4]).toContain('gave up this slot')
+    expect(texts[5]).toContain('ran late (missed slot)')
+    expect(texts[6]).toContain('refused: monitor paused · run now by you')
+    expect(texts[7]).toContain('started · run now by the agent')
+    expect(texts[8]).toContain('postponed, session busy (1/6)')
+    const problems = wrapper.findAll('[data-testid="activity-row"]').map(r => r.classes().includes('problem'))
+    expect(problems).toEqual([false, false, false, true, true, false, true, false, true])
+  })
+
+  it('the Monitors chip already covers monitor_digest and the audit link keeps the filter', async () => {
+    const { wrapper } = mountFeed()
+    await flushPromises()
+    await wrapper.find('[data-testid="activity-chip-monitors"]').trigger('click')
+    await flushPromises()
+    expect(apiMock.get.mock.calls.at(-1)[1].params.events).toBe('monitor_*')
+  })
+})

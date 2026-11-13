@@ -114,7 +114,7 @@ describe('health lines and attention', () => {
 describe('session summary helpers (3d-ii)', () => {
   const base = { handle: 'ea', policy_count: 1 }
   it('summaryMonitors tolerates an older Backend without the field', () => {
-    expect(summaryMonitors(base)).toEqual({ active: 0, paused: 0, suspended: 0, total: 0 })
+    expect(summaryMonitors(base)).toEqual({ active: 0, paused: 0, suspended: 0, scheduled: 0, total: 0 })
     expect(summaryMonitors(null).total).toBe(0)
     expect(summaryMonitors({ monitors: { active: 2, paused: 1, suspended: 1 } }).total).toBe(4)
   })

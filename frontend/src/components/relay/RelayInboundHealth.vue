@@ -10,11 +10,15 @@
     </div>
     <div class="fact" data-testid="health-monitors">
       <span class="fact-k">Monitors</span>
-      <span class="fact-v" :title="monitorsTitle">{{ monitorsLine(health) }}</span>
+      <span class="fact-v" :title="monitorsTitle">{{ monitorsLine(health, nowSec) }}</span>
     </div>
     <div class="fact" data-testid="health-window">
       <span class="fact-k">Last 24 h</span>
       <span class="fact-v ellipsis" :title="windowTitle">{{ windowLine(health) }}</span>
+    </div>
+    <div v-if="digestLine" class="fact" data-testid="health-digests">
+      <span class="fact-k">Scheduled</span>
+      <span class="fact-v ellipsis" title="Scheduled digest and unread runs in the last 24 h (from the audit log)">{{ digestLine }}</span>
     </div>
     <div v-if="health.attention?.length" class="tags" data-testid="health-attention">
       <span v-for="item in health.attention" :key="item.code" class="attn" :title="attentionHint(item)" :data-code="item.code" data-testid="health-tag">
@@ -29,7 +33,7 @@
 import { computed } from 'vue'
 import RelayTag from './RelayTag.vue'
 import {
-  STATUS_LABELS, attentionHint, attentionLabel, auditQuery, fullTime, monitorsLine, sinceText, windowLine,
+  STATUS_LABELS, attentionHint, attentionLabel, auditQuery, fullTime, digestWindowLine, monitorsLine, sinceText, windowLine,
 } from '@/utils/relayInbound'
 
 const props = defineProps({
@@ -44,6 +48,7 @@ const chipClass = computed(() => ({
   'chip--missing': props.health.status === 'transport_unavailable',
   'chip--muted': ['disabled', 'stopped'].includes(props.health.status),
 }))
+const digestLine = computed(() => digestWindowLine(props.health))
 const since = computed(() => sinceText(props.health.status_since, props.nowSec))
 const sinceTitle = computed(() => `${fullTime(props.health.status_since)}. After a Backend restart this is read from the audit when possible, otherwise it counts from the restart.`)
 const connectionTitle = computed(() => [props.health.detail && `detail: ${props.health.detail}`, 'In-flight count and connection time are since the last restart.'].filter(Boolean).join('. '))

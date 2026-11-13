@@ -323,6 +323,7 @@ class InboundService:
             **monitor_summary_counts(monitors),
             "attention": attention_for_session(
                 monitors, status=self.status, detail=self.detail, status_since=since, now=self._now(),
+                digest_eligible=self.digest_eligibility() is None,
             ),
         }
 
@@ -348,6 +349,7 @@ class InboundService:
             self._audit, self.relay_id, enabled=bool(self.record and self.record.inbound_enabled),
             status=self.status_dict(), live_since=self.status_changed_at, started_at=self.started_at,
             monitors=self.store.monitors(), last_backfill=self.last_backfill, now=self._now(),
+            digest_eligible=self.digest_eligibility() is None,
         )
 
     async def _eligibility(self) -> str | None:
@@ -1178,12 +1180,13 @@ class InboundService:
 
     async def public_monitors(
         self, session_id: str | None = None, *, status: str | None = None, kind: str | None = None,
-        limit: int = 100, offset: int = 0,
+        limit: int = 100, offset: int = 0, mode: str | None = None,
     ) -> tuple[list[dict[str, Any]], int]:
         """Owner-facing rows (sorted by ``created_at``) and the total before paging."""
         rows = [
             m for m in self.store.monitors(session_id)
             if (kind is None or m["kind"] == kind)
+            and (mode is None or monitor_public.monitor_mode(m) == mode)
             and (status is None or monitor_public.effective_state(m) == status)
         ]
         rows.sort(key=lambda m: (float(m.get("created_at") or 0), m["id"]))
@@ -1204,7 +1207,7 @@ class InboundService:
             out.append(monitor_public.public_monitor(
                 m, session_name=getattr(info, "name", None), handle=cfg.get("relay_handle"),
                 channel_label=labels["channels"].get(m.get("channel")) or m.get("channel"),
-                user_labels=labels["users"],
+                user_labels=labels["users"], channel_labels=labels["channels"],
             ))
         return out
 
@@ -1220,7 +1223,11 @@ class InboundService:
         adapter = self._manager.adapter_for(self.relay_id)
 
         async def resolve() -> None:
-            for c in dict.fromkeys(m["channel"] for m in rows if m.get("channel")):
+            wanted = [m["channel"] for m in rows if m.get("channel")]
+            for m in rows:
+                opts = m.get("options") or {}
+                wanted += list(opts.get("channels") or []) + list(opts.get("exclude") or [])
+            for c in dict.fromkeys(wanted):
                 channels[c] = await names.channel_label(adapter, self.relay_id, c, owner)
             ids = [u for m in rows for u in (m.get("filters") or {}).get("users") or []]
             if ids:
@@ -1656,6 +1663,7 @@ class InboundService:
                         mid, last_run_at=now, run_failures=0, slot_retries=0,
                         last_run={**(entry.info.get("digest_run") or {}), "outcome": "delivered"},
                     )
+                    self._monitors_changed(entry.session_id)
             await self._rec(
                 event="monitor_delivered", outcome="ok", session_id=entry.session_id,
                 envelope_id=entry.comm_id, count=entry.info.get("count"),
@@ -1697,6 +1705,7 @@ class InboundService:
                     last_run={"at": self._now(), "outcome": "failed", "messages": count, "omitted": 0,
                               "gap": False, "late": False},
                 )
+                self._monitors_changed(rec["session_id"])
             self._hold.add(mid)
             self._high_water[mid] = rec.get("last_seen_ts") or self._ts_str(self._now())
             if failures >= const.DELIVERY_FAILURES_TO_SUSPEND and rec["status"] == ACTIVE:

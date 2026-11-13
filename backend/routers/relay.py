@@ -364,7 +364,14 @@ def build_router(webui) -> APIRouter:
         except (SessionNotFoundError, RelayNotFoundError, RelayNotAttachedError) as e:
             raise _policy_errors(e) from e
 
-    def _check_filters(status: str | None, kind: str | None) -> None:
+    monitor_modes = ("live", "digest", "unread")
+    run_refusal_status = {
+        "monitor_not_found": 404, "not_a_digest_monitor": 422, "run_too_soon": 429,
+    }  # every other refusal code (paused, suspended, in progress, unavailable) is a 409
+
+    def _check_filters(status: str | None, kind: str | None, mode: str | None = None) -> None:
+        if mode is not None and mode not in monitor_modes:
+            raise HTTPException(status_code=422, detail="mode must be live, digest or unread")
         if status is not None and status not in monitor_states:
             raise HTTPException(status_code=422, detail="status must be active, paused or suspended")
         if kind is not None and kind not in MONITOR_KINDS:
@@ -372,12 +379,12 @@ def build_router(webui) -> APIRouter:
 
     async def _list_monitors(
         relay_id: str, session_id: str | None, status: str | None, kind: str | None,
-        limit: int, offset: int,
+        limit: int, offset: int, mode: str | None = None,
     ) -> dict:
-        _check_filters(status, kind)
+        _check_filters(status, kind, mode)
         inbound = await _monitor_service(relay_id)
         rows, total = await inbound.public_monitors(
-            session_id, status=status, kind=kind, limit=limit, offset=max(0, offset)
+            session_id, status=status, kind=kind, limit=limit, offset=max(0, offset), mode=mode
         )
         return {"relay_id": relay_id, "monitors": rows, "total": total}
 
@@ -399,22 +406,52 @@ def build_router(webui) -> APIRouter:
         await inbound.delete_monitor(monitor_id, source="owner")
         return {"deleted": True, "monitor_id": monitor_id}
 
+    async def _run_monitor(relay_id: str, monitor_id: str, session_id: str | None) -> dict:
+        """Owner "Run now" of a scheduled monitor: starts the run in the background (the answer never
+        waits for Slack). Every attempt, accepted or refused, is audited by the service."""
+        inbound = await _monitor_service(relay_id)
+        rec = inbound.store.get_monitor(monitor_id)
+        if rec is None or (session_id is not None and rec.get("session_id") != session_id):
+            raise HTTPException(status_code=404, detail="Monitor not found")
+        result = await inbound.run_monitor_now(monitor_id, trigger="manual")
+        if not result.get("ok"):
+            code = result["code"]
+            detail = {"code": code, "message": result["message"]}
+            headers = None
+            if code == "run_too_soon":
+                left = int(result.get("seconds_left") or 1)
+                detail["retry_after_seconds"] = left
+                headers = {"Retry-After": str(left)}
+            raise HTTPException(status_code=run_refusal_status.get(code, 409), detail=detail, headers=headers)
+        return {"started": True, "monitor": await inbound.public_one(monitor_id) or {}}
+
+    @router.post("/api/relays/{relay_id}/monitors/{monitor_id}/run")
+    @handle_exceptions("run relay monitor")
+    async def run_relay_monitor(relay_id: str, monitor_id: str):
+        return await _run_monitor(relay_id, monitor_id, None)
+
+    @router.post("/api/sessions/{session_id}/relays/{relay_id}/monitors/{monitor_id}/run")
+    @handle_exceptions("run session monitor")
+    async def run_session_monitor(session_id: str, relay_id: str, monitor_id: str):
+        await _require_session_relay(session_id, relay_id)
+        return await _run_monitor(relay_id, monitor_id, session_id)
+
     @router.get("/api/relays/{relay_id}/monitors")
     @handle_exceptions("list relay monitors")
     async def list_relay_monitors(
         relay_id: str, session_id: str | None = None, status: str | None = None,
-        kind: str | None = None, limit: int = 100, offset: int = 0,
+        kind: str | None = None, limit: int = 100, offset: int = 0, mode: str | None = None,
     ):
-        return await _list_monitors(relay_id, session_id, status, kind, limit, offset)
+        return await _list_monitors(relay_id, session_id, status, kind, limit, offset, mode)
 
     @router.get("/api/sessions/{session_id}/relays/{relay_id}/monitors")
     @handle_exceptions("list session monitors")
     async def list_session_monitors(
         session_id: str, relay_id: str, status: str | None = None, kind: str | None = None,
-        limit: int = 100, offset: int = 0,
+        limit: int = 100, offset: int = 0, mode: str | None = None,
     ):
         await _require_session_relay(session_id, relay_id)
-        return await _list_monitors(relay_id, session_id, status, kind, limit, offset)
+        return await _list_monitors(relay_id, session_id, status, kind, limit, offset, mode)
 
     @router.patch("/api/relays/{relay_id}/monitors/{monitor_id}")
     @handle_exceptions("update relay monitor")
