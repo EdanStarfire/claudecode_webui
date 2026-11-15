@@ -341,7 +341,9 @@ export function lastRunText(lastRun, nowSec = Date.now() / 1000, { unread = fals
   switch (lastRun.outcome) {
     case 'delivered':
       return `${lastRun.late ? 'ran late after a restart · ' : ''}delivered ${countWord(n, unit)}${lastRun.omitted ? ` (+${lastRun.omitted} omitted)` : ''} · ${ago}`
-    case 'empty': return `empty · ${ago} (nothing new, session not woken)`
+    case 'empty':
+      if (lastRun.code === 'read_state_unknown') return `empty · ${ago} (conversations could not be checked, unchanged since the last notice)`
+      return `empty · ${ago} (nothing new, session not woken)`
     case 'rate_limited':
       if (lastRun.code === 'rate_limited_gave_up') return `gave up this slot after ${lastRun.retry || 3} tries · ${ago}`
       if (lastRun.retry_at) return `rate limited · retrying ${at(lastRun.retry_at)} (${lastRun.retry || 1}/3)`

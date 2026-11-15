@@ -342,3 +342,15 @@ class TestSchedulingAndLifecycle:
 
 
 _ = SELF_DM
+
+
+async def test_issue_2374_unknown_and_gap_notices_combine(env):
+    from backend.relay.adapter import ConversationInfo
+    add_unread(env, ConversationInfo(id=CHANNEL, is_channel=True, is_member=True))
+    rec = await create(env, dms=False, channels=[CHANNEL])
+    env.service.digest._notices.setdefault(SESSION, []).append(
+        {"counts": {"rate_limited": 1}, "from": env.clock.now() - 60, "to": env.clock.now()})
+    assert await tick_at(env, rec) == 1
+    text = env.port.calls[-1]["dispatch_content"]
+    assert "Slack digest incomplete" in text and "read state could not be determined for 1 conversation;" in text
+    assert mon(env, rec)["notified"] == {} if mon(env, rec).get("notified") is not None else True

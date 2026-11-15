@@ -81,6 +81,8 @@ class SearchPage:
 
 @dataclass
 class ConversationInfo:
+    # Live ``conversations.info`` (issue #2374): a 1:1 IM carries ``last_read``, ``unread_count`` and
+    # ``latest``; group DMs (``is_mpim``, id ``C…``) and channels carry only ``last_read`` and ``is_member``.
     id: str
     name: str | None = None
     is_im: bool = False

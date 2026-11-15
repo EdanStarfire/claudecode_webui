@@ -1531,13 +1531,24 @@ class InboundService:
     async def enqueue_unread(
         self, monitor: dict[str, Any], conversations: list, *, as_of: float, omitted: int,
         cover: dict[str, str], notice: str | None, watch_info: dict[str, Any],
+        unknown: int = 0, unknown_hash: str | None = None,
     ) -> str | None:
-        """ONE unread envelope (3c-ii). ``notified`` advances only when the session confirms it."""
+        """ONE unread envelope (3c-ii). ``notified`` advances only when the session confirms it.
+        No conversations = a notice-only envelope about ``unknown`` ones (#2374)."""
         mid = monitor["id"]
-        entries = await self._build_unread_entries(conversations)
-        dispatch = monitor_content.build_unread_dispatch(entries, as_of=as_of, omitted=omitted, notice=notice)
+        entries = await self._build_unread_entries(conversations) if conversations else []
+        dispatch = monitor_content.build_unread_dispatch(
+            entries, as_of=as_of, omitted=omitted, notice=notice, unknown=unknown,
+        )
         keys = [f"{c.channel}:{c.consumed_ts}" for c in conversations]
-        summary = monitor_content.unread_summary(len(conversations))
+        if not conversations:  # varies per run so consecutive notices are not merged by the comm id
+            keys = [f"unread-notice:{mid}:{as_of:.0f}"]
+        summary = (
+            monitor_content.unread_summary(len(conversations)) if conversations
+            else monitor_content.unread_notice_summary(unknown)
+        )
+        if unknown_hash:
+            watch_info = {**watch_info, "unread_unknown_hash": unknown_hash}
         return await self._enqueue_prepared(
             monitor["session_id"], dispatch=dispatch, summary=summary, keys=keys, monitor_ids=[mid],
             cover=cover, count=len(conversations), omitted=omitted, counts={mid: len(conversations)},
@@ -1658,6 +1669,8 @@ class InboundService:
                 self.store.note_delivered_keys(mid, (entry.info.get("keys") or {}).get(mid) or [])
                 if entry.info.get("unread_notified"):
                     self.store.set_notified(mid, entry.info["unread_notified"])
+                if entry.info.get("unread_unknown_hash"):
+                    self.store.set_unknown_notice_hash(mid, entry.info["unread_unknown_hash"])
                 if entry.info.get("digest"):
                     self.store.touch_monitor(
                         mid, last_run_at=now, run_failures=0, slot_retries=0,
