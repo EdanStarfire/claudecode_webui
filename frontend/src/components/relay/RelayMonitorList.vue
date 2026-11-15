@@ -64,7 +64,7 @@
     >{{ loadingMore ? 'Loading…' : `Load more (${total - rows.length})` }}</button>
 
     <div class="muted foot" data-testid="monitor-foot">
-      <template v-if="hasScheduled"><span data-testid="monitor-repeat-foot">{{ REPEAT_NOTICE }}</span>{{ ' ' }}</template>Applies immediately. Nothing here needs saving.
+      <template v-if="rows.length"><span data-testid="monitor-repeat-foot">{{ REPEAT_NOTICE }}</span>{{ ' ' }}</template>Applies immediately. Nothing here needs saving.
     </div>
   </div>
 </template>
@@ -131,7 +131,6 @@ let timer = null
 
 const effectiveSession = computed(() => props.sessionId || sessionFilter.value)
 const hasFilter = computed(() => !!(status.value || kind.value || mode.value || (!props.sessionId && sessionFilter.value)))
-const hasScheduled = computed(() => rows.value.some(m => m.mode === 'digest' || m.mode === 'unread'))
 const sortedRows = computed(() => {
   if (sortBy.value !== 'next') return rows.value
   const next = (m) => (m.mode === 'live' || !m.mode ? Infinity : (toEpoch(m.next_run) ?? Infinity))

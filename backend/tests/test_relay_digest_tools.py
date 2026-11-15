@@ -189,6 +189,6 @@ class TestRunNowTool:
         assert "run_monitor_now" in tools
         for name in ("monitor_thread", "monitor_channel", "monitor_mentions", "monitor_dms"):
             desc = tools[name].description
-            assert "A digest and a live monitor on the same scope repeat the same messages" in desc
+            assert "Monitors whose scopes overlap (digest or live, in any combination)" in desc
             assert "No `schedule` = live" in desc
             assert "schedule" in tools[name].input_schema["properties"]

@@ -19,10 +19,21 @@ beforeEach(() => {
 afterEach(() => vi.useRealTimers())
 
 describe('Type filter, footer and sort', () => {
+  it('shows the overlap footer for a live-only list and hides it when empty', async () => {
+    apiMock.get.mockResolvedValue({ monitors: [monitor()], total: 1 })
+    const { wrapper } = mountList()
+    await flushPromises()
+    expect(wrapper.find('[data-testid="monitor-repeat-foot"]').exists()).toBe(true)
+    apiMock.get.mockResolvedValue({ monitors: [], total: 0 })
+    const empty = mountList().wrapper
+    await flushPromises()
+    expect(empty.find('[data-testid="monitor-repeat-foot"]').exists()).toBe(false)
+  })
+
   it('sends mode and says digests repeat live messages', async () => {
     const { wrapper } = mountList()
     await flushPromises()
-    expect(wrapper.find('[data-testid="monitor-repeat-foot"]').text()).toBe('Digests and live monitors on the same scope repeat the same messages.')
+    expect(wrapper.find('[data-testid="monitor-repeat-foot"]').text()).toBe('Monitors with overlapping scopes, digest or live, each deliver a message separately, so it can arrive more than once.')
     await wrapper.find('[data-testid="monitor-filter-mode"]').setValue('digest')
     await flushPromises()
     expect(apiMock.get.mock.calls.at(-1)[1].params.mode).toBe('digest')
@@ -31,11 +42,10 @@ describe('Type filter, footer and sort', () => {
     expect(apiMock.get.mock.calls.at(-1)[1].params.mode).toBe(null)
   })
 
-  it('no repeat sentence when no scheduled monitor is listed', async () => {
+  it('keeps the regular footer text next to the overlap sentence', async () => {
     apiMock.get.mockResolvedValue({ monitors: [monitor()], total: 1 })
     const { wrapper } = mountList()
     await flushPromises()
-    expect(wrapper.find('[data-testid="monitor-repeat-foot"]').exists()).toBe(false)
     expect(wrapper.find('[data-testid="monitor-foot"]').text()).toContain('Applies immediately')
   })
 

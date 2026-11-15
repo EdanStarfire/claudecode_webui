@@ -831,8 +831,8 @@ run-now (3c-iii) are later stages. Code: `relay/inbound/{schedule,digest}.py`, `
   `omitted`, `reason_counts`, `envelope_id`, `retry`, `source` schedule|late|agent|owner); `monitor_created` carries
   `code=digest`. No message text.
 - **Known limitations**: #2362 (the pending queue is not recovered across a restart; the cursor moves only on confirmed delivery so
-  the next digest re-collects, at-least-once); a digest and a live monitor on the same scope repeat messages by design (tool
-  descriptions and the creation result say so); two Backends with one app token disturb live monitors, not digests, but each
+  the next digest re-collects, at-least-once); monitors whose scopes overlap (digest or live, any combination) each deliver a message separately, so it can arrive more than once, by design (tool
+  descriptions, the creation note for exact twins and the Inbound tab footer say so); two Backends with one app token disturb live monitors, not digests, but each
   runs the digests of its own monitors; edits are not redelivered; Slack search lags (60 s margin); sessions started before
   the upgrade lack the `schedule` parameter and `run_monitor_now` (static tool lists): restart them.
 

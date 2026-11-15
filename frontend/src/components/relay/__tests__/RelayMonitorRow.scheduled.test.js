@@ -117,7 +117,7 @@ describe('expanded detail', () => {
     const twin = monitor({ id: 'live1' })
     const { wrapper } = mountRow(digest(), { peers: [digest(), twin] })
     await t(wrapper, 'monitor-expand').trigger('click')
-    expect(t(wrapper, 'detail-repeat').text()).toContain('twice')
+    expect(t(wrapper, 'detail-repeat').text()).toContain('overlapping')
     const other = mountRow(digest(), { peers: [digest(), monitor({ id: 'live2', channel: 'C0OTHER001' })] }).wrapper
     await t(other, 'monitor-expand').trigger('click')
     expect(t(other, 'detail-repeat').exists()).toBe(false)
