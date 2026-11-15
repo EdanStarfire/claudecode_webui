@@ -101,7 +101,9 @@ function digestDetail(r, parts) {
       parts.push(plural(r.count || 0, unit))
       if (r.omitted) parts.push(`+${r.omitted} omitted`)
       break
-    case 'empty': parts.push('nothing new, session not woken'); break
+    case 'empty':
+      parts.push(r.code === 'read_state_unknown' ? 'some conversations could not be checked (unchanged since the last notice)' : 'nothing new, session not woken')
+      break
     case 'rate_limited':
       if (r.code === 'rate_limited_gave_up') parts.push('gave up this slot')
       else if (r.code === 'rate_limited_rescheduled') {

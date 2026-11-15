@@ -862,14 +862,26 @@ write calls; only the agent's own `mark_read` tool, under the channel policy, ca
   TTL 10 min, shared with DM digests; minus the self-DM, `exclude` and explicitly `blocked` entries; capped at 50, `conversation_cap` + gap
   notice) plus the explicit channels re-checked against the CURRENT policy (blocked / unset skipped and counted, the monitor stays active,
   no history of them is ever read). Per candidate, serialized through the Tier-3 `api_limiter` and a per-relay `ConversationInfoCache`
-  (TTL 60 s: N monitors and a DM digest due together cost one scan): DM / MPIM unread = `unread_count > 0` (else `latest_ts > last_read`);
-  channel unread = `latest_ts > last_read` (no counts; `last_read` unknown -> `no_read_state`); unless `repeat`, `latest_ts <= notified[conv]`
-  is skipped. Then one `conversations.history(oldest=last_read, limit=50)`; messages are judged by `never_content` + the echo rule directly (history
+  (TTL 60 s: N monitors and a DM digest due together cost one scan): the read state is classified by the OBSERVED
+  `conversations.info` fields, not the kind (`unread.classify_read_state`; issue #2374, live capture: a 1:1 IM carries `last_read`, `unread_count`,
+  `latest`; group DMs (`is_mpim`, `C…` id) and channels carry ONLY `last_read` + `is_member`): `unread_count` present -> `> 0`; else `latest` +
+  `last_read` -> `latest > last_read`; else `last_read` known -> **needs history**; else (`last_read` absent / `""` / `"0"`) **unknown**
+  (`read_state_unknown`, never "no unread"). Unless `repeat`, `latest_ts <= notified[conv]` is skipped (for needs-history conversations after the
+  history call: newest surviving message `<= notified`). Then one `conversations.history(oldest=last_read, limit=50)` (so group DMs / channels cost
+  one extra call per run); a history error for a needs-history conversation (`not_in_channel`, `missing_scope`, ...) is `read_state_unknown`, gone codes
+  `conversation_gone`, `ratelimited` stops the run; messages are judged by `never_content` + the echo rule directly (history
   carries identity fields: NO hydration), the owner's own dropped, `mentions_only` keeps mentions; a conversation qualifies only if a message survives.
   `count` = surviving messages (DM: Slack's count when larger; `count_exact=false` for a full page or a larger Slack count). <= 5 newest messages each
   (500 chars); <= 30 conversations / 24 000 chars per envelope, the rest a counts-only `+N more conversations` tally. Run budget
   `UNREAD_RUN_MAX_SECONDS = 300` (`time_cap`, gap notice). Rate limits: stop, +5 min, 3 retries per slot, then the next slot with a gap notice
   (every reschedule audited). Empty -> no envelope, no session start.
+- **Unknown read state (#2374)**: the unknown count appears in a fixed line outside the fence (`unread_unknown_line`: counts only, no IDs / names).
+  A run whose only result is unknowns is NOT an empty run: it enqueues a **notice-only envelope** (no fence, `📬 Slack unread — no conversations with
+  unread messages; N could not be checked`, queue label `Slack unread: N could not be checked`, comm key `unread-notice:{monitor}:{as_of}`, recorded
+  `delivered` with count 0 and `gap`), unless `repeat` is false and the unknown set is unchanged since the last CONFIRMED notice
+  (`unknown_notice_hash`, 16 hex of the sorted id set, written on confirmation like `notified`, cleared by a run with no unknowns): then it is
+  recorded `empty` with `code=read_state_unknown` and no envelope. Mixed runs carry the line in the normal envelope. A never-opened channel therefore
+  notifies once until the set changes (or every run with `repeat`).
 - **Envelope**: header `📬 Slack unread — N conversation(s)… (as of <time>)`, fixed framing (untrusted, never marks read, `mark_read` only if the user
   asks, `unmonitor`), entries inside the nonce fence (`channel, channel_label, kind dm|group_dm|channel|private_channel, unread_count, count_exact,
   newest_ts, last_read, messages[]`), outside it only counts / times / the tally / the gap line. Comm shape as 3b (`SYSTEM_MINION_ID` + `EXTERNAL`
@@ -878,11 +890,11 @@ write calls; only the agent's own `mark_read` tool, under the channel policy, ca
   failed / cancelled change nothing (listed again). Conversations evaluated with nothing to report (`mentions_only` with no mention) are marked
   consumed at once. "Unread now": reading a conversation in Slack makes it disappear by itself.
 - **Audit**: `monitor_digest` with `monitor_kind=monitor_unread`, `count` = conversations listed, `omitted` = conversations beyond the caps,
-  `reason_counts` (`blocked_channel`, `policy_unset`, `conversation_cap`, `no_read_state`, `no_unread`, `already_notified`, `time_cap`,
+  `reason_counts` (`blocked_channel`, `policy_unset`, `conversation_cap`, `read_state_unknown`, `no_unread`, `already_notified`, `time_cap`,
   `not_a_member`, `conversation_gone`, `rate_limited`); `monitor_created` carries `code=unread`. Conversation IDs only, never message text.
 - **Known limitations**: #2362 (an enqueued, undelivered envelope is lost on a restart; `notified` moves only on confirmation, so it is listed again,
-  at-least-once); unread monitors need only the user token + the owner's inbound switch (a second Backend runs its own); channels have no Slack
-  unread counts (approximate); DM unread counts exclude muted / thread-only unreads and thread unread state is not modelled; sessions started before
+  at-least-once); unread monitors need only the user token + the owner's inbound switch (a second Backend runs its own); group DMs and channels have no Slack
+  unread counts (derived from history, approximate; muted state not modelled); DM unread counts exclude muted / thread-only unreads and thread unread state is not modelled; sessions started before
   the upgrade lack the tool (restart them). Live DM backfill on `hello` does not use the shared caches (only digest / unread runs do).
 
 ### Relay inbound: scheduled monitors on the owner surface (3c-iii)

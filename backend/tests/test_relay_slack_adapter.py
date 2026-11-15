@@ -384,3 +384,23 @@ def test_issue_2103_rich_text_user_element_renders_as_mention():
     blocks = [{"type": "rich_text", "elements": [{"type": "rich_text_section", "elements": [
         {"type": "user", "user_id": "U0OWNER001"}, {"type": "text", "text": " ping"}]}]}]
     assert _text_from_blocks(blocks) == "<@U0OWNER001> ping"
+
+
+async def test_issue_2374_conversations_info_shapes_per_type():
+    """Live shapes: IM has counts + latest; mpim (``C…`` id) and channels only last_read / is_member."""
+    shapes = {
+        "D1": {"id": "D1", "is_im": True, "last_read": "1.0", "unread_count": 2, "unread_count_display": 2,
+               "latest": {"ts": "3.0"}},
+        "C2": {"id": "C2", "is_mpim": True, "is_private": True, "is_member": True, "last_read": "1.0"},
+        "C3": {"id": "C3", "is_channel": True, "is_member": True, "last_read": "1.0"},
+    }
+
+    def handler(request):
+        return httpx.Response(200, json={"ok": True, "channel": shapes[_form(request)["channel"]]})
+
+    adapter = make_adapter(handler)
+    im, group, chan = [await adapter.conversation_info(c) for c in ("D1", "C2", "C3")]
+    assert (im.unread_count, im.latest_ts, im.last_read) == (2, "3.0", "1.0")
+    for info in (group, chan):
+        assert (info.unread_count, info.latest_ts, info.last_read) == (None, None, "1.0")
+    assert group.is_mpim and chan.is_channel

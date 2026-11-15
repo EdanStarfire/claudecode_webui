@@ -10,6 +10,7 @@ echo rule is applied directly (no hydration). Pure of delivery: ``digest.py`` en
 
 from __future__ import annotations
 
+import hashlib
 import logging
 from collections import Counter
 from dataclasses import dataclass, field
@@ -120,6 +121,7 @@ class UnreadResult:
     rate_limited: bool = False
     failed: bool = False
     consumed_empty: dict[str, str] = field(default_factory=dict)  # evaluated, nothing to report
+    unknown_ids: list[str] = field(default_factory=list)  # read state could not be determined
 
 
 def _kind(info: ConversationInfo) -> str:
@@ -130,20 +132,28 @@ def _kind(info: ConversationInfo) -> str:
     return "private_channel" if info.is_private else "channel"
 
 
-def _is_unread(info: ConversationInfo, kind: str) -> str | None:
-    """None when unread, else the reason it is not (``no_unread`` | ``no_read_state``)."""
-    latest, last_read = _tsf(info.latest_ts), _tsf(info.last_read)
-    if kind in ("dm", "group_dm"):
-        if info.unread_count is not None:
-            return None if info.unread_count > 0 else "no_unread"
-        if info.latest_ts is None:
-            return "no_unread"
-        return None if latest > last_read else "no_unread"
-    if info.last_read is None:
-        return "no_read_state"  # channels have no counts: without ``last_read`` nothing can be said
-    if info.latest_ts is None:
-        return "no_unread"
-    return None if latest > last_read else "no_unread"
+def unknown_hash(ids: list[str]) -> str:
+    """Order-independent fingerprint of the unknown set (16 hex chars; no IDs are stored)."""
+    return hashlib.sha256("|".join(sorted(set(ids))).encode()).hexdigest()[:16]
+
+
+def _last_read_known(info: ConversationInfo) -> bool:
+    return info.last_read not in (None, "") and _tsf(info.last_read) > 0
+
+
+def classify_read_state(info: ConversationInfo) -> str:
+    """``unread | no_unread | unknown | needs_history``, decided by the OBSERVED fields, not the kind.
+
+    Observed live (issue #2374): a 1:1 IM carries ``unread_count`` / ``latest``; group DMs and
+    channels carry only ``last_read`` (and ``is_member``), so their read state comes from
+    ``conversations.history(oldest=last_read)``. Absent fields are never read as "zero unread".
+    """
+    if info.unread_count is not None:
+        return "unread" if info.unread_count > 0 else "no_unread"
+    known = _last_read_known(info)
+    if info.latest_ts is not None and known:
+        return "unread" if _tsf(info.latest_ts) > _tsf(info.last_read) else "no_unread"
+    return "needs_history" if known else "unknown"
 
 
 async def evaluate(
@@ -219,17 +229,19 @@ async def evaluate(
             if info.is_member is False:
                 res.counts["not_a_member"] += 1
                 continue
-            reason = _is_unread(info, kind)
-            if reason:
-                res.counts[reason] += 1
+            state = classify_read_state(info)
+            if state == "unknown":
+                res.counts["read_state_unknown"] += 1
+                res.unknown_ids.append(cid)
                 continue
-            if not opts["repeat"] and info.latest_ts and _tsf(info.latest_ts) <= _tsf(notified.get(cid)):
+            if state == "no_unread":
+                res.counts["no_unread"] += 1
+                continue
+            if state == "unread" and not opts["repeat"] and info.latest_ts and (
+                _tsf(info.latest_ts) <= _tsf(notified.get(cid))
+            ):
                 res.counts["already_notified"] += 1
                 continue
-            await pace()
-            page = await adapter.read_history(
-                cid, limit=const.UNREAD_HISTORY_LIMIT, oldest=info.last_read,
-            )
         except RelayError as e:
             if e.code == "ratelimited":
                 res.counts["rate_limited"] += 1
@@ -242,24 +254,49 @@ async def evaluate(
             res.counts["conversation_failed"] += 1
             res.gap = True
             continue
+        try:
+            await pace()
+            page = await adapter.read_history(
+                cid, limit=const.UNREAD_HISTORY_LIMIT, oldest=info.last_read,
+            )
+        except RelayError as e:
+            if e.code == "ratelimited":
+                res.counts["rate_limited"] += 1
+                res.rate_limited = True
+                res.gap = True
+                return res
+            if e.code in GONE_CODES:
+                res.counts["conversation_gone"] += 1
+            elif state == "needs_history":  # never "no unread" for a conversation we could not read
+                res.counts["read_state_unknown"] += 1
+                res.unknown_ids.append(cid)
+            else:
+                res.counts["conversation_failed"] += 1
+                res.gap = True
+            continue
         channel_type = "im" if kind == "dm" else "mpim" if kind == "group_dm" else "channel"
         kept: list[RelayEvent] = []
+        seen_newest = 0.0  # newest message in the page, kept or not: dropped ones are consumed too
         for msg in page.messages:
             if info.last_read and _tsf(msg.ts) <= _tsf(info.last_read):
                 continue
+            seen_newest = max(seen_newest, _tsf(msg.ts))
             event = event_from_message(svc.relay_id, msg, cid, channel_type=channel_type)
             if isinstance(event, Drop) or never_content(event, ctx) or event.user == owner:
                 continue
             if opts["mentions_only"] and not mentions_owner(event.text, owner):
                 continue
             kept.append(event)
-        latest_seen = max([_tsf(info.latest_ts), *(_tsf(e.ts) for e in kept)])
+        latest_seen = max([_tsf(info.latest_ts), seen_newest, *(_tsf(e.ts) for e in kept)])
         consumed = f"{latest_seen:.6f}" if latest_seen else (info.latest_ts or "0")
         if not kept:
             res.counts["no_unread"] += 1
             res.consumed_empty[cid] = consumed
             continue
         kept.sort(key=lambda e: _tsf(e.ts))
+        if state == "needs_history" and not opts["repeat"] and _tsf(kept[-1].ts) <= _tsf(notified.get(cid)):
+            res.counts["already_notified"] += 1
+            continue
         full = len(page.messages) >= const.UNREAD_HISTORY_LIMIT or bool(page.next_cursor)
         count, exact = len(kept), not full
         if kind in ("dm", "group_dm") and info.unread_count is not None and not opts["mentions_only"]:

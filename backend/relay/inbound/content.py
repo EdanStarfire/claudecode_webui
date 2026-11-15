@@ -131,24 +131,51 @@ UNREAD_FRAMING = (
 )
 
 
+UNREAD_NOTICE_FRAMING = (
+    "This is a scheduled unread summary from a Slack monitor you set up, at {at}. It contains no message "
+    "content. The relay never marks anything as read. Use `unmonitor` to stop the monitor."
+)
+
+
 def unread_summary(n: int) -> str:
     return f"Slack unread: {n} conversation{'s' if n != 1 else ''}"
 
 
+def unread_notice_summary(unknown: int) -> str:
+    return f"Slack unread: {unknown} could not be checked"
+
+
+def unread_unknown_line(n: int) -> str:
+    """Counts only (no IDs, names or text): conversations whose read state Slack did not give."""
+    return (
+        f"Slack read state could not be determined for {n} conversation{'s' if n != 1 else ''}; "
+        "they are not reported as read or unread."
+    )
+
+
 def build_unread_dispatch(
     entries: list[dict[str, Any]], *, as_of: float, omitted: int = 0, notice: str | None = None,
-    nonce: str | None = None,
+    nonce: str | None = None, unknown: int = 0,
 ) -> str:
     """Outside the fence: counts, times and fixed framing only (conversation / user names, message
-    text and IDs of Slack objects live inside ``wrap_untrusted``)."""
+    text and IDs of Slack objects live inside ``wrap_untrusted``). No entries = a notice-only
+    envelope (``unknown`` conversations could not be checked): nothing untrusted, so no fence."""
     stamp = datetime.fromtimestamp(as_of, UTC).strftime("%Y-%m-%d %H:%M UTC")
     n = len(entries)
-    parts = [f"📬 Slack unread — {n} conversation{'s' if n != 1 else ''} with unread messages (as of {stamp})"]
+    if n:
+        parts = [f"📬 Slack unread — {n} conversation{'s' if n != 1 else ''} with unread messages (as of {stamp})"]
+    else:
+        parts = [
+            f"📬 Slack unread — no conversations with unread messages; {unknown} could not be checked (as of {stamp})"
+        ]
     if notice:
         parts.append(notice)
-    parts += [UNREAD_FRAMING.format(at=stamp), wrap_untrusted(entries, nonce)]
-    if omitted:
-        parts.append(f"+{omitted} more conversation{'s' if omitted != 1 else ''} with unread messages omitted")
+    if n:
+        parts += [UNREAD_FRAMING.format(at=stamp), wrap_untrusted(entries, nonce)]
+        if omitted:
+            parts.append(f"+{omitted} more conversation{'s' if omitted != 1 else ''} with unread messages omitted")
+    else:
+        parts.append(UNREAD_NOTICE_FRAMING.format(at=stamp))
     return "\n\n".join(parts)
 
 

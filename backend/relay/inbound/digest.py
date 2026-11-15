@@ -35,7 +35,8 @@ _GAP_KEYS = frozenset({
     "list_failed", "search_failed", "conversation_failed", "fetch_failed", "error", "time_cap",
 })
 # unread reasons that are problems worth the 5-minute drop summary (the rest are routine)
-_UNREAD_DROP_REASONS = ("blocked_channel", "policy_unset", "conversation_cap", "time_cap", "conversation_failed")
+_UNREAD_DROP_REASONS = ("blocked_channel", "policy_unset", "conversation_cap", "time_cap", "conversation_failed",
+                       "read_state_unknown")
 
 
 def _tsf(ts: str | None) -> float:
@@ -374,11 +375,23 @@ class DigestScheduler:
         gap_counts = {k: v for k, v in reasons.items() if k in _GAP_KEYS and v}
         if gap_counts:
             self._notices.setdefault(session_id, []).append({"counts": gap_counts, "from": since, "to": now})
-        if not res.conversations:
+        unknown = len(res.unknown_ids)
+        uhash = unread.unknown_hash(res.unknown_ids) if unknown else None
+        repeat = bool((m.get("options") or {}).get("repeat"))
+        if not unknown and m.get("unknown_notice_hash"):  # nothing unknown any more: notify on a reappearance
+            svc.store.set_unknown_notice_hash(mid, None)
+        if not res.conversations and not (unknown and (repeat or uhash != m.get("unknown_notice_hash"))):
             svc._advance_unqueued_cover({mid: svc._ts_str(now)})
-            await self._finish(m, trigger, "empty", reason_counts=reasons, gap=bool(gap_counts))
+            await self._finish(
+                m, trigger, "empty", reason_counts=reasons, gap=bool(gap_counts or unknown),
+                code="read_state_unknown" if unknown else None,
+            )
             return
         notice = self._take_notice(session_id)
+        gap_notice = notice
+        if unknown:
+            line = monitor_content.unread_unknown_line(unknown)
+            notice = f"{notice} {line}" if notice else line
         count = len(res.conversations)
         digest_run = {
             "at": now, "messages": count, "conversations": count, "omitted": res.omitted,
@@ -386,10 +399,10 @@ class DigestScheduler:
         }
         envelope_id = await svc.enqueue_unread(
             m, res.conversations, as_of=now, omitted=res.omitted, cover={mid: svc._ts_str(now)},
-            notice=notice, watch_info={"digest_run": digest_run},
+            notice=notice, watch_info={"digest_run": digest_run}, unknown=unknown, unknown_hash=uhash,
         )
         if envelope_id is None:
-            if notice:  # the announcement was not delivered: keep it for the next envelope
+            if gap_notice:  # the announcement was not delivered: keep it for the next envelope
                 self._notices.setdefault(session_id, []).append({"counts": gap_counts, "from": since, "to": now})
             await self._finish(m, trigger, "failed", code="enqueue_failed", reason_counts=reasons, count=count)
             return

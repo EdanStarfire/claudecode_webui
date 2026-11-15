@@ -372,6 +372,14 @@ class JsonSubscriptionStore:
         rec["notified"] = merged
         self._persist_soon()
 
+    def set_unknown_notice_hash(self, monitor_id: str, value: str | None) -> None:
+        """Unread monitors: fingerprint of the unknown-read-state set the session was last told about."""
+        rec = self.get_monitor(monitor_id)
+        if rec is None or rec.get("unknown_notice_hash") == value:
+            return
+        rec["unknown_notice_hash"] = value
+        self._persist_soon()
+
     def _digest_resume(self, rec: dict[str, Any], now: float) -> None:
         """A resumed digest restarts from now: next slot after now, nothing carried over."""
         if is_digest(rec) and rec.get("schedule"):
