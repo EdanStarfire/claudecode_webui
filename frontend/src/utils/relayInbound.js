@@ -53,9 +53,9 @@ export function auditQuery(item) {
 }
 
 // Frozen sentences (the same ones the agent-facing tools state)
-export const REPEAT_NOTICE = 'Digests and live monitors on the same scope repeat the same messages.'
+export const REPEAT_NOTICE = 'Monitors with overlapping scopes, digest or live, each deliver a message separately, so it can arrive more than once.'
 export const RUN_NOW_TITLE = 'Run now: collects and delivers immediately; wakes the session only if there is content. Applies immediately.'
-export const REPEAT_TWIN_NOTICE = 'A live monitor on the same scope also delivers these messages, so the session receives them twice (once live, once in the digest).'
+export const REPEAT_TWIN_NOTICE = 'A live monitor on the same scope also delivers these messages, so the session receives them twice. Any overlapping monitors deliver separately.'
 
 export const hasAttention = (health) => !!health?.attention?.some(a => a.severity === ATTENTION)
 

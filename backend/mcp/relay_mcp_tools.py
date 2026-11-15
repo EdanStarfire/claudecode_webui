@@ -123,8 +123,10 @@ _SCHEDULE_DOC = (
     "{\"every_minutes\": 120} (at least 30). No `schedule` = live: matching messages arrive about a "
     "minute after they are posted. With `schedule` = a DIGEST: one message at the scheduled times, "
     "only when there is content (never a message or a session start for an empty period); a slot "
-    "missed while the Backend was down runs once afterwards. A digest and a live monitor on the "
-    "same scope repeat the same messages. Use `run_monitor_now` to get a digest immediately."
+    "missed while the Backend was down runs once afterwards. Monitors whose scopes overlap "
+    "(digest or live, in any combination) each deliver a matching message separately, so it can "
+    "arrive more than once; they are not deduplicated (e.g. a mention in a watched channel reaches "
+    "both a channel monitor and a mentions monitor). Use `run_monitor_now` to get a digest immediately."
 )
 
 _SCOPE_CONSENT_NOTE = (
