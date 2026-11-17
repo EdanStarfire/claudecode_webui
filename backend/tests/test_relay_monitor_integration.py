@@ -4,6 +4,7 @@ shape, authority consequences, end-to-end cursor-on-confirm and instruction fail
 from __future__ import annotations
 
 import asyncio
+import time
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, patch
 
@@ -15,7 +16,14 @@ from backend.models.legion_models import (
     DeliveryPolicy,
     SenderType,
 )
-from backend.relay.inbound.monitor_delivery import CoordinatorPort, enqueue_monitor_comm
+from backend.pending_recovery import recover_session
+from backend.pending_store import PendingStore
+from backend.relay.inbound.monitor_delivery import (
+    CoordinatorPort,
+    classify_replayed,
+    enqueue_monitor_comm,
+    replay_ttl,
+)
 from backend.relay.inbound.sink import enqueue_external_comm
 from backend.session_manager import SessionState
 from backend.tests.relay_inbound_support import (
@@ -27,7 +35,14 @@ from backend.tests.relay_inbound_support import (
     message_payload,
     settle,
 )
-from backend.tests.relay_monitor_support import CHANNEL, emit, fire_window, monitor, started
+from backend.tests.relay_monitor_support import (
+    CHANNEL,
+    emit,
+    fire_window,
+    history_msg,
+    monitor,
+    started,
+)
 from backend.tests.test_relay_inbound_integration import (
     _fast_sleep,
     _wait_for,
@@ -206,6 +221,50 @@ class TestEndToEnd:
             got = env.service.store.get_monitor(rec["id"])
             assert got["last_seen_ts"] == f"{BASE_TIME:.6f}" and got["failures"] == 1
             assert audit_events(env, "monitor_delivery_failed")
+        finally:
+            env.coord.delivery_gate.stop_when_idle("s1")
+            await env.service.stop()
+
+    async def test_restart_cancels_the_envelope_and_a_backfill_rebuilds_it(self, tmp_path, monkeypatch):
+        """Issue #2362: a queued monitor envelope is cancelled at load (no state moves), the next
+        backfill re-collects from the untouched cursor under a new `attempt` comm id."""
+        (tmp_path / "coord").mkdir()
+        env = await self.build(tmp_path, monkeypatch, processing=True)
+        try:
+            rec = await monitor(env)
+            ts = await emit(env, env.t, "deploy now", seq=1)
+            await fire_window(env)
+            comm_id = next(iter(env.service.watcher.entries))
+            env.coord.delivery_gate.stop_when_idle("s1")
+            before = dict(env.service.store.get_monitor(rec["id"]))
+            # --- restart: fresh ledger loaded from disk, watcher memory gone
+            env.service.watcher.entries.clear()
+            env.service._high_water.clear()  # in-memory only: reset to the durable cursor
+            env.service._recent_keys.pop(rec["id"], None)  # reseeded from CONFIRMED keys only
+            env.coord.pending_store = PendingStore()
+            report = await recover_session(
+                env.coord.pending_store, "s1", tmp_path / "coord", now=time.time(),
+                classify=classify_replayed, ttl_override=replay_ttl,
+            )
+            assert [i.comm.comm_id for i in report.cancelled] == [comm_id]
+            assert env.coord.pending_store.get_item("s1", comm_id).status == "cancelled"
+            after = env.service.store.get_monitor(rec["id"])
+            for key in ("last_seen_ts", "failures", "status", "suspended_reason"):
+                assert after.get(key) == before.get(key)
+            assert after["failures"] == 0 and after["status"] == "active"
+            assert audit_events(env, "monitor_delivery_failed") == []
+            # --- backfill rebuilds it
+            env.adapter.histories[CHANNEL] = [history_msg(ts, "deploy now")]
+            env.info.is_processing = False
+            with patch("backend.delivery_gate.asyncio.sleep", new=AsyncMock(side_effect=_fast_sleep)):
+                await env.service.backfill_monitors()
+                await fire_window(env)
+                new_id = next(iter(env.service.watcher.entries))
+                assert new_id != comm_id
+                assert await _wait_for(lambda: bool(env.sent))
+                await env.service.watcher.poll_once()
+            assert env.coord.pending_store.get_item("s1", new_id).status == "delivered"
+            assert env.service.store.get_monitor(rec["id"])["last_seen_ts"] == ts
         finally:
             env.coord.delivery_gate.stop_when_idle("s1")
             await env.service.stop()

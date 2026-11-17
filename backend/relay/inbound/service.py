@@ -6,8 +6,8 @@ ack -> single worker -> age window / rate limit / session checks -> delivery sin
 Ack semantics are at-most-once with a persisted in-flight list: an accepted instruction is written
 (fsync) before the handler returns (= before the ack). Events accepted but not yet enqueued are
 re-run at startup. Once enqueued into the session's pending queue an instruction counts as
-delivered from the relay's point of view; the pending queue itself is not recovered across a
-Backend restart (pre-existing, issue #2362).
+delivered from the relay's point of view; the pending ledger is recovered at startup (issue #2362): instructions replay,
+monitor envelopes are cancelled and rebuilt by backfill.
 """
 
 from __future__ import annotations

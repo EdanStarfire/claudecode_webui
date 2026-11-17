@@ -581,10 +581,20 @@ digests / unread (3c) and the inbound UI / audit view (3d) are later stages. Cod
 - **Acknowledgement**: at-most-once with a persisted in-flight list (`inbound_state.json`, fsync BEFORE the Slack ack). The
   in-flight list protects only the window between the ack and the enqueue: events accepted but not yet enqueued are re-run at
   startup. Once enqueued, an instruction is delivered from the relay's point of view.
-- **Known limitation (pre-existing queue behavior, issue #2362; deliberately not fixed in 3a)**: the pending queue is not
-  recovered across a Backend restart (`PendingStore.load` has no production caller and nothing re-arms the when-idle drain at
-  startup). **An instruction queued for a busy or stopped session is lost if the Backend restarts before it is drained**; the
-  owner may need to resend it. 3a adds no `recover_pending`, no startup drain and does not touch `PendingStore` / `DeliveryGate`.
+- **Pending queue recovery (issue #2362)**: the pending ledger (`pending.jsonl`) IS recovered at Backend startup
+  (`backend/pending_recovery.py`, `SessionCoordinator._initialize_pending`, run BEFORE `relay.inbound.start()` so the
+  `get_item()` dedupe sees replayed items). Per pending item, in order: not `WHEN_IDLE` -> `failed`
+  (`backend restarted before delivery; not replayed`); older than its TTL -> `failed` (`expired`; 24 h, 1 h for `SCHEDULE`
+  senders and **1 h for relay instructions** (`kind=instruction`: a stale owner instruction must not fire a day later,
+  consistent with the 15 min "received late" rule)); relay monitor envelopes (`kind=monitor`: live, digest and unread) ->
+  `cancelled` + one `monitor_replay_cancelled` audit row (`code=backend_restart`, no text; not a health event, no attention)
+  because a backfill / the next scheduled run rebuilds them from the untouched cursor (digest / unread: at most one
+  schedule interval later). Remaining items are replayed in `position` order by a boot drain armed as the LAST init step
+  (`_arm_pending_drains`): sessions started sequentially, `BOOT_DRAIN_BATCH = 3` at once, `BOOT_DRAIN_SPACING_SECONDS = 2`
+  apart, honoring `comm.auto_start`; `queue_paused` sessions arm on resume, PAUSED / ERROR sessions arm when their state
+  changes. **At-least-once**: a crash between the send and `mark_delivered` re-sends once. `PendingStore.load` now also
+  honors the `position` of a `requeue()` status line. No delivery-failure replies are posted for replayed instructions
+  (the watcher is memory-only).
 - **Known limitation (3a scope, carried into 3b/3d planning): no delivery feedback after the enqueue.** Once an instruction is enqueued it counts as
   delivered, so if the delivery gate later fails it (auto-start error, session in ERROR, send failure) nothing is posted back to Slack; the
   failure is only visible in the session's Queue panel (status `failed`). Refusals the pipeline can decide before the enqueue (unknown handle,
@@ -665,7 +675,7 @@ Code: `relay/inbound/{matcher,coalescer,flood,content,watcher,monitor_delivery}.
   the pending ledger) sees the envelope `delivered`. After a failed/cancelled envelope the cursor is frozen for that monitor until a backfill
   re-collects it; 3 consecutive failures suspend (`delivery_failed`); a vanished ledger item is "unknown" (cursor stays, no failure count).
   A Backend restart resets `high_water` to the durable cursor and the reconnect backfill (24 h cap, 3 pages x 100, `older_omitted` notice)
-  re-delivers lost content: **at-least-once, a repeat is possible** (messages carry `ts`). The queue gap of #2362 is unchanged.
+  re-delivers lost content: **at-least-once, a repeat is possible** (messages carry `ts`). Queued envelopes are cancelled at restart and rebuilt by this backfill (#2362).
 - **Policy at delivery**: triggers (`RelayService.change_listeners`: session policy edits, tier edits, attachment/config sync, plus
   session start and service start) re-evaluate; the **flush re-checks fresh**. Blocked -> suspended `channel_blocked`, no policy ->
   `policy_unset`, relay detached/session errored/ephemeral -> `session_inactive`; becoming readable again resumes **from now** (no backfill
@@ -673,7 +683,7 @@ Code: `relay/inbound/{matcher,coalescer,flood,content,watcher,monitor_delivery}.
   delete drops monitors, threads, buffers and watches; reparenting changes nothing.
 - **Instruction failure replies**: the same watcher follows 3a instructions: `failed` -> one marked `delivery_failed` reply, `cancelled`
   (queue cleared) -> one marked `cancelled` reply, in-memory once-guard, the received reaction stays, none after a Backend restart
-  (nothing is watched; #2362). Monitored content never produces a reaction or a Slack post.
+  (nothing is watched after a restart; replayed instructions are not watched either). Monitored content never produces a reaction or a Slack post.
 - **Audit**: `monitor_created|removed|suspended|resumed|delivered|delivery_failed|expired|flood|backfill`, instruction outcomes
   `delivery_failed|cancelled`; new fields `monitor_id, monitor_kind, envelope_id, omitted`. No message text, ever; keyword filters
   are stored as sha256 (`query_sha256`) + count only. Unmatched-event drops join the 5-minute `inbound_drop_summary` (`monitor_*` reasons).
@@ -726,8 +736,8 @@ public,search_limiter}.py`, `mcp/relay_monitor_tools.py::handle_scope_monitor`.
   not lift a system suspension. Owner actions audit with `source=owner` (`monitor_paused|resumed|removed`). The public shape carries labels
   (plain text) and counters, never message content. Dispose suspends scope monitors, start restores them (owner pause survives), delete
   drops them.
-- **Not changed**: `PendingStore` / `DeliveryGate` (#2362: the pending queue is still not recovered across a restart; mitigated for
-  monitors by cursor-on-confirm). Sessions started before the upgrade lack the two tools (static tool list): restart them. `api_app_id`
+- **Not changed**: `PendingStore` / `DeliveryGate` (#2362 recovers the ledger at startup in `pending_recovery.py`; monitor envelopes
+  are cancelled at load and rebuilt via cursor-on-confirm). Sessions started before the upgrade lack the two tools (static tool list): restart them. `api_app_id`
   placement on a real event is confirmed only by the live validation recorded in the PR.
 
 ### Relay inbound: Inbound tab (3d-i)
@@ -830,7 +840,7 @@ run-now (3c-iii) are later stages. Code: `relay/inbound/{schedule,digest}.py`, `
 - **Audit**: `monitor_digest` (`outcome` delivered|empty|rate_limited|deferred|refused|failed|accepted, `code`, `count`,
   `omitted`, `reason_counts`, `envelope_id`, `retry`, `source` schedule|late|agent|owner); `monitor_created` carries
   `code=digest`. No message text.
-- **Known limitations**: #2362 (the pending queue is not recovered across a restart; the cursor moves only on confirmed delivery so
+- **Known limitations**: #2362 (a queued digest envelope is cancelled at restart; the cursor moves only on confirmed delivery so
   the next digest re-collects, at-least-once); monitors whose scopes overlap (digest or live, any combination) each deliver a message separately, so it can arrive more than once, by design (tool
   descriptions, the creation note for exact twins and the Inbound tab footer say so); two Backends with one app token disturb live monitors, not digests, but each
   runs the digests of its own monitors; edits are not redelivered; Slack search lags (60 s margin); sessions started before
@@ -892,7 +902,7 @@ write calls; only the agent's own `mark_read` tool, under the channel policy, ca
 - **Audit**: `monitor_digest` with `monitor_kind=monitor_unread`, `count` = conversations listed, `omitted` = conversations beyond the caps,
   `reason_counts` (`blocked_channel`, `policy_unset`, `conversation_cap`, `read_state_unknown`, `no_unread`, `already_notified`, `time_cap`,
   `not_a_member`, `conversation_gone`, `rate_limited`); `monitor_created` carries `code=unread`. Conversation IDs only, never message text.
-- **Known limitations**: #2362 (an enqueued, undelivered envelope is lost on a restart; `notified` moves only on confirmation, so it is listed again,
+- **Known limitations**: #2362 (an enqueued, undelivered envelope is cancelled at restart; `notified` moves only on confirmation, so it is listed again,
   at-least-once); unread monitors need only the user token + the owner's inbound switch (a second Backend runs its own); group DMs and channels have no Slack
   unread counts (derived from history, approximate; muted state not modelled); DM unread counts exclude muted / thread-only unreads and thread unread state is not modelled; sessions started before
   the upgrade lack the tool (restart them). Live DM backfill on `hello` does not use the shared caches (only digest / unread runs do).

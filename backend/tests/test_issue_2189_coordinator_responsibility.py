@@ -58,13 +58,17 @@ ALLOWLIST: dict[str, int] = {
     # Issue #2103: 347->348 — one `self.relay = core.relay` line (RelayRuntime from
     # build_core_managers(); relay_manager/service/audit/gate/bridge/mcp_tools are properties).
     # Issue #2103 stage 3a: 348->349 — one `self.relay.inbound.bind(self)` line (delivery sink).
-    "__init__": 349,
+    # Issue #2362: 349->350 — one `self._pending_boot = PendingBoot(self)` line.
+    "__init__": 350,
     # --- Orchestration ---
     # Issue #2103: 69->70 — one `await self.relay_service.initialize()` line.
     # Issue #2103 stage 3a: 70->71 — one `await self.relay.inbound.start()` line.
-    "initialize": 71,
+    # Issue #2362: 71->72 — `await self._pending_boot.initialize()` (after the legacy queues)
+    # plus `await self._pending_boot.arm()` as the last step, net one line.
+    "initialize": 72,
     # Issue #2103 stage 3a: 23->24 — one `await self.relay.inbound.stop()` line.
-    "cleanup": 24,
+    # Issue #2362: 24->25 — one `await self._pending_boot.stop()` line.
+    "cleanup": 25,
     # --- Acknowledged "real logic" residual kept on the coordinator by
     # design: session lifecycle operations, the state-change notify/relay
     # cluster, callback-factory setters, tool-call tracking entry points. ---

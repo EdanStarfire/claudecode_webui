@@ -6,7 +6,7 @@ Per-session ledger of pending `Comm` deliveries, with JSONL persistence mirrorin
 delivery-mechanics fields (status, position, timestamps, error) that are about
 *how* an entry is delivered, not what it contains.
 
-Pure data layer: nothing in production wires this up yet. `QueueManager`/
+Pure data layer (startup recovery lives in `pending_recovery.py`, issue #2362). `QueueManager`/
 `queue.jsonl` remain the real ledger for production queue traffic until a later
 stage (issue #2193's staged rollout) cuts the REST endpoints over.
 """
@@ -185,6 +185,8 @@ class PendingStore:
                         if comm_id in items_by_id:
                             item = items_by_id[comm_id]
                             item.status = entry.get("status", item.status)
+                            if "position" in entry:  # requeue(): the front position
+                                item.position = entry["position"]
                             if "delivered_at" in entry:
                                 item.delivered_at = entry["delivered_at"]
                             if "error" in entry:

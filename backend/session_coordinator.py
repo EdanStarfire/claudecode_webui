@@ -43,6 +43,7 @@ from .models.messages import (
     ToolCall,
 )
 from .models.permission_mode import PermissionMode
+from .pending_boot import PendingBoot
 from .project_manager import ProjectInfo
 from .provider_model_switch import ProviderModelSwitch
 from .queue_processor import QueueProcessor
@@ -358,6 +359,7 @@ class SessionCoordinator:
         self._task_leg_registries: dict[str, TaskLegRegistry] = {}
         # Issue #2145: latest background-task snapshot per session (process-bound)
         self._background_tasks: dict[str, list[dict[str, Any]]] = {}
+        self._pending_boot = PendingBoot(self)  # issue #2362
 
         # Issue #858: Per-session event notified on every create_tool_call(), allowing
         # permission callbacks to wait efficiently instead of polling.
@@ -709,8 +711,8 @@ class SessionCoordinator:
             # Initialize storage managers for all existing sessions
             await self._initialize_existing_session_storage()
 
-            # Issue #500: Load message queues for all existing sessions
-            await self._initialize_queues()
+            await self._initialize_queues()  # issue #500
+            await self._pending_boot.initialize()  # issue #2362: before relay.inbound.start()
 
             # Validate and cleanup orphaned project/session references (issue #63)
             await self._validate_and_cleanup_projects()
@@ -722,6 +724,7 @@ class SessionCoordinator:
                 await self.legion_system.history_rotator.start()
 
             await self.relay.inbound.start()  # issue #2103 stage 3a: last, once delivery exists
+            await self._pending_boot.arm()  # issue #2362: boot drain, strictly the last step
             coord_logger.info("Session coordinator initialized successfully")
         except Exception:
             logger.exception("Failed to initialize session coordinator")
@@ -755,7 +758,7 @@ class SessionCoordinator:
             # Don't raise - this shouldn't block coordinator initialization
 
     async def _initialize_queues(self):
-        """Load message queues for all existing sessions on startup."""
+        """Load the legacy message queues for all existing sessions on startup."""
         await self.queue_processor._initialize_queues()
 
     # =========================================================================
@@ -2433,6 +2436,7 @@ class SessionCoordinator:
     async def _on_session_manager_state_change(self, session_id: str, new_state: SessionState, is_processing: bool = False, project_id: str | None = None):
         """Handle state changes from session manager"""
         # logger.info(f"Received state change from session manager: {session_id} -> {new_state.value}")
+        self._pending_boot.on_state_change(session_id, new_state)  # issue #2362
         await self._notify_state_change(session_id, new_state)
 
     async def _notify_metadata_change(self, session_id: str) -> None:
@@ -2653,6 +2657,7 @@ class SessionCoordinator:
         """Cleanup all resources"""
         try:
             await self.relay.inbound.stop()  # issue #2103: no new inbound deliveries; flushes state
+            await self._pending_boot.stop()  # issue #2362
             # Stop scheduler service and history rotator (issue #495, #1372)
             if hasattr(self, 'legion_system') and self.legion_system is not None:
                 await self.legion_system.history_rotator.stop()

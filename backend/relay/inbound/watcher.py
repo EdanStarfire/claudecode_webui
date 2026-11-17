@@ -4,7 +4,7 @@ The pending store is the delivery ledger (``pending`` -> ``delivered`` | ``faile
 ``cancelled``). The watcher polls it (in-memory work only, every 5 s) and reports terminal
 outcomes to the service, which advances monitor cursors (cursor-on-confirm) or posts the single
 marked reply for a failed / cancelled instruction. Watches live in memory only: after a Backend
-restart nothing is watched (the pending queue is not recovered either, issue #2362), so monitor
+restart nothing is watched (replayed instructions, issue #2362, are not watched either), so monitor
 cursors stay at their durable value and the reconnect backfill re-delivers.
 """
 
