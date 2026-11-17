@@ -355,3 +355,13 @@ async def test_health_without_service_never_moves_a_corrupt_store_aside(tmp_path
     assert payload["monitors"]["total"] == 0
     assert (root / "r1" / "subscriptions.json").read_text() == "{not json"
     assert [p.name for p in (root / "r1").iterdir()] == ["subscriptions.json"]
+
+
+def test_replay_cancelled_row_raises_no_attention_and_is_not_a_health_event():
+    """Issue #2362: a monitor envelope cancelled at restart is expected, not a failure."""
+    from backend.relay.inbound.health import HEALTH_EVENTS
+
+    assert "monitor_replay_cancelled" not in HEALTH_EVENTS
+    row = {"event": "monitor_replay_cancelled", "outcome": "cancelled", "code": "backend_restart"}
+    p = build(monitors=[mon()], audit=scan([row]))
+    assert p["attention"] == []

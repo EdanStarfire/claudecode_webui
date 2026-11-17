@@ -88,3 +88,25 @@ class CoordinatorPort:
         if not session_dir:
             return False
         return await coordinator.pending_store.cancel(session_id, session_dir, comm_id) is not None
+
+
+# Replayed instructions are the owner's own words acting as the owner: a stale one must not fire a
+# day later (consistent with the 15 min "received late" rule), so they get a 1 h TTL (issue #2362).
+INSTRUCTION_REPLAY_TTL_SECONDS = 3600
+
+
+def _relay_inbound(item) -> dict:
+    meta = (item.comm.metadata or {}).get("relay_inbound")
+    return meta if isinstance(meta, dict) and item.comm.sender_id else {}
+
+
+def classify_replayed(item) -> str | None:
+    """Recovery classifier (core ``pending_recovery`` stays relay-agnostic): monitor envelopes (live,
+    digest and unread alike) are CANCELLED at load, a backfill / the next run rebuilds them from the
+    untouched cursor. Instructions replay (None)."""
+    return "cancel" if _relay_inbound(item).get("kind") == "monitor" else None
+
+
+def replay_ttl(item) -> float | None:
+    """Replayed relay instructions expire after 1 h instead of the sender default."""
+    return INSTRUCTION_REPLAY_TTL_SECONDS if _relay_inbound(item).get("kind") == "instruction" else None

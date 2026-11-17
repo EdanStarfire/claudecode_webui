@@ -4,6 +4,7 @@ limitation (issue #2103 stage 3a)."""
 from __future__ import annotations
 
 import asyncio
+import time
 import uuid
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock
@@ -14,14 +15,15 @@ import backend.relay_manager as relay_manager_module
 from backend.delivery_gate import DeliveryGate
 from backend.models.legion_models import DeliveryPolicy, SenderType
 from backend.models.relay import RelayRecord
+from backend.pending_recovery import recover_session
 from backend.pending_store import PendingStore
 from backend.relay.adapter import AuthInfo
 from backend.relay.inbound import constants as const
 from backend.relay.inbound.manager import InboundManager
+from backend.relay.inbound.monitor_delivery import classify_replayed, replay_ttl
 from backend.relay.inbound.service import comm_id_for
 from backend.relay.inbound.sink import enqueue_external_comm
 from backend.relay_manager import RelayManager
-from backend.session_coordinator import SessionCoordinator
 from backend.session_manager import SessionInfo, SessionState
 from backend.tests.relay_inbound_support import (
     FakeSocketTransport,
@@ -196,11 +198,12 @@ def fake_coordinator(tmp_path, *, processing=True, paused=False):
     return coord
 
 
-def enqueue(coord, comm_id=None, text="do it"):
+def enqueue(coord, comm_id=None, text="do it", kind=None):
+    inbound = {"thread_ts": "1.1"} | ({"kind": kind} if kind else {})
     return enqueue_external_comm(
         coord, "s1", comm_id=comm_id or str(uuid.uuid4()), summary="Slack instruction: do it",
         content=text, dispatch_content=f"DISPATCH {text}",
-        metadata={"relay_inbound": {"thread_ts": "1.1"}}, relay_id="relay1",
+        metadata={"relay_inbound": inbound}, relay_id="relay1",
     )
 
 
@@ -237,29 +240,39 @@ class TestEnqueueExternalComm:
         assert outcome.status == "failed" and outcome.error
 
 
-class TestQueueLimitationIsPinned:
-    """Issue #2362 (pre-existing, carved out of #2103 stage 3a): the pending queue is not
-    recovered across a Backend restart. An instruction queued for a busy or stopped session is
-    lost if the Backend restarts before it is drained; the owner may need to resend."""
+class TestQueueReplayAfterRestart:
+    """Issue #2362: the pending ledger is recovered at startup (pending_recovery). A queued
+    instruction is replayed (1 h TTL), and a repeat of the same Slack ts is `already_delivered`."""
 
     async def test_enqueue_never_loads_the_ledger(self, tmp_path):
         coord = fake_coordinator(tmp_path)
         coord.pending_store.load = AsyncMock()
         await enqueue(coord, "c1")
-        coord.pending_store.load.assert_not_called()
+        coord.pending_store.load.assert_not_called()  # loading is the startup step, not the sink's
 
-    async def test_restart_loses_a_queued_instruction(self, tmp_path):
+    async def test_restart_replays_a_queued_instruction_and_dedupes_the_repeat(self, tmp_path):
         coord = fake_coordinator(tmp_path, processing=True)
-        await enqueue(coord, "c1")
-        assert coord.pending_store.get_item("s1", "c1") is not None
+        await enqueue(coord, "c1", kind="instruction")
         restarted = fake_coordinator(tmp_path, processing=False)  # fresh in-memory store
-        assert restarted.pending_store.get_item("s1", "c1") is None
-        assert restarted.pending_store.get_pending("s1") == []
-        restarted.delivery_gate.ensure_when_idle_running.assert_not_called()  # nothing re-armed
+        report = await recover_session(
+            restarted.pending_store, "s1", tmp_path, now=time.time(),
+            classify=classify_replayed, ttl_override=replay_ttl,
+        )
+        assert [i.comm.comm_id for i in report.kept] == ["c1"]
+        assert restarted.pending_store.get_item("s1", "c1").status == "pending"
+        again = await enqueue(restarted, "c1")  # hello backfill re-run of the same Slack ts
+        assert again.status == "already_delivered"
+        assert len(restarted.pending_store.get_all("s1")) == 1
 
-    def test_no_recovery_machinery_was_added(self):
-        assert not hasattr(SessionCoordinator, "recover_pending")
-        assert not hasattr(PendingStore, "recover_pending")
+    async def test_instruction_older_than_one_hour_expires_at_replay(self, tmp_path):
+        coord = fake_coordinator(tmp_path, processing=True)
+        await enqueue(coord, "c1", kind="instruction")
+        restarted = fake_coordinator(tmp_path, processing=False)
+        report = await recover_session(
+            restarted.pending_store, "s1", tmp_path, now=time.time() + 3601,
+            classify=classify_replayed, ttl_override=replay_ttl,
+        )
+        assert [i.comm.comm_id for i in report.expired] == ["c1"]
 
 
 class TestStatusRoute:

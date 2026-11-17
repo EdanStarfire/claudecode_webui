@@ -26,8 +26,8 @@ async def enqueue_external_comm(
     """Deliver an external (Slack self-DM) instruction through ``DeliveryGate.deliver``.
 
     ``comm_id`` is deterministic per Slack message; a comm the in-memory pending store already
-    holds is not enqueued twice. The pending ledger is NOT loaded here (the queue is not recovered
-    across a Backend restart, issue #2362). ``from_user=True`` because ``Comm.validate`` needs a
+    holds is not enqueued twice. The pending ledger is NOT loaded here (it is recovered once at
+    startup, ``pending_recovery``, issue #2362). ``from_user=True`` because ``Comm.validate`` needs a
     user or minion source (the owner's own instruction); ``sender_type=EXTERNAL`` records how it
     arrived. ``CommType.SYSTEM`` like ``enqueue_message()``: never an implicit resume trigger, so
     a paused queue keeps the instruction pending (issue #2193 AC6).
