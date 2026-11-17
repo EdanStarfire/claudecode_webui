@@ -73,8 +73,8 @@ class QueueProcessor:
     # =========================================================================
 
     async def _initialize_queues(self) -> None:
-        """Load the LEGACY queue.jsonl ledger only (the pending ledger is recovered by
-        SessionCoordinator._initialize_pending, issue #2362); message queues for all existing sessions on startup."""
+        """Load the LEGACY queue.jsonl ledger for all existing sessions on startup. (The pending
+        ledger is recovered separately by PendingBoot, issue #2362.)"""
         try:
             sessions = await self._coordinator.session_manager.list_sessions()
             for session in sessions:

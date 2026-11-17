@@ -591,8 +591,8 @@ digests / unread (3c) and the inbound UI / audit view (3d) are later stages. Cod
   because a backfill / the next scheduled run rebuilds them from the untouched cursor (digest / unread: at most one
   schedule interval later). Remaining items are replayed in `position` order by a boot drain armed as the LAST init step
   (`_arm_pending_drains`): sessions started sequentially, `BOOT_DRAIN_BATCH = 3` at once, `BOOT_DRAIN_SPACING_SECONDS = 2`
-  apart, honoring `comm.auto_start`; `queue_paused` sessions arm on resume, PAUSED / ERROR sessions arm when their state
-  changes. **At-least-once**: a crash between the send and `mark_delivered` re-sends once. `PendingStore.load` now also
+  apart, honoring `comm.auto_start`; `queue_paused` sessions get an idling drain loop (resumes on any resume path), PAUSED / ERROR sessions arm when
+  they become live (the TTL is re-checked then; a session the owner stopped is never auto-started by this). **At-least-once**: a crash between the send and `mark_delivered` re-sends once. `PendingStore.load` now also
   honors the `position` of a `requeue()` status line. No delivery-failure replies are posted for replayed instructions
   (the watcher is memory-only).
 - **Known limitation (3a scope, carried into 3b/3d planning): no delivery feedback after the enqueue.** Once an instruction is enqueued it counts as

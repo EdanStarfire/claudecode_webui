@@ -6,9 +6,8 @@ Per-session ledger of pending `Comm` deliveries, with JSONL persistence mirrorin
 delivery-mechanics fields (status, position, timestamps, error) that are about
 *how* an entry is delivered, not what it contains.
 
-Pure data layer (startup recovery lives in `pending_recovery.py`, issue #2362). `QueueManager`/
-`queue.jsonl` remain the real ledger for production queue traffic until a later
-stage (issue #2193's staged rollout) cuts the REST endpoints over.
+Pure data layer; startup recovery lives in `pending_recovery.py` / `pending_boot.py` (issue #2362).
+The legacy `QueueManager`/`queue.jsonl` ledger is separate and only loaded for pre-cutover leftovers.
 """
 
 import copy

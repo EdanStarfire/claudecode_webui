@@ -20,6 +20,7 @@ from .pending_recovery import (
     BOOT_DRAIN_BATCH,
     BOOT_DRAIN_SPACING_SECONDS,
     RecoveryReport,
+    expire_stale,
     recover_session,
 )
 from .relay.inbound.monitor_delivery import classify_replayed, replay_ttl
@@ -94,15 +95,14 @@ class PendingBoot:
         tasks = [t for t in (self._drain_task, *self._arm_tasks) if t is not None and not t.done()]
         for task in tasks:
             task.cancel()
-        await asyncio.gather(*tasks, return_exceptions=True)
-        gate = self._coordinator.delivery_gate
-        for session_id in list(gate._when_idle_tasks):
-            gate.stop_when_idle(session_id)
+        await asyncio.gather(*tasks, return_exceptions=True)  # children are awaited by their parents
+        self._coordinator.delivery_gate.stop_all_when_idle()
 
     def on_state_change(self, session_id: str, new_state) -> None:
         """A deferred session left PAUSED / ERROR: arm it in a background task (arming may start
         the session and wait for readiness, which must not block the state-change chain)."""
-        if session_id not in self._deferred or _deferred_state(new_state):
+        # A stopped session (TERMINATED / CREATED) stays deferred: never auto-start one the owner stopped.
+        if session_id not in self._deferred or _deferred_state(new_state) or is_auto_startable(new_state):
             return
         self._deferred.discard(session_id)
         task = asyncio.create_task(self._arm_deferred(session_id), name=f"pending-arm-{session_id}")
@@ -163,11 +163,18 @@ class PendingBoot:
         try:
             for session_id in session_ids:
                 info = await self._coordinator.session_manager.get_session_info(session_id)
-                if info is None or getattr(info, "queue_paused", False):
+                if info is None:
+                    continue
+                if getattr(info, "queue_paused", False):
+                    # the loop idles (no start) while paused and resumes by itself on ANY resume path
+                    self._coordinator.delivery_gate.ensure_when_idle_running(session_id)
                     continue
                 if _deferred_state(info.state):
                     self._deferred.add(session_id)
-                    continue
+                    info = await self._coordinator.session_manager.get_session_info(session_id)
+                    if info is None or _deferred_state(info.state):
+                        continue  # still deferred: on_state_change arms it
+                    self._deferred.discard(session_id)  # it moved while we were adding it
                 await gate.acquire()
                 task = asyncio.create_task(_arm(session_id))
                 tasks.add(task)
@@ -179,14 +186,22 @@ class PendingBoot:
         except asyncio.CancelledError:
             for task in tasks:
                 task.cancel()
+            await asyncio.gather(*tasks, return_exceptions=True)
             raise
 
     async def _arm_session(self, session_id: str) -> None:
         """Bring a session up (only if a pending item asked for auto_start) and start its drain."""
+        coord = self._coordinator
+        session_dir = await coord.session_manager.get_session_directory(session_id)
+        if session_dir:
+            await expire_stale(
+                coord.pending_store, session_id, session_dir, now=get_unix_timestamp(),
+                ttl_override=replay_ttl,
+            )
         pending = self._when_idle(session_id)
         if not pending:
             return
-        gate = self._coordinator.delivery_gate
+        gate = coord.delivery_gate
         if any(i.comm.auto_start for i in pending):
             result = await gate.ensure_session_active(session_id, auto_start=True)
             if not result.success:

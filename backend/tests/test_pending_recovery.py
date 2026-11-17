@@ -315,19 +315,17 @@ class TestBootDrain:
         assert coord.pending_store.get_item("e", ce.comm_id).status == "pending"
         stop_all(coord)
 
-    async def test_queue_paused_not_armed_and_resume_arms(self, tmp_path, monkeypatch):
+    async def test_queue_paused_idles_then_delivers_on_any_resume(self, tmp_path, monkeypatch):
         coord, infos, sent, _ = boot_coordinator(tmp_path, {"s1": SessionState.ACTIVE}, monkeypatch)
         infos["s1"].queue_paused = True
         c = make_comm("s1")
         await seed_disk(tmp_path, "s1", c)
         await boot(coord)
         await _real_sleep(0.05)
-        assert sent == [] and not coord.delivery_gate._when_idle_tasks
+        assert sent == [] and coord.delivery_gate.is_when_idle_running("s1")  # idling, nothing started
         assert coord.pending_store.get_item("s1", c.comm_id).status == "pending"
-        # resume path (pause_queue(False)) arms the loop
-        infos["s1"].queue_paused = False
-        coord.delivery_gate.ensure_when_idle_running("s1")
-        assert await until(lambda: sent == ["s1"])
+        infos["s1"].queue_paused = False  # e.g. an authorized TASK cleared the pause
+        assert await until(lambda: sent == ["s1"], rounds=400)
         stop_all(coord)
 
     async def test_batch_cap(self, tmp_path, monkeypatch):
@@ -422,3 +420,84 @@ class TestBootDrain:
         await boot(coord)
         await coord.pending_boot.stop()
         assert not coord.delivery_gate._when_idle_tasks
+
+
+class TestKillRestart:
+    """SIGKILL-style restart: the ledger was written, the process died mid-queue (no shutdown hook,
+    no cleanup, possibly a torn last line); a fresh PendingStore recovers from disk alone."""
+
+    async def test_fresh_store_recovers_ledger_after_abrupt_kill(self, tmp_path):
+        before = PendingStore()
+        cs = [make_comm("s1", content=str(i)) for i in range(3)]
+        for x in cs:
+            await seed(before, "s1", tmp_path, x)
+        await before.mark_delivered("s1", tmp_path, cs[0].comm_id)
+        with open(tmp_path / "pending.jsonl", "a") as f:
+            f.write('{"type": "status", "comm_id": "' + cs[1].comm_id[:10])  # torn write, no newline
+        del before  # the old process is simply gone
+
+        store, rep = await recover(tmp_path)
+        assert [i.comm.comm_id for i in rep.kept] == [cs[1].comm_id, cs[2].comm_id]
+        assert store.get_item("s1", cs[0].comm_id).status == "delivered"
+
+    async def test_killed_with_a_booted_drain_replays_once_after_restart(self, tmp_path, monkeypatch):
+        coord, _, sent, _ = boot_coordinator(tmp_path, {"s1": SessionState.ACTIVE}, monkeypatch)
+        cs = [make_comm("s1") for _ in range(2)]
+        for x in cs:
+            await seed_disk(tmp_path, "s1", x)
+        # first life: nothing was ever drained (killed before the loop ran); second life boots
+        await boot(coord)
+        assert await until(lambda: len(sent) == 2)
+        await _real_sleep(0.05)
+        assert sent == ["s1", "s1"]
+        assert {i.status for i in coord.pending_store.get_all("s1")} == {"delivered"}
+        stop_all(coord)
+
+
+class TestReviewFixes:
+    async def test_deferred_session_rechecks_ttl_when_finally_armed(self, tmp_path, monkeypatch):
+        coord, infos, sent, _ = boot_coordinator(tmp_path, {"p": SessionState.PAUSED}, monkeypatch)
+        c = make_comm("p", sender_type=SenderType.EXTERNAL, sender_id="r",
+                      metadata={"relay_inbound": {"kind": "instruction"}})
+        await seed_disk(tmp_path, "p", c, age=60)
+        await boot(coord)
+        item = coord.pending_store.get_item("p", c.comm_id)
+        item.created_at -= 2 * H  # days pass while the session stays paused
+        infos["p"].state = SessionState.ACTIVE
+        coord.pending_boot.on_state_change("p", SessionState.ACTIVE)
+        assert await until(lambda: item.status == "failed")
+        assert item.error == ERROR_EXPIRED and sent == []
+
+    async def test_stopped_deferred_session_is_not_auto_started(self, tmp_path, monkeypatch):
+        coord, infos, sent, starts = boot_coordinator(
+            tmp_path, {"e": SessionState.ERROR}, monkeypatch)
+        await seed_disk(tmp_path, "e", make_comm("e"))
+        await boot(coord)
+        infos["e"].state = SessionState.TERMINATED
+        coord.pending_boot.on_state_change("e", SessionState.TERMINATED)
+        await _real_sleep(0.05)
+        assert starts["calls"] == [] and "e" in coord.pending_boot._deferred
+
+    async def test_state_moved_during_deferral_is_not_lost(self, tmp_path, monkeypatch):
+        coord, infos, sent, _ = boot_coordinator(tmp_path, {"p": SessionState.PAUSED}, monkeypatch)
+        await seed_disk(tmp_path, "p", make_comm("p"))
+        real = coord.session_manager.get_session_info.side_effect
+        calls = {"n": 0}
+
+        async def moving(sid):
+            calls["n"] += 1
+            if calls["n"] >= 2:  # right after the drain recorded the deferral
+                infos[sid].state = SessionState.ACTIVE
+            return await real(sid) if asyncio.iscoroutinefunction(real) else real(sid)
+
+        coord.session_manager.get_session_info = AsyncMock(side_effect=moving)
+        await boot(coord)
+        assert await until(lambda: sent == ["p"])
+        stop_all(coord)
+
+    async def test_missing_created_at_is_not_expired(self, tmp_path):
+        s = PendingStore()
+        c = make_comm("s1")
+        await seed(s, "s1", tmp_path, c, age=NOW)  # created_at == 0 on disk
+        _, rep = await recover(tmp_path)
+        assert [i.comm.comm_id for i in rep.kept] == [c.comm_id]

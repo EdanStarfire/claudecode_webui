@@ -70,7 +70,7 @@ async def recover_session(
                 report.failed_not_replayed.append(done)
             continue
         ttl = (ttl_override(item) if ttl_override else None) or ttl_seconds(item)
-        if now - item.created_at > ttl:
+        if item.created_at > 0 and now - item.created_at > ttl:  # 0 = unknown age: never expire
             done = await store.mark_failed(session_id, session_dir, comm_id, ERROR_EXPIRED)
             if done:
                 report.expired.append(done)
@@ -82,3 +82,23 @@ async def recover_session(
             continue
         report.kept.append(item)
     return report
+
+
+async def expire_stale(
+    store: PendingStore,
+    session_id: str,
+    session_dir: Path,
+    *,
+    now: float,
+    ttl_override: Callable[[PendingItem], float | None] | None = None,
+) -> list[PendingItem]:
+    """Re-apply the TTL to a session's still-pending items (a session deferred at boot can be armed
+    long after the load-time check). Returns the items that expired."""
+    expired = []
+    for item in store.get_pending(session_id):
+        ttl = (ttl_override(item) if ttl_override else None) or ttl_seconds(item)
+        if item.created_at > 0 and now - item.created_at > ttl:
+            done = await store.mark_failed(session_id, session_dir, item.comm.comm_id, ERROR_EXPIRED)
+            if done:
+                expired.append(done)
+    return expired

@@ -620,6 +620,11 @@ class DeliveryGate:
         if task and not task.done():
             task.cancel()
 
+    def stop_all_when_idle(self) -> None:
+        """Cancel every session's drain loop (shutdown)."""
+        for session_id in list(self._when_idle_tasks):
+            self.stop_when_idle(session_id)
+
     def is_when_idle_running(self, session_id: str) -> bool:
         task = self._when_idle_tasks.get(session_id)
         return task is not None and not task.done()
