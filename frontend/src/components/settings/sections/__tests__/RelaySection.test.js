@@ -235,3 +235,49 @@ describe('RelaySection policy editor on template and profile tiers', () => {
     expect(settingsStore.getDraft('template:t1:relay').relay_channel_policies).toEqual({})
   })
 })
+
+describe('RelaySection inherited footer (issue #2377)', () => {
+  function mockRelay(extra) {
+    apiMock.get.mockImplementation((url) => {
+      if (url === '/api/templates') return Promise.resolve({ templates: [] })
+      if (url === '/api/profiles') return Promise.resolve({ profiles: [] })
+      if (url === '/api/relays') return Promise.resolve({ relays: [{ relay_id: 'r1', name: 'Slack', ...extra }] })
+      return Promise.resolve({})
+    })
+  }
+  const markerFor = (wrapper, label) => {
+    const row = wrapper.findAll('.field-row').find(r => r.find('.field-label-text').text() === label)
+    return row.find('.source-marker').text()
+  }
+
+  it('relay default: badge R, rendered placeholder and inherited Off hides the text', async () => {
+    mockRelay({ default_footer_template: 'RELAY {session_name}', default_footer_enabled: true })
+    const { wrapper } = await mountSession({ relay_id: 'r1', relay_handle: 'ea' }, { name: 'Agent One' })
+    expect(markerFor(wrapper, 'Footer')).toBe('R')
+    expect(markerFor(wrapper, 'Footer text')).toBe('R')
+    const ta = wrapper.findAll('textarea').find(t => t.attributes('placeholder')?.startsWith('RELAY'))
+    expect(ta.attributes('placeholder')).toBe('RELAY Agent One')
+  })
+
+  it('built-in: badge B and the built-in text as placeholder', async () => {
+    mockRelay({})
+    const { wrapper } = await mountSession({ relay_id: 'r1', relay_handle: 'ea' }, { name: 'Agent One' })
+    expect(markerFor(wrapper, 'Footer')).toBe('B')
+    expect(markerFor(wrapper, 'Footer text')).toBe('B')
+    expect(wrapper.findAll('textarea').some(t => t.attributes('placeholder') === 'Sent by Claude agent Agent One (ea) via Claude WebUI')).toBe(true)
+  })
+
+  it('a session value shows S and the no-force hint', async () => {
+    mockRelay({ default_footer_enabled: true })
+    const own = await mountSession({ relay_id: 'r1', relay_footer_template: 'mine' })
+    expect(markerFor(own.wrapper, 'Footer text')).toBe('S')
+    expect(own.wrapper.text()).toContain('write it out here')
+  })
+
+  it('a relay default of Off hides the text field', async () => {
+    mockRelay({ default_footer_enabled: false })
+    const off = await mountSession({ relay_id: 'r1' })
+    expect(markerFor(off.wrapper, 'Footer')).toBe('R')
+    expect(off.wrapper.findAll('textarea').some(t => t.attributes('placeholder')?.startsWith('Sent by'))).toBe(false)
+  })
+})

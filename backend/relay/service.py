@@ -14,6 +14,7 @@ from backend.relay_manager import RelayNotFoundError
 
 from .adapters import get_spec
 from .audit import RelayAuditLog
+from .footer import DEFAULT_FOOTER_TEMPLATE
 from .handles import HandleConflictError, RelayHandleIndex
 from .policy import EffectivePolicy, diff_policies, merge_policies, normalize_policies
 from .safety import validate_handle
@@ -137,9 +138,22 @@ class RelayService:
                 *[("profile", c) for c in profile_cfgs], ("template", template_cfg),
                 ("session", session_cfg),
             ]:
-                if cfg.get(field) is not None:
-                    result[field] = cfg[field]
-                    sources[field] = source
+                value = cfg.get(field)
+                if value is None or (field == "relay_footer_template" and not str(value).strip()):
+                    continue  # a blank footer text is unset (issue #2377)
+                result[field] = value
+                sources[field] = source
+        # Relay-wide default (issue #2377): below every tier, above the built-in.
+        record = self.relay_manager.relays.get(result["relay_id"] or "")
+        if record is not None:
+            default_enabled = getattr(record, "default_footer_enabled", None)
+            if result["relay_footer_enabled"] is None and default_enabled is not None:
+                result["relay_footer_enabled"] = default_enabled
+                sources["relay_footer_enabled"] = "relay"
+            template = getattr(record, "default_footer_template", None)
+            if result["relay_footer_template"] is None and template and template.strip():
+                result["relay_footer_template"] = template
+                sources["relay_footer_template"] = "relay"
         result["sources"] = sources
         return result
 
@@ -167,6 +181,11 @@ class RelayService:
             "footer_enabled": attachment["relay_footer_enabled"],
             "footer_template": attachment["relay_footer_template"],
             "sources": attachment["sources"],
+            "relay_default_footer": {
+                "enabled": getattr(record, "default_footer_enabled", None),
+                "template": getattr(record, "default_footer_template", None),
+            } if record else None,
+            "built_in_footer_template": DEFAULT_FOOTER_TEMPLATE,
             "policies": {
                 cid: {"policy": p.policy, "source": p.source} for cid, p in policies.items()
             },

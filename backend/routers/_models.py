@@ -730,6 +730,9 @@ class RelayUpdateRequest(BaseModel):
     oauth_client_id: str | None = None
     oauth_client_secret: str | None = None
     inbound_enabled: bool | None = None
+    # Relay-wide footer default (issue #2377); an explicit null clears, an absent key leaves it.
+    default_footer_enabled: bool | None = None
+    default_footer_template: str | None = None
 
 
 class RelaySecretsRequest(BaseModel):

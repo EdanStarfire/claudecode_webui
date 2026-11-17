@@ -111,6 +111,7 @@ import { FIELD_SCHEMAS } from '../../configuration/fields/fieldSchemas.js'
 import { useEditSectionFieldStates } from '@/composables/useEditSectionFieldStates'
 import { useEditSectionReset } from '@/composables/useEditSectionReset'
 import { FIELD_RESET } from '@/composables/fieldResetSentinel.js'
+import { BUILT_IN_FOOTER_TEMPLATE, renderFooterPreview } from '@/utils/relayFooter'
 import { useScheduleStore } from '@/stores/schedule'
 import { useScheduleSectionSave } from '@/composables/useScheduleSectionSave'
 
@@ -195,13 +196,50 @@ const mergedConfig = computed(() => {
 const isDirty = computed(() => settingsStore.dirtyAreas.has(areaKey.value))
 const saving  = ref(false)
 
-// The policy field is rendered by the policy editor below, which needs the own tier alone.
-const relayFields = FIELD_SCHEMAS.relay.filter(f => f.key !== 'relay_channel_policies')
+// The relay whose default footer is inherited: the effective (possibly unsaved) selection.
+const effectiveRelay = computed(() => relayStore.relays.find(r => r.relay_id === mergedConfig.value.relay_id) || null)
+const relayDefaultEnabled = computed(() => effectiveRelay.value?.default_footer_enabled ?? null)
+const relayDefaultTemplate = computed(() => {
+  const t = effectiveRelay.value?.default_footer_template
+  return t && t.trim() ? t : null
+})
+const inheritedFooterText = computed(() => renderFooterPreview(
+  relayDefaultTemplate.value || BUILT_IN_FOOTER_TEMPLATE,
+  isSessionMode.value ? { name: entity.value?.name, handle: handleValue.value } : {},
+))
 
-const { fieldStates } = useEditSectionFieldStates({
+// The policy field is rendered by the policy editor below, which needs the own tier alone. The footer
+// fields show the inherited value: placeholder text and the inherited on/off state.
+const relayFields = computed(() => FIELD_SCHEMAS.relay
+  .filter(f => f.key !== 'relay_channel_policies')
+  .map((f) => {
+    if (f.key === 'relay_footer_template') {
+      // Follows the EFFECTIVE on/off: a relay default of Off hides the text too.
+      return {
+        ...f,
+        placeholder: inheritedFooterText.value,
+        showWhen: cfg => (cfg.relay_footer_enabled ?? relayDefaultEnabled.value) !== false,
+      }
+    }
+    if (f.key === 'relay_footer_enabled') return { ...f, defaultValue: relayDefaultEnabled.value ?? true }
+    return f
+  }))
+
+const { fieldStates: tierStates } = useEditSectionFieldStates({
   isTemplateMode, isSessionMode, isScheduleMode, baseConfig, draft,
   boundProfile, boundTemplate,
   schemaFields: FIELD_SCHEMAS.relay,
+})
+// Nothing set at any tier: the relay default (R) when it has one, else the built-in (B).
+const fieldStates = computed(() => {
+  const states = { ...tierStates.value }
+  if (states.relay_footer_enabled?.kind === 'EMPTY') {
+    states.relay_footer_enabled = { kind: relayDefaultEnabled.value === null ? 'B' : 'R' }
+  }
+  if (states.relay_footer_template?.kind === 'EMPTY') {
+    states.relay_footer_template = { kind: relayDefaultTemplate.value ? 'R' : 'B' }
+  }
+  return states
 })
 const { handleReset } = useEditSectionReset({ areaKey })
 

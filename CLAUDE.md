@@ -305,6 +305,17 @@ secret is deleted, `has_*_token` turns false and `*_secret_missing` true (tools 
   inbound runs through `relay/inbound/` (see below).
 - **Attachment cascade**: `relay_id`, `relay_footer_enabled`, `relay_footer_template`, `relay_channel_policies`,
   `relay_handle` (new profile area `relay`; `relay_handle` is session-tier only).
+- **Relay-wide default footer (issue #2377)**: `RelayRecord.default_footer_enabled` (`bool | None`) and `default_footer_template`
+  (`str | None`, <= 500 chars, same validation as the per-tier template) set via `PUT /api/relays/{id}` (absent key = leave, explicit
+  `null` = clear; a rejected call changes nothing; old record files without the fields load as unset). Footer resolution is
+  `profile < template < session`, then the **effective relay's default**, then the built-in text/on
+  (`RelayService.effective_attachment`; `sources[field] = "relay"` for the relay tier; absent source = built-in). An empty or
+  whitespace-only template is **unset** at every level (it never blocks the relay default and never renders an empty footer). The
+  default comes only from the effective relay (switching, detaching or deleting the relay needs no handling). Read live per call:
+  no restart, no `restart_required` reason. `get_session_relay` also returns `relay_default_footer` and `built_in_footer_template`.
+  **A session cannot force the built-in text over a relay default except by writing that text itself** (stated in the UI hint and the
+  field description). UI: Library -> Relays -> Setup "Default footer" block (`RelayDefaultFooter.vue`, saved by the same Save), and the
+  `relay` area shows an `R` (relay default) / `B` (built-in) source badge with the inherited text as placeholder.
 - **Adapter registry** (`relay/adapters.py`, issues #2103/#2346): one `AdapterSpec` per adapter type
   (`server_name` `relay_slack`, tool -> policy-action map, write tools, `policy_model`); `parse_relay_tool()` /
   `is_relay_tool()` recognise `mcp__relay_{adapter}__*` of a registered adapter. The gate, permission bridge,
