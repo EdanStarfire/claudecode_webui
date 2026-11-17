@@ -55,7 +55,7 @@ class _FakeQuery:
 class _FakeRequest:
     __slots__ = (
         "pretty_host", "path", "method", "scheme", "port",
-        "headers", "query", "url", "content",
+        "headers", "query", "url", "content", "stream",
     )
     # no query_string — accessing it raises AttributeError
 

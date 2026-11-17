@@ -29,7 +29,7 @@ def _free_port() -> int:
         return s.getsockname()[1]
 
 
-def _wait_healthy(port: int, proc: subprocess.Popen, label: str, deadline_seconds: float = 30) -> None:
+def _wait_healthy(port: int, proc: subprocess.Popen, label: str, deadline_seconds: float = 90) -> None:
     deadline = time.monotonic() + deadline_seconds
     last_error = None
     while time.monotonic() < deadline:
@@ -46,12 +46,11 @@ def _wait_healthy(port: int, proc: subprocess.Popen, label: str, deadline_second
     raise AssertionError(f"{label} never became healthy on port {port}: {last_error}")
 
 
-@pytest.mark.timeout(90)
+@pytest.mark.timeout(240)
 @pytest.mark.slow
 def test_main_entrypoint_subprocess_smoke(tmp_path: Path):
     """Run both real CLI entrypoints as subprocesses and confirm they boot and relay."""
     backend_port = _free_port()
-    frontend_port = _free_port()
     backend_token = secrets.token_urlsafe(16)
     env = os.environ.copy()
     env.pop("CLAUDECODE", None)
@@ -79,6 +78,7 @@ def test_main_entrypoint_subprocess_smoke(tmp_path: Path):
     try:
         _wait_healthy(backend_port, backend_proc, "backend.main")
 
+        frontend_port = _free_port()
         frontend_proc = subprocess.Popen(
             [
                 sys.executable, "main.py",

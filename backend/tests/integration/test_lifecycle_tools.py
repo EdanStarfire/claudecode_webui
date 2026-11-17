@@ -36,6 +36,23 @@ def _capture_persisted_comms(comm_router):
         yield persisted_comms
 
 
+async def _non_docker_template(template_manager):
+    """Return the first template that does not require Docker.
+
+    Spawned children must reach ACTIVE; a docker-enabled template (e.g. the
+    default "Agent") cannot start on hosts without a docker CLI (issue #2358).
+    Skips when there are no templates; fails when templates exist but all are
+    docker-enabled, so coverage is never silently dropped.
+    """
+    templates = await template_manager.list_templates()
+    if not templates:
+        pytest.skip("No templates available for testing")
+    for template in templates:
+        if not template.config.get("docker_enabled"):
+            return template
+    pytest.fail("All templates are docker-enabled; no non-docker template to spawn from")
+
+
 # ============================================================================
 # spawn_minion Tests
 # ============================================================================
@@ -64,10 +81,8 @@ async def test_spawn_minion_minimal(legion_test_env):
     # Create parent minion (will wait for ACTIVE state)
     parent = await env["create_minion"]("parent", role="Parent")
 
-    templates = await template_manager.list_templates()
-    if not templates:
-        pytest.skip("No templates available for testing")
-    template_name = templates[0].name
+    template = await _non_docker_template(template_manager)
+    template_name = template.name
 
     # Spawn child via MCP tool handler
     with _capture_persisted_comms(legion_system.comm_router) as persisted_comms:
@@ -183,11 +198,9 @@ async def test_spawn_minion_with_template(legion_test_env):
     parent = await env["create_minion"]("parent", role="Parent")
 
     # Get available templates
-    templates = await template_manager.list_templates()
-    if not templates:
-        pytest.skip("No templates available for testing")
+    template = await _non_docker_template(template_manager)
 
-    template_name = templates[0].name
+    template_name = template.name
 
     # Spawn child with template
     result = await legion_system.mcp_tools._handle_spawn_minion({
@@ -327,9 +340,7 @@ async def test_spawn_minion_with_capabilities(legion_test_env):
     # Create parent minion
     parent = await env["create_minion"]("parent", role="Parent")
 
-    templates = await template_manager.list_templates()
-    if not templates:
-        pytest.skip("No templates available for testing")
+    template = await _non_docker_template(template_manager)
 
     # Spawn child with capabilities
     result = await legion_system.mcp_tools._handle_spawn_minion({
@@ -337,7 +348,7 @@ async def test_spawn_minion_with_capabilities(legion_test_env):
         "name": "child",
         "role": "Data Scientist",
         "system_prompt": "Test child with capabilities.",
-        "template_name": templates[0].name,
+        "template_name": template.name,
         "capabilities": ["python", "data analysis", "machine learning"]
     })
 
@@ -402,10 +413,8 @@ async def test_spawn_minion_error_duplicate_name(legion_test_env):
     # Create parent minion
     parent = await env["create_minion"]("parent", role="Parent")
 
-    templates = await template_manager.list_templates()
-    if not templates:
-        pytest.skip("No templates available for testing")
-    template_name = templates[0].name
+    template = await _non_docker_template(template_manager)
+    template_name = template.name
 
     # Spawn first child
     result1 = await legion_system.mcp_tools._handle_spawn_minion({
@@ -482,16 +491,14 @@ async def test_dispose_minion_direct_child(legion_test_env):
     # Create parent and child
     parent = await env["create_minion"]("parent", role="Parent")
 
-    templates = await template_manager.list_templates()
-    if not templates:
-        pytest.skip("No templates available for testing")
+    template = await _non_docker_template(template_manager)
 
     spawn_result = await legion_system.mcp_tools._handle_spawn_minion({
         "_parent_overseer_id": parent.session_id,
         "name": "child",
         "role": "Worker",
         "system_prompt": "Test child for disposal.",
-        "template_name": templates[0].name,
+        "template_name": template.name,
     })
     assert spawn_result.get("is_error") is not True
 
@@ -563,10 +570,8 @@ async def test_dispose_minion_with_descendants(legion_test_env):
     # Create parent, child, and grandchild
     parent = await env["create_minion"]("parent", role="Parent")
 
-    templates = await template_manager.list_templates()
-    if not templates:
-        pytest.skip("No templates available for testing")
-    template_name = templates[0].name
+    template = await _non_docker_template(template_manager)
+    template_name = template.name
 
     # Spawn child
     child_result = await legion_system.mcp_tools._handle_spawn_minion({
@@ -711,16 +716,14 @@ async def test_dispose_minion_error_not_your_child(legion_test_env):
     # Create parent1 and child
     parent1 = await env["create_minion"]("parent1", role="Parent 1")
 
-    templates = await template_manager.list_templates()
-    if not templates:
-        pytest.skip("No templates available for testing")
+    template = await _non_docker_template(template_manager)
 
     spawn_result = await legion_system.mcp_tools._handle_spawn_minion({
         "_parent_overseer_id": parent1.session_id,
         "name": "child",
         "role": "Worker",
         "system_prompt": "Test child for permission test.",
-        "template_name": templates[0].name,
+        "template_name": template.name,
     })
     assert spawn_result.get("is_error") is not True
 

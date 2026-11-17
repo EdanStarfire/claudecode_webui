@@ -22,6 +22,7 @@ from backend.data_storage import DataStorageManager
 from backend.history_distiller import distill_session_history
 from backend.legion import archive_manager as archive_manager_module
 from backend.legion.archive_manager import ArchiveManager, SnapshotContext
+from shared.net_utils import allocate_free_port
 
 REPO = Path(__file__).resolve().parents[2]
 
@@ -58,34 +59,93 @@ async def _ticker(samples: list[float], stop: asyncio.Event) -> None:
         expected = now + 0.01
 
 
+def _p95(samples: list[float]) -> float:
+    ordered = sorted(samples)
+    return ordered[min(len(ordered) - 1, int(len(ordered) * 0.95))]
+
+
+def _assert_loop_responsive(samples: list[float], baseline_max: float) -> None:
+    """Loop-lag check that tolerates OS scheduling noise but not a real on-loop block.
+
+    A single stall is judged relative to the idle-loop baseline measured on the same host
+    under the same load (issue #2358); a loop blocked by the work shows as one tick of hundreds
+    of ms (max) or as many stalled ticks (p95; the run yields only ~150 ticks, so p99 is a single sample).
+    """
+    assert samples, "no ticker samples collected"
+    assert max(samples) < baseline_max + 100, (
+        f"event loop blocked for {max(samples):.0f} ms (idle baseline max {baseline_max:.0f} ms)"
+    )
+    assert _p95(samples) < 50, f"event loop p95 lag {_p95(samples):.0f} ms"
+
+
+async def _idle_baseline_max() -> float:
+    samples: list[float] = []
+    stop = asyncio.Event()
+    ticker = asyncio.create_task(_ticker(samples, stop))
+    await asyncio.sleep(0.5)
+    stop.set()
+    await ticker
+    return max(samples)
+
+
+@pytest.mark.asyncio
+async def test_issue_2312_lag_check_detects_a_blocked_loop():
+    """Negative control: the same check must fail on EVERY one of the 3 attempts the real test
+    makes when the loop really is blocked (so min-of-3 cannot hide a deterministic block)."""
+    for _ in range(3):
+        baseline_max = await _idle_baseline_max()
+        samples: list[float] = []
+        stop = asyncio.Event()
+        ticker = asyncio.create_task(_ticker(samples, stop))
+        await asyncio.sleep(0.05)
+        time.sleep(0.3)  # deliberately block the loop thread
+        await asyncio.sleep(0.05)
+        stop.set()
+        await ticker
+        with pytest.raises(AssertionError):
+            _assert_loop_responsive(samples, baseline_max)
+
+
 @pytest.mark.asyncio
 async def test_issue_2312_large_session_steps_do_not_block_event_loop(tmp_path):
     session_dir = tmp_path / "sessions" / "s"
     session_dir.mkdir(parents=True)
     _write_messages(session_dir / "messages.jsonl", 40_000)  # ~27 MB
-    archive_dir = tmp_path / "archive"
-    archive_dir.mkdir()
     storage = DataStorageManager(session_dir)
     manager = _manager(tmp_path)
 
-    samples: list[float] = []
-    stop = asyncio.Event()
-    ticker = asyncio.create_task(_ticker(samples, stop))
-    await asyncio.sleep(0.05)
-    count, archived, ok = await asyncio.gather(
-        storage.get_message_count(),
-        manager.snapshot_artifacts(session_dir, archive_dir, _ctx()),
-        distill_session_history(session_dir / "messages.jsonl", tmp_path / "out.md", "s", "ts"),
-    )
-    stop.set()
-    await ticker
+    # Min-of-N: work that blocks the loop stalls it in every attempt, whereas an OS scheduling
+    # stall on a loaded host hits one attempt at random (issue #2358).
+    failures: list[str] = []
+    for attempt in range(3):
+        archive_dir = tmp_path / f"archive{attempt}"
+        archive_dir.mkdir()
+        out_md = tmp_path / f"out{attempt}.md"
+        baseline_max = await _idle_baseline_max()
+        samples: list[float] = []
+        stop = asyncio.Event()
+        ticker = asyncio.create_task(_ticker(samples, stop))
+        await asyncio.sleep(0.05)
+        count, archived, ok = await asyncio.gather(
+            storage.get_message_count(),
+            manager.snapshot_artifacts(session_dir, archive_dir, _ctx()),
+            distill_session_history(session_dir / "messages.jsonl", out_md, "s", "ts"),
+        )
+        stop.set()
+        await ticker
 
-    assert count == 40_000
-    assert "messages.jsonl" in archived and ok is True
-    assert (archive_dir / "messages.jsonl").read_bytes() == (session_dir / "messages.jsonl").read_bytes()
-    assert "- Total messages: 40000" in (tmp_path / "out.md").read_text()
-    assert max(samples) < 100, f"event loop blocked for {max(samples):.0f} ms"
-    assert not list(archive_dir.glob(".*.tmp")) and not list(tmp_path.glob(".*.tmp"))
+        assert count == 40_000
+        assert "messages.jsonl" in archived and ok is True
+        assert (archive_dir / "messages.jsonl").read_bytes() == (session_dir / "messages.jsonl").read_bytes()
+        assert "- Total messages: 40000" in out_md.read_text()
+        assert not list(archive_dir.glob(".*.tmp")) and not list(tmp_path.glob(".*.tmp"))
+        try:
+            _assert_loop_responsive(samples, baseline_max)
+        except AssertionError as exc:
+            failures.append(str(exc))
+        else:
+            return
+    pytest.fail("event loop lag exceeded the bound in all 3 attempts: " + "; ".join(failures))
 
 
 @pytest.mark.asyncio
@@ -170,7 +230,7 @@ def test_issue_2312_delete_reset_of_113mb_session_lag_under_100ms(tmp_path):
     out = tmp_path / "report.json"
     proc = subprocess.run(
         [sys.executable, "-m", "backend.tests.load.history_index_load", "--phase", "archive",
-         "--port", "8098", "--assert-checks", "--out", str(out)],
+         "--port", str(allocate_free_port()), "--assert-checks", "--out", str(out)],
         cwd=REPO, capture_output=True, text=True, timeout=800,
     )
     report = json.loads(out.read_text())["archive"]

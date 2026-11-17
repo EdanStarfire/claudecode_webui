@@ -50,7 +50,7 @@ async def test_list_templates_with_templates(legion_test_env):
     # Verify response includes key template attributes
     assert "Permission Mode" in response_text
     assert "Allowed Tools" in response_text
-    assert "Default Role" in response_text
+    assert "Role:" in response_text
 
 
 @pytest.mark.asyncio

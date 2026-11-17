@@ -29,6 +29,7 @@ from backend.response_offload import (
     estimate_json_bytes,
     offload_large_json,
 )
+from shared.net_utils import allocate_free_port
 
 REPO = Path(__file__).resolve().parents[2]
 
@@ -252,7 +253,7 @@ def test_serialize_offload_quick_mode_lag(tmp_path):
     proc = subprocess.run(
         [sys.executable, "-m", "backend.tests.load.serialize_offload_load", "--records", "8000",
          "--mib", "12", "--repeats", "6", "--n", "3", "--clients", "4", "--per-client", "2",
-         "--port", "8097", "--out", str(out)],
+         "--port", str(allocate_free_port()), "--out", str(out)],
         cwd=REPO, capture_output=True, text=True, timeout=540,
     )
     assert proc.returncode == 0, proc.stderr[-2000:]

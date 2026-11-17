@@ -7,11 +7,42 @@ Run explicitly with: uv run pytest src/tests/test_claude_sdk_integration.py -v -
 import asyncio
 import os
 import uuid
+from pathlib import Path
 
 import pytest
 
 from backend.claude_sdk import ClaudeSDK
 from backend.session_config import SessionConfig
+
+
+def _have_claude_credentials() -> bool:
+    """Static precondition: does this host have any way to authenticate the CLI?
+
+    Without credentials the CLI replies "Not logged in" instead of calling a
+    model, so tests needing a model response cannot run (issue #2358). This
+    never inspects test outcomes: with credentials present the tests run
+    unchanged and real failures stay red.
+    """
+    env_keys = (
+        "ANTHROPIC_API_KEY",
+        "ANTHROPIC_AUTH_TOKEN",
+        "CLAUDE_CODE_OAUTH_TOKEN",
+        "CLAUDE_CODE_USE_BEDROCK",
+        "CLAUDE_CODE_USE_VERTEX",
+        "CLAUDE_CODE_USE_FOUNDRY",
+    )
+    if any(os.environ.get(k) for k in env_keys):
+        return True
+    return (Path.home() / ".claude" / ".credentials.json").exists()
+
+
+requires_claude_credentials = pytest.mark.skipif(
+    not _have_claude_credentials(),
+    reason=(
+        "requires Claude credentials (ANTHROPIC_API_KEY or `claude login`); "
+        "CLI otherwise replies 'Not logged in'"
+    ),
+)
 
 
 @pytest.fixture
@@ -103,6 +134,8 @@ class TestClaudeSDKIntegration:
         finally:
             await sdk.terminate()
 
+    @requires_claude_credentials
+    @pytest.mark.timeout(90)
     async def test_permission_callback_triggered(self, tmp_working_dir):
         """Permission callback fires when using default permissions with no allowed tools."""
         callback_calls = []
@@ -137,6 +170,8 @@ class TestClaudeSDKIntegration:
             except OSError:
                 pass
 
+    @requires_claude_credentials
+    @pytest.mark.timeout(90)
     async def test_permission_callback_deny(self, tmp_working_dir):
         """Permission callback deny prevents tool execution."""
         callback_calls = []
@@ -300,6 +335,8 @@ class TestClaudeSDKIntegration:
         finally:
             await sdk.terminate()
 
+    @requires_claude_credentials
+    @pytest.mark.timeout(90)
     async def test_error_handling_invalid_model(self, tmp_working_dir):
         """Invalid model name causes SDK to fail gracefully."""
         errors = []
