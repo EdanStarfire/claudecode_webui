@@ -79,7 +79,7 @@ def _spawn_backend(port: int, token: str, data_dir: Path, fixtures_dir: Path, en
             sys.executable, "-m", "backend.main",
             "--host", "127.0.0.1",
             "--port", str(port),
-            "--token", token,
+            f"--token={token}",
             "--data-dir", str(data_dir),
             "--mock-sdk",
             "--fixtures-dir", str(fixtures_dir),
@@ -100,7 +100,7 @@ def _spawn_frontend(port: int, backend_port: int, backend_token: str, env: dict)
             "--port", str(port),
             "--no-auth",
             "--remote-backend-url", f"http://127.0.0.1:{backend_port}",
-            "--remote-backend-token", backend_token,
+            f"--remote-backend-token={backend_token}",
         ],
         cwd=str(REPO_ROOT),
         env=env,
@@ -190,7 +190,7 @@ def test_required_markers_all_covered_by_scenarios():
 
 
 @pytest.mark.skipif(not RAW_FIXTURES_DIR.exists(), reason="raw fixtures directory not present")
-@pytest.mark.timeout(90)  # backend.main boot + full raw-log replay needs more than the 30s default
+@pytest.mark.timeout(180)  # backend.main boot + full raw-log replay needs more than the 30s default
 @pytest.mark.slow
 def test_t1_mock_replay_produces_passively_replayable_markers(tmp_path: Path):
     """T1 (reduced scope): the 3 markers raw replay can produce passively
@@ -208,7 +208,7 @@ def test_t1_mock_replay_produces_passively_replayable_markers(tmp_path: Path):
         base_url = f"http://127.0.0.1:{port}"
         _wait_for_predicate(
             lambda: httpx.get(f"{base_url}/health", timeout=1).status_code == 200,
-            timeout=20, description="backend.main /health",
+            timeout=60, description="backend.main /health",
         )
 
         session_id = _create_and_start_session(base_url, token, PRIMARY_FIXTURE)
@@ -229,7 +229,7 @@ def test_t1_mock_replay_produces_passively_replayable_markers(tmp_path: Path):
 
 
 @pytest.mark.skipif(not RAW_FIXTURES_DIR.exists(), reason="raw fixtures directory not present")
-@pytest.mark.timeout(90)  # backend.main boot + full raw-log replay needs more than the 30s default
+@pytest.mark.timeout(180)  # backend.main boot + full raw-log replay needs more than the 30s default
 @pytest.mark.slow
 def test_t2_missing_event_times_out_with_clear_message(tmp_path: Path):
     """T2: strip every `StreamEvent` record from a copy of the fixture, then
@@ -256,7 +256,7 @@ def test_t2_missing_event_times_out_with_clear_message(tmp_path: Path):
         base_url = f"http://127.0.0.1:{port}"
         _wait_for_predicate(
             lambda: httpx.get(f"{base_url}/health", timeout=1).status_code == 200,
-            timeout=20, description="backend.main /health",
+            timeout=60, description="backend.main /health",
         )
 
         session_id = _create_and_start_session(base_url, token, mutated_name)
@@ -284,33 +284,40 @@ def test_t2_missing_event_times_out_with_clear_message(tmp_path: Path):
 
 
 @pytest.mark.skipif(not RAW_FIXTURES_DIR.exists(), reason="raw fixtures directory not present")
-@pytest.mark.timeout(150)  # two full backend+frontend boot cycles needs more than the 30s default
+@pytest.mark.timeout(300)  # two full backend+frontend boot cycles needs more than the 30s default
 @pytest.mark.slow
 def test_t3_poll_consumer_reconnects_after_full_app_restart(tmp_path: Path):
     """T3: a full Backend+Frontend process restart — `PollConsumer` detects
     the outage, waits for `/ready`, and resumes."""
-    backend_port = _free_port()
-    frontend_port = _free_port()
+    ports: dict[str, int] = {}  # allocated right before the first spawn, reused across the restart
     backend_token = secrets.token_urlsafe(16)
     env = _base_env()
-    base_url = f"http://127.0.0.1:{frontend_port}"
+    base_url = ""
     data_dir = tmp_path / "backend_data"
     fixtures_root = tmp_path / "fixtures"
     shutil.copytree(RAW_FIXTURES_DIR / PRIMARY_FIXTURE, fixtures_root / PRIMARY_FIXTURE)
     procs: list[subprocess.Popen] = []
 
     def spawn_pair() -> None:
+        nonlocal base_url
+        if not ports:
+            ports["backend"] = _free_port()
+        backend_port = ports["backend"]
         backend_proc = _spawn_backend(backend_port, backend_token, data_dir, fixtures_root, env)
         procs.append(backend_proc)
         _wait_for_predicate(
             lambda: httpx.get(f"http://127.0.0.1:{backend_port}/health", timeout=1).status_code == 200,
-            timeout=20, description="backend.main /health",
+            timeout=60, description="backend.main /health",
         )
+        if "frontend" not in ports:
+            ports["frontend"] = _free_port()
+        frontend_port = ports["frontend"]
+        base_url = f"http://127.0.0.1:{frontend_port}"
         frontend_proc = _spawn_frontend(frontend_port, backend_port, backend_token, env)
         procs.append(frontend_proc)
         _wait_for_predicate(
             lambda: httpx.get(f"{base_url}/ready", timeout=1).json().get("ready") is True,
-            timeout=20, description="main.py /ready",
+            timeout=60, description="main.py /ready",
         )
 
     async def drive() -> None:

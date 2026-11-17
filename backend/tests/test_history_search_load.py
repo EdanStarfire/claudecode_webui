@@ -11,6 +11,8 @@ from pathlib import Path
 
 import pytest
 
+from shared.net_utils import allocate_free_port
+
 REPO = Path(__file__).resolve().parents[2]
 
 
@@ -20,7 +22,7 @@ def test_search_load_quick_mode_invariants(tmp_path):
     out = tmp_path / "report.json"
     proc = subprocess.run(
         [sys.executable, "-m", "backend.tests.load.history_index_load", "--phase", "search",
-         "--scale", "0.05", "--duration", "8", "--browsers", "3", "--port", "8097",
+         "--scale", "0.05", "--duration", "8", "--browsers", "3", "--port", str(allocate_free_port()),
          "--out", str(out)],
         cwd=REPO, capture_output=True, text=True, timeout=540,
     )
