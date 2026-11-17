@@ -93,6 +93,11 @@ def build_router(webui) -> APIRouter:
     @router.put("/api/relays/{relay_id}")
     @handle_exceptions("update relay", value_error_status=400)
     async def update_relay(relay_id: str, request: RelayUpdateRequest):
+        footer = {
+            key: getattr(request, key)
+            for key in ("default_footer_enabled", "default_footer_template")
+            if key in request.model_fields_set
+        }
         try:
             record = await manager().update_relay(
                 relay_id,
@@ -100,6 +105,7 @@ def build_router(webui) -> APIRouter:
                 oauth_client_id=request.oauth_client_id,
                 oauth_client_secret=request.oauth_client_secret,
                 inbound_enabled=request.inbound_enabled,
+                **footer,
             )
         except RelayNotFoundError as e:
             raise HTTPException(status_code=404, detail="Relay not found") from e

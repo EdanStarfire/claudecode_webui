@@ -294,7 +294,8 @@ export const FIELD_SCHEMAS = {
       label: 'Footer',
       widget: 'toggle',
       defaultValue: true,
-      description: 'Append a small footer naming the session to every message the agent posts. Applies immediately.',
+      description: 'Append a small footer naming the session to every message the agent posts. ' +
+                   'Unset inherits the relay default. Applies immediately.',
     },
     {
       key: 'relay_footer_template',
@@ -304,7 +305,9 @@ export const FIELD_SCHEMAS = {
       placeholder: 'Sent by {session_name} ({session_handle})',
       showWhen: (config) => config.relay_footer_enabled !== false,
       description: 'Up to 500 characters. Variables: {session_name}, {session_handle}, ' +
-                   '{session_link}. Must not contain !word syntax. Applies immediately.',
+                   '{session_link}. Must not contain !word syntax. Leave empty to inherit the relay ' +
+                   'default; to use the built-in text instead of a relay default, write it out here. ' +
+                   'Applies immediately.',
     },
     {
       key: 'relay_channel_policies',

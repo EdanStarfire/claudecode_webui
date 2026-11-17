@@ -41,10 +41,12 @@
       <small class="text-muted inbound-hint" title="Type !handle followed by the instruction in your own Slack self-DM">(<code>!handle</code> in your self-DM)</small>
     </label>
 
+    <div v-if="$slots.extra" class="picker-extra"><slot name="extra" /></div>
+
     <div v-if="error" class="picker-error" role="alert" data-testid="relay-secret-error">{{ error }}</div>
     <div class="picker-actions">
       <button type="submit" class="btn btn-sm btn-primary" :disabled="!canSubmit || saving" data-testid="relay-secrets-save">
-        {{ saving ? 'Saving…' : 'Save credentials' }}
+        {{ saving ? 'Saving…' : 'Save' }}
       </button>
       <small class="text-muted">Either secret can be saved on its own.</small>
     </div>
@@ -60,6 +62,9 @@ const props = defineProps({
   relay: { type: Object, required: true },
   saving: { type: Boolean, default: false },
   error: { type: String, default: '' },
+  // Changes held by the `extra` slot (the relay default footer): saved by the same Save.
+  extraDirty: { type: Boolean, default: false },
+  extraPatch: { type: Object, default: null },
 })
 const emit = defineEmits(['submit', 'dirty'])
 
@@ -95,7 +100,7 @@ const inboundChanged = computed(() => inbound.value !== (props.relay.inbound_ena
 
 const canSubmit = computed(() =>
   (selection.user && selection.user !== current.value.user) ||
-  (selection.app && selection.app !== current.value.app) || inboundChanged.value)
+  (selection.app && selection.app !== current.value.app) || inboundChanged.value || props.extraDirty)
 
 watch(canSubmit, (dirty) => emit('dirty', Boolean(dirty)), { immediate: true })
 
@@ -103,6 +108,7 @@ function payload() {
   if (!canSubmit.value) return null
   const payload = {}
   if (inboundChanged.value) payload.inboundEnabled = inbound.value
+  if (props.extraDirty && props.extraPatch) payload.footer = props.extraPatch
   if (selection.user && selection.user !== current.value.user) payload.userSecret = selection.user
   if (selection.app && selection.app !== current.value.app) payload.appSecret = selection.app
   return payload
@@ -131,6 +137,7 @@ onMounted(() => secretsStore.fetchSecrets())
   background: var(--tool-error-bg); border: 1px solid var(--tool-error-border);
 }
 .inbound-toggle { display: flex; align-items: center; gap: 8px; font-size: 13px; margin: 0; white-space: nowrap; flex-wrap: wrap; }
+.picker-extra { padding-top: 12px; border-top: 1px solid var(--bs-border-color); }
 .picker-actions { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
 @media (max-width: 600px) { .inbound-hint { display: none; } }
 </style>

@@ -26,6 +26,7 @@ from .credential_vault import SecretsVault
 from .models.relay import RelayRecord
 from .models.secret_record import SecretRecord, SecretType
 from .relay.adapter import RelayAdapter, RelayError
+from .relay.footer import validate_footer_template
 from .relay.slack_adapter import SlackAdapter
 from .relay.slack_scopes import required_scopes
 from .relay.validation import RELAY_SECRET_PREFIX
@@ -33,6 +34,8 @@ from .secrets_keyring import get_secret_value
 from .slug_utils import slugify
 
 logger = logging.getLogger(__name__)
+
+UNSET: Any = object()  # "argument not provided" (distinct from an explicit None)
 
 USER_TOKEN_PREFIX = "xoxp-"
 APP_TOKEN_PREFIX = "xapp-"
@@ -184,9 +187,18 @@ class RelayManager:
         oauth_client_id: str | None = None,
         oauth_client_secret: str | None = None,
         inbound_enabled: bool | None = None,
+        default_footer_enabled: Any = UNSET,
+        default_footer_template: Any = UNSET,
     ) -> RelayRecord:
+        """Update a relay. ``default_footer_*`` use ``UNSET`` for "leave", ``None`` clears."""
         record = self._require(relay_id)
         old_path = self._path(record)
+        if default_footer_enabled is not UNSET and default_footer_enabled is not None and not isinstance(
+            default_footer_enabled, bool
+        ):
+            raise ValueError("default_footer_enabled must be a boolean")
+        if default_footer_template is not UNSET:
+            validate_footer_template(default_footer_template)
         inbound_changed = inbound_enabled is not None and inbound_enabled != record.inbound_enabled
         if name is not None:
             if not name.strip():
@@ -197,6 +209,13 @@ class RelayManager:
         if oauth_client_secret:
             record.oauth_client_secret_secret = await self._store_secret(
                 relay_id, "oauth-client-secret", oauth_client_secret
+            )
+        if default_footer_enabled is not UNSET:
+            record.default_footer_enabled = default_footer_enabled
+        if default_footer_template is not UNSET:
+            # blank text is unset (issue #2377): never blocks the built-in, never renders empty
+            record.default_footer_template = (
+                default_footer_template if default_footer_template and default_footer_template.strip() else None
             )
         if inbound_enabled is not None:  # after the validation above: a rejected call changes nothing
             record.inbound_enabled = inbound_enabled

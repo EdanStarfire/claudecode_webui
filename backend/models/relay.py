@@ -30,6 +30,8 @@ class RelayRecord:
     owner_user_id: str | None = None
     self_dm_channel_id: str | None = None  # owner's self-DM (D…); not secret
     inbound_enabled: bool = True  # receive owner self-DM instructions (Socket Mode)
+    default_footer_enabled: bool | None = None  # relay-wide footer default; None = built-in (on)
+    default_footer_template: str | None = None  # relay-wide footer text; None = built-in text
     created_at: datetime | None = None
     updated_at: datetime | None = None
 
@@ -53,6 +55,8 @@ class RelayRecord:
             "owner_user_id": self.owner_user_id,
             "self_dm_channel_id": self.self_dm_channel_id,
             "inbound_enabled": self.inbound_enabled,
+            "default_footer_enabled": self.default_footer_enabled,
+            "default_footer_template": self.default_footer_template,
             "created_at": self.created_at.isoformat(),
             "updated_at": self.updated_at.isoformat(),
         }
@@ -83,6 +87,11 @@ class RelayRecord:
             owner_user_id=data.get("owner_user_id"),
             self_dm_channel_id=data.get("self_dm_channel_id"),
             inbound_enabled=data.get("inbound_enabled", True) is not False,
+            default_footer_enabled=(
+                data["default_footer_enabled"]
+                if isinstance(data.get("default_footer_enabled"), bool) else None
+            ),
+            default_footer_template=data.get("default_footer_template") or None,
             created_at=datetime.fromisoformat(data["created_at"]) if data.get("created_at") else None,
             updated_at=datetime.fromisoformat(data["updated_at"]) if data.get("updated_at") else None,
         )

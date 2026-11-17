@@ -105,7 +105,14 @@
           <!-- Credentials: references to existing vault secrets -->
           <div class="relay-card">
             <h3>Credentials</h3>
-            <RelaySecretPickers ref="pickers" :relay="relay" :saving="savingSecrets" :error="secretError" @submit="saveSecrets" @dirty="onDirty" />
+            <RelaySecretPickers
+              ref="pickers" :relay="relay" :saving="savingSecrets" :error="secretError"
+              :extra-dirty="footerChange.dirty && footerChange.valid" :extra-patch="footerChange.patch"
+              @submit="saveSecrets" @dirty="onDirty">
+              <template #extra>
+                <RelayDefaultFooter :relay="relay" @change="footerChange = $event" />
+              </template>
+            </RelaySecretPickers>
           </div>
 
           <!-- Setup guide -->
@@ -162,6 +169,7 @@ import { useRelayStore } from '@/stores/relay'
 import { useSettingsStore } from '@/stores/settings'
 import SettingsToolbar from '../SettingsToolbar.vue'
 import RelaySecretPickers from '../../relay/RelaySecretPickers.vue'
+import RelayDefaultFooter from '../../relay/RelayDefaultFooter.vue'
 import RelaySetupGuide from '../../relay/RelaySetupGuide.vue'
 import RelayAuditView from '../../relay/RelayAuditView.vue'
 import RelayInboundTab from '../../relay/RelayInboundTab.vue'
@@ -183,6 +191,7 @@ const confirmDelete = ref(false)
 const deleting = ref(false)
 const savingSecrets = ref(false)
 const secretError = ref('')
+const footerChange = ref({ dirty: false, valid: true, patch: {} })
 
 // Tabs (`?tab=setup|inbound|audit`). A legacy deep link with only `session` / `channel` / `events`
 // (the session info row's Audit link) opens Audit.
@@ -296,12 +305,14 @@ async function saveSecrets(selection) {
   savingSecrets.value = true
   secretError.value = ''
   try {
-    const { inboundEnabled, ...secretRefs } = selection
+    const { inboundEnabled, footer, ...secretRefs } = selection
     if (secretRefs.userSecret || secretRefs.appSecret) {
       await store.saveSecrets(relay.value.relay_id, secretRefs)
     }
-    if (inboundEnabled !== undefined) {
-      await store.updateRelay(relay.value.relay_id, { inbound_enabled: inboundEnabled })
+    if (inboundEnabled !== undefined || footer) {
+      const patch = { ...(footer || {}) }
+      if (inboundEnabled !== undefined) patch.inbound_enabled = inboundEnabled
+      await store.updateRelay(relay.value.relay_id, patch)
     }
     settingsStore.markClean(areaKey.value)
     store.refreshInboundStatus(relay.value.relay_id).catch(() => {})
