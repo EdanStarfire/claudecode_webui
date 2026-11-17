@@ -18,10 +18,15 @@ fi
 FRONTEND_DIR="frontend"
 if [ -f "${FRONTEND_DIR}/package.json" ]; then
     STAMP="${FRONTEND_DIR}/node_modules/.install-stamp"
-    CURRENT_HASH=$(sha256sum "${FRONTEND_DIR}/package.json" "${FRONTEND_DIR}/.npmrc" 2>/dev/null | sha256sum | cut -d' ' -f1)
+    CURRENT_HASH=$(sha256sum "${FRONTEND_DIR}/package.json" "${FRONTEND_DIR}/package-lock.json" "${FRONTEND_DIR}/.npmrc" 2>/dev/null | sha256sum | cut -d' ' -f1)
     if [ ! -f "${STAMP}" ] || [ "$(cat "${STAMP}" 2>/dev/null)" != "${CURRENT_HASH}" ]; then
         echo "[entrypoint] Installing frontend dependencies..."
         (cd "${FRONTEND_DIR}" && npm install) && echo "${CURRENT_HASH}" > "${STAMP}"
+    fi
+    # Warn (never fail) when the Playwright browser cache lags the locked
+    # Playwright version (issue #2359); the fix is an image rebuild.
+    if [ -d "${FRONTEND_DIR}/node_modules/playwright-core" ] && [ -f "${FRONTEND_DIR}/scripts/check-playwright-browser.mjs" ]; then
+        (cd "${FRONTEND_DIR}" && node scripts/check-playwright-browser.mjs --warn) || true
     fi
 fi
 
