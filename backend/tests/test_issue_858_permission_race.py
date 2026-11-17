@@ -217,31 +217,33 @@ async def test_issue_858_multiple_concurrent_permissions():
 
     async def run_callback(name, params):
         svc = PermissionService(coordinator=coord, session_queues={})
-        with (
-            patch("backend.permission_service.PermissionRequestMessage") as mock_pr,
-            patch("backend.permission_service.PermissionInfo"),
-        ):
-            mock_pr.return_value = MagicMock()
-            coord.session_manager = MagicMock()
-            coord.session_manager.get_session_info = AsyncMock(
-                return_value=MagicMock(current_permission_mode="default")
-            )
-            coord.update_tool_call_permission_request = MagicMock(return_value=None)
-
-            cb = svc.create_permission_callback(session_id)
-            task = asyncio.create_task(cb(name, params, None))
-            await asyncio.sleep(0.5)
-            task.cancel()
-            try:
-                await task
-            except (asyncio.CancelledError, Exception):
-                pass
+        cb = svc.create_permission_callback(session_id)
+        task = asyncio.create_task(cb(name, params, None))
+        await asyncio.sleep(0.5)
+        task.cancel()
+        try:
+            await task
+        except (asyncio.CancelledError, Exception):
+            pass
 
         results[name] = coord._tool_calls.get(name) is not None
 
-    await asyncio.gather(
-        *[run_callback(n, p) for n, p in zip(tool_names, tool_params, strict=True)]
+    coord.session_manager = MagicMock()
+    coord.session_manager.get_session_info = AsyncMock(
+        return_value=MagicMock(current_permission_mode="default")
     )
+    coord.update_tool_call_permission_request = MagicMock(return_value=None)
+
+    # Patch once around the whole gather: patch() is a save/restore stack and must
+    # be entered/exited LIFO, so one patch per concurrent callback leaks a mock (#2357).
+    with (
+        patch("backend.permission_service.PermissionRequestMessage") as mock_pr,
+        patch("backend.permission_service.PermissionInfo"),
+    ):
+        mock_pr.return_value = MagicMock()
+        await asyncio.gather(
+            *[run_callback(n, p) for n, p in zip(tool_names, tool_params, strict=True)]
+        )
 
     for name in tool_names:
         assert results[name], f"Tool call {name} should have been found"

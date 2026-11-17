@@ -256,7 +256,7 @@ class TestPermissionServiceExtraction:
         return PermissionService(coordinator=coord, session_queues=queues), coord
 
     @pytest.mark.asyncio
-    async def test_all_enriched_fields_extracted_and_denied(self):
+    async def test_all_enriched_fields_extracted_and_denied(self, monkeypatch):
         """When no ToolCall is found, auto-deny fires — extraction still runs."""
         session_id = "sess-1302"
         service, _ = self._make_service(session_id)
@@ -280,12 +280,9 @@ class TestPermissionServiceExtraction:
             captured_requests.append(instance)
             return instance
 
-        ps_module.PermissionRequestMessage = capturing_prm
-        try:
-            callback = service.create_permission_callback(session_id)
-            result = await callback("Read", {"file_path": "/etc/shadow"}, ctx)
-        finally:
-            ps_module.PermissionRequestMessage = original_prm
+        monkeypatch.setattr(ps_module, "PermissionRequestMessage", capturing_prm)
+        callback = service.create_permission_callback(session_id)
+        result = await callback("Read", {"file_path": "/etc/shadow"}, ctx)
 
         assert result.get("behavior") == "deny"
         assert len(captured_requests) == 1
@@ -297,7 +294,7 @@ class TestPermissionServiceExtraction:
         assert req.description == "Claude wants to read a sensitive system file"
 
     @pytest.mark.asyncio
-    async def test_none_defaults_when_context_lacks_enriched_fields(self):
+    async def test_none_defaults_when_context_lacks_enriched_fields(self, monkeypatch):
         """Fields absent from context (older SDK) default to None."""
         session_id = "sess-1302b"
         service, _ = self._make_service(session_id)
@@ -318,12 +315,9 @@ class TestPermissionServiceExtraction:
             captured_requests.append(instance)
             return instance
 
-        ps_module.PermissionRequestMessage = capturing_prm
-        try:
-            callback = service.create_permission_callback(session_id)
-            await callback("Write", {"file_path": "/tmp/out.txt"}, ctx)
-        finally:
-            ps_module.PermissionRequestMessage = original_prm
+        monkeypatch.setattr(ps_module, "PermissionRequestMessage", capturing_prm)
+        callback = service.create_permission_callback(session_id)
+        await callback("Write", {"file_path": "/tmp/out.txt"}, ctx)
 
         assert len(captured_requests) == 1
         req = captured_requests[0]
@@ -334,7 +328,7 @@ class TestPermissionServiceExtraction:
         assert req.description is None
 
     @pytest.mark.asyncio
-    async def test_none_when_context_is_none(self):
+    async def test_none_when_context_is_none(self, monkeypatch):
         """All enriched fields are None when context itself is None."""
         session_id = "sess-1302c"
         service, _ = self._make_service(session_id)
@@ -349,12 +343,9 @@ class TestPermissionServiceExtraction:
             captured_requests.append(instance)
             return instance
 
-        ps_module.PermissionRequestMessage = capturing_prm
-        try:
-            callback = service.create_permission_callback(session_id)
-            await callback("Bash", {"command": "ls"}, None)
-        finally:
-            ps_module.PermissionRequestMessage = original_prm
+        monkeypatch.setattr(ps_module, "PermissionRequestMessage", capturing_prm)
+        callback = service.create_permission_callback(session_id)
+        await callback("Bash", {"command": "ls"}, None)
 
         assert len(captured_requests) == 1
         req = captured_requests[0]
