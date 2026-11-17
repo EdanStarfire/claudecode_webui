@@ -173,6 +173,12 @@ stubs: {
 }
 ```
 
+## Browsers
+
+- **Playwright cache** (`PLAYWRIGHT_BROWSERS_PATH`, default `~/.cache/ms-playwright`): used by `npm run test:e2e`. In the dev container it is installed from `package-lock.json` (`npm ci`), so it matches the locked `@playwright/test`.
+- **System `/usr/bin/chromium`** (dev container): used only by `@playwright/cli` via `~/.playwright/cli.config.json`.
+- `npm run check:browser` exits 1 if the cache lacks the Chromium revision the installed Playwright requires (`--warn` only prints). Fix: rebuild the image, or `npx playwright install chromium`.
+
 ## Configuration
 
 - **`vitest.config.js`**: Standalone Vitest config (uses `vitest/config`, not `vite/config`)

@@ -38,6 +38,21 @@
 #   against the live bind-mounted path at container start, resolving mostly
 #   from the pre-warmed cache.
 #
+# Browser sources (issue #2359):
+#   - Playwright cache (PLAYWRIGHT_BROWSERS_PATH): used by frontend
+#     @playwright/test (`npm run test:e2e`). Layer 6c installs it with
+#     `npm ci` from frontend/package-lock.json, so the cached Chromium
+#     revision always equals the one the locked Playwright requires.
+#     `npm run check:browser` (frontend/) reports drift; the build asserts it
+#     and the entrypoint warns at container start.
+#   - System apt chromium (/usr/bin/chromium): used by @playwright/cli via
+#     ~/.playwright/cli.config.json executablePath (Layer 5b).
+#   apt packages are deliberately left unpinned (bookworm security updates;
+#   version pins break rebuilds). Node (nodesource 22.x) follows the major.
+#
+# Rollback (owner step): before rebuilding, keep the previous image with
+#   docker tag claudecode-webui-dev:local claudecode-webui-dev:previous
+#
 # Port forwarding example:
 #   docker run -p 8001:8001 -p 5173:5173 -v $(pwd):/workspace -w /workspace ...
 #
@@ -50,7 +65,10 @@
 # Alternatively, mount host SSH keys read-only:
 #   -v ~/.ssh:/home/claude/.ssh:ro
 
-FROM debian:bookworm-slim
+# Pinned to a dated tag for reproducible rebuilds (bump deliberately; a digest
+# pin would be stricter but cannot be verified without docker).
+ARG DEBIAN_TAG=bookworm-20261104-slim
+FROM debian:${DEBIAN_TAG}
 
 # ---------- Layer 1: System packages (rarely changes) ----------
 RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
@@ -96,8 +114,9 @@ RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
     && apt-get update && apt-get install -y --no-install-recommends gh
 
 # ---------- Layer 4b: Playwright CLI (global, run as root before user switch) ----------
+ARG PLAYWRIGHT_CLI_VERSION=0.1.24
 RUN --mount=type=cache,target=/root/.npm,sharing=locked \
-    npm install -g @playwright/cli@latest
+    npm install -g @playwright/cli@${PLAYWRIGHT_CLI_VERSION}
 
 # ---------- Layer 4c: ffmpeg for playwright-cli video recording ----------
 RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
@@ -120,7 +139,8 @@ RUN mkdir -p /home/claude/.playwright && \
     > /home/claude/.playwright/cli.config.json
 
 # ---------- Layer 6: UV Python package manager ----------
-RUN curl -fsSL https://astral.sh/uv/install.sh | bash
+ARG UV_VERSION=0.13.8
+RUN curl -fsSL https://astral.sh/uv/${UV_VERSION}/install.sh | bash
 ENV PATH="/home/claude/.local/bin:${PATH}"
 
 # ---------- Layer 6b: Pre-warm uv cache (Issue #1548) ----------
@@ -169,19 +189,25 @@ RUN cd /tmp/prewarm \
 # the bind mount) are baked directly into this image layer instead.
 #
 # The npm-cache-prewarm and Playwright-install steps share one layer
-# intentionally: the Playwright step depends on whatever @playwright/test
-# version the npm step resolves, so they already share an invalidation
-# trigger (frontend/package.json) — splitting them would add a layer
-# boundary with no independent-caching benefit.
+# intentionally: the Playwright step depends on the @playwright/test version
+# the lockfile pins, so they share an invalidation trigger
+# (frontend/package.json + package-lock.json). Issue #2359: the layer uses the
+# lockfile (`npm ci`) so the cached Chromium revision matches what each
+# workspace's lockfile-based `npm install` resolves; without the lock it
+# resolved the newest Playwright at build time and drifted. Trade-off: any
+# frontend dependency change in the lock rebuilds this layer and those below.
+# check-playwright-browser.mjs fails the build if the cache does not match.
 #
 # Placement: above the Claude Code CLI layer below, same invalidation-
 # ordering rationale as Layer 6b (frontend/package.json changes far less
 # often than CLAUDE_CODE_VERSION).
 ENV PLAYWRIGHT_BROWSERS_PATH=/home/claude/.cache/ms-playwright
-COPY --chown=claude:claude frontend/package.json frontend/.npmrc /tmp/frontend-prewarm/
+COPY --chown=claude:claude frontend/package.json frontend/package-lock.json frontend/.npmrc /tmp/frontend-prewarm/
+COPY --chown=claude:claude frontend/scripts/check-playwright-browser.mjs /tmp/frontend-prewarm/scripts/
 RUN cd /tmp/frontend-prewarm \
-    && npm install --no-audit --no-fund \
+    && npm ci --no-audit --no-fund \
     && npx playwright install chromium \
+    && node scripts/check-playwright-browser.mjs \
     && rm -rf /tmp/frontend-prewarm
 
 # ---------- Layer 7: Claude Code CLI ----------
