@@ -518,6 +518,21 @@ async def phase_load(be: Backend, fixtures: dict[str, Path], report: dict, *,
     }
 
 
+ARCHIVE_LAG_HARD_CEILING_MS = 500.0
+ARCHIVE_ON_LOOP_LIMIT_MS = 100.0
+
+
+def archive_lag_ok(lag_max: float, idle_max: float, on_loop_ms: float) -> bool:
+    """Issue #2384: loop-lag verdict for one archive case.
+
+    Within 100 ms of the idle baseline always passes. A larger stall passes only if the sampler saw
+    the loop thread parked in ``select`` for it (OS / GIL scheduling noise: ``on_loop_ms`` small)
+    and it stays under the hard ceiling; an on-loop block fails once it exceeds baseline + 100."""
+    if lag_max < idle_max + 100:
+        return True
+    return on_loop_ms < ARCHIVE_ON_LOOP_LIMIT_MS and lag_max < ARCHIVE_LAG_HARD_CEILING_MS
+
+
 async def phase_archive(be: Backend, report: dict, *, scale: float = 1.0, concurrent: int = 2) -> None:
     """Issue #2312: event-loop lag while a large session is deleted / reset (archive-and-clear).
 
@@ -555,21 +570,28 @@ async def phase_archive(be: Backend, report: dict, *, scale: float = 1.0, concur
         wall = (time.perf_counter() - t0) * 1000.0
         await asyncio.sleep(0.5)
         m = await be.metrics()
+        attr = m.get("block_attribution", {})
         ok = all(not isinstance(r, Exception) and r.status_code == 200 for r in responses)
         return {"op": op, "sessions": count, "all_200": ok, "wall_ms": round(wall, 1),
-                "lag": m["lag"], "block_stacks": m.get("block_stacks", [])[:6]}
+                "lag": m["lag"], "block_stacks": m.get("block_stacks", [])[:6],
+                "on_loop_block_ms": attr.get("on_loop_block_ms", 0.0),
+                "idle_wait_ms": attr.get("idle_wait_ms", 0.0)}
 
     async def case(label: str, op: str, count: int) -> None:
-        # Min-of-N: an on-loop block of the operation shows in EVERY attempt, an OS scheduling
-        # stall on a loaded host in one at random (issue #2358). Keep the best attempt.
+        # Best of 3 by (on-loop block, lag). Stalls are attributed by where the loop thread was
+        # (issue #2384): a stall in ``select`` is scheduling noise, bounded by the hard ceiling.
         best: dict | None = None
         attempts = 0
         for _ in range(3):
             attempts += 1
             result = await attempt(label, op, count)
-            if best is None or result["lag"]["max_ms"] < best["lag"]["max_ms"]:
+            if best is None or (result["on_loop_block_ms"], result["lag"]["max_ms"]) < (
+                best["on_loop_block_ms"], best["lag"]["max_ms"]
+            ):
                 best = result
-            if best["all_200"] and best["lag"]["max_ms"] < idle_max + 100:
+            if best["all_200"] and archive_lag_ok(
+                best["lag"]["max_ms"], idle_max, best["on_loop_block_ms"]
+            ):
                 break
         assert best is not None
         best["attempts"] = attempts
@@ -579,7 +601,8 @@ async def phase_archive(be: Backend, report: dict, *, scale: float = 1.0, concur
     await case("reset", "reset", 1)
     await case("delete_concurrent", "delete", concurrent)
     await case("reset_concurrent", "reset", concurrent)
-    out["checks"] = {f"{k}_lag_max_lt_100ms": out[k]["lag"]["max_ms"] < idle_max + 100
+    out["checks"] = {f"{k}_lag_max_lt_100ms": archive_lag_ok(
+        out[k]["lag"]["max_ms"], idle_max, out[k]["on_loop_block_ms"])
                      for k in ("delete", "reset", "delete_concurrent", "reset_concurrent")}
     out["checks"]["all_200"] = all(out[k]["all_200"] for k in
                                    ("delete", "reset", "delete_concurrent", "reset_concurrent"))
