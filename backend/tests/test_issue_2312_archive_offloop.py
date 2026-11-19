@@ -22,6 +22,8 @@ from backend.data_storage import DataStorageManager
 from backend.history_distiller import distill_session_history
 from backend.legion import archive_manager as archive_manager_module
 from backend.legion.archive_manager import ArchiveManager, SnapshotContext
+from backend.tests.load.history_index_load import archive_lag_ok
+from backend.tests.load.serve_backend import BlockSampler, LagMonitor, classify_stack
 from shared.net_utils import allocate_free_port
 
 REPO = Path(__file__).resolve().parents[2]
@@ -104,6 +106,57 @@ async def test_issue_2312_lag_check_detects_a_blocked_loop():
         await ticker
         with pytest.raises(AssertionError):
             _assert_loop_responsive(samples, baseline_max)
+
+
+@pytest.mark.parametrize(
+    ("lag", "idle", "on_loop", "ok"),
+    [
+        (300, 14, 280, False),  # a real on-loop block
+        (143, 14, 0, True),  # scheduling stall (loop parked in select), under the ceiling
+        (700, 14, 0, False),  # over the hard ceiling whatever the attribution
+        (110, 14, 120, True),  # within baseline + 100
+        (130, 14, 120, False),  # beyond baseline + 100 and on-loop
+    ],
+)
+def test_issue_2384_archive_lag_ok_table(lag, idle, on_loop, ok):
+    assert archive_lag_ok(lag, idle, on_loop) is ok
+
+
+def test_issue_2384_classify_stack():
+    assert classify_stack("/usr/lib/python3.12/selectors.py", "select") == "idle_wait"
+    assert classify_stack("/x/backend/foo.py", "select") == "on_loop"
+    assert classify_stack("/x/backend/test.py", "test_fn") == "on_loop"  # time.sleep caller
+    assert classify_stack("/usr/lib/python3.12/shutil.py", "_rmtree_safe_fd_step") == "on_loop"
+
+
+async def _sampled_loop_block(block_s: float) -> dict:
+    """Run the real LagMonitor + BlockSampler on this loop around an optional on-loop sleep."""
+    monitor = LagMonitor()
+    ticker = asyncio.create_task(monitor.run())
+    sampler = BlockSampler(threading.get_ident(), monitor)
+    sampler.start()
+    try:
+        await asyncio.sleep(0.2)
+        sampler.clear()
+        if block_s:
+            time.sleep(block_s)  # deliberately block the loop thread
+        await asyncio.sleep(0.5)
+        return sampler.attribution()
+    finally:
+        monitor._stop = True
+        await ticker
+
+
+@pytest.mark.asyncio
+async def test_issue_2384_sampler_attributes_on_loop_block_in_every_attempt():
+    """Negative control: an in-process sleep(0.3) on the loop is classified on_loop in each of
+    the 3 attempts the real test makes, so best-of-3 cannot hide it; an idle loop reports none."""
+    for _ in range(3):
+        attribution = await _sampled_loop_block(0.3)
+        assert attribution["on_loop_block_ms"] >= 200, attribution
+        assert not archive_lag_ok(300, 15, attribution["on_loop_block_ms"])
+    idle = await _sampled_loop_block(0.0)
+    assert idle["on_loop_block_ms"] == 0, idle
 
 
 @pytest.mark.asyncio
@@ -227,6 +280,10 @@ async def test_issue_2312_concurrent_archive_jobs_do_not_starve_default_executor
 @pytest.mark.slow
 @pytest.mark.timeout(900)
 def test_issue_2312_delete_reset_of_113mb_session_lag_under_100ms(tmp_path):
+    # Issue #2384: a stall beyond idle baseline + 100 ms passes only if the sampler saw the loop
+    # parked in ``select`` (scheduling noise) and it is < 500 ms. Residual: GIL starvation by worker
+    # threads is also classified idle_wait (bounded only by that ceiling and the 5 ms switch
+    # interval; the sampler thread is starved by the same load).
     out = tmp_path / "report.json"
     proc = subprocess.run(
         [sys.executable, "-m", "backend.tests.load.history_index_load", "--phase", "archive",

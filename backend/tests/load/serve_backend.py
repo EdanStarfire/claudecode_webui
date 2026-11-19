@@ -31,14 +31,58 @@ from fastapi import FastAPI, HTTPException
 TICK = 0.010
 
 
+def classify_stack(filename: str, func: str) -> str:
+    """Classify the loop thread's innermost frame while its heartbeat is stale (issue #2384).
+
+    ``selectors.py:select`` means the loop is parked in epoll, i.e. waiting to be scheduled or to
+    reacquire the GIL (``idle_wait``). Anything else (a ``time.sleep`` / blocking IO / CPU caller,
+    ``shutil.rmtree``, ...) is code running on the loop (``on_loop``)."""
+    if Path(filename).name == "selectors.py" and func == "select":
+        return "idle_wait"
+    return "on_loop"
+
+
 class BlockSampler(threading.Thread):
     """Attribution aid: when the loop heartbeat is stale > ``threshold`` s, sample the main
-    thread's stack every 10 ms and count the innermost frames (reported via /metrics)."""
+    thread's stack every 10 ms and count the innermost frames (reported via /metrics).
+
+    Each sample is also classified (``classify_stack``); ``block_ms`` holds, per class, the longest
+    span of consecutive same-class samples inside one stale episode, from monotonic timestamps
+    (first..last, extended to the loop's resume: the sampler thread is starved by the same load, so
+    count * 10 ms would lie)."""
 
     def __init__(self, main_ident: int, monitor: "LagMonitor", threshold: float = 0.04):
         super().__init__(daemon=True)
         self.main_ident, self.monitor, self.threshold = main_ident, monitor, threshold
         self.counts: dict[str, int] = {}
+        self.block_ms: dict[str, float] = {"on_loop": 0.0, "idle_wait": 0.0}
+        self._run_kind: str | None = None
+        self._run_start = self._run_last = 0.0
+
+    def observe(self, kind: str, now: float) -> None:
+        if kind != self._run_kind:
+            self._run_kind, self._run_start = kind, now
+        self._run_last = now
+        span = (now - self._run_start) * 1000.0
+        if span > self.block_ms[kind]:
+            self.block_ms[kind] = span
+
+    def end_episode(self, resumed_at: float | None = None) -> None:
+        """Close the stale episode; ``resumed_at`` is when the loop heartbeat came back. A starved
+        sampler may have seen few samples, so the unobserved tail of the run (last sample ->
+        resume) is attributed to the run's class."""
+        if self._run_kind is not None and resumed_at is not None and resumed_at > self._run_last:
+            self.observe(self._run_kind, resumed_at)
+        self._run_kind = None
+
+    def attribution(self) -> dict:
+        return {"on_loop_block_ms": round(self.block_ms["on_loop"], 1),
+                "idle_wait_ms": round(self.block_ms["idle_wait"], 1)}
+
+    def clear(self) -> None:
+        self.counts.clear()
+        self.block_ms = {"on_loop": 0.0, "idle_wait": 0.0}
+        self._run_kind = None
 
     def run(self) -> None:
         import traceback
@@ -46,13 +90,16 @@ class BlockSampler(threading.Thread):
         while True:
             time.sleep(0.01)
             if time.monotonic() - self.monitor.heartbeat < self.threshold:
+                self.end_episode(self.monitor.heartbeat)
                 continue
             frame = sys._current_frames().get(self.main_ident)
             if frame is None:
                 continue
+            now = time.monotonic()
             stack = traceback.extract_stack(frame)
             repo = [f for f in stack if "/backend/" in f.filename or "/shared/" in f.filename]
             inner = stack[-1]
+            self.observe(classify_stack(inner.filename, inner.name), now)
             key = " <- ".join(
                 f"{Path(f.filename).name}:{f.lineno}:{f.name}" for f in ([inner] + repo[::-1][:3])
             )
@@ -244,8 +291,9 @@ def install_routes(backend, monitor: LagMonitor) -> None:
         sampler = getattr(monitor, "sampler", None)
         if sampler is not None:
             out["block_stacks"] = sorted(sampler.counts.items(), key=lambda kv: -kv[1])[:12]
+            out["block_attribution"] = sampler.attribution()
             if reset:
-                sampler.counts.clear()
+                sampler.clear()
         if reset:
             _reset_peak_rss()
             if searches is not None:
